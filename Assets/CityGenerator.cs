@@ -394,10 +394,12 @@ public class CityGenerator : MonoBehaviour
                 outwardNormal = -outwardNormal;
             }
 
-            // 1. GÉNÉRATION DE PORTE (Rez-de-chaussée, sur murs >= 3.5m)
-            if (segLen >= 3.5f)
+            // 1. GÉNÉRATION DE PORTES (Min 1, Max 3 portes par face au rez-de-chaussée)
+            int numDoors = Mathf.Clamp(Mathf.FloorToInt(segLen / 7.0f) + 1, 1, 3);
+            float doorSpacing = segLen / (numDoors + 1);
+            for (int d = 1; d <= numDoors; d++)
             {
-                Vector3 doorPos = (startPos + endPos) * 0.5f + outwardNormal * 0.1f;
+                Vector3 doorPos = startPos + tangent * (d * doorSpacing) + outwardNormal * 0.05f;
                 structure.doors.Add(new BuildingStructure.BuildingDoor
                 {
                     position = doorPos,
@@ -405,19 +407,19 @@ public class CityGenerator : MonoBehaviour
                 });
             }
 
-            // 2. GÉNÉRATION DE FENÊTRES (Tous les 3 mètres le long du mur et à chaque étage)
-            int numWindowsH = Mathf.Max(1, Mathf.FloorToInt((segLen - 1.2f) / 3.0f));
-            float spacing = segLen / (numWindowsH + 1);
+            // 2. GÉNÉRATION DE FENÊTRES (Min 2, Max 5 fenêtres par face et par étage)
+            int numWindowsH = Mathf.Clamp(Mathf.FloorToInt(segLen / 3.0f), 2, 5);
+            float winSpacing = segLen / (numWindowsH + 1);
 
             int floorCount = Mathf.Max(1, Mathf.FloorToInt(height / 3.2f));
             for (int f = 0; f < floorCount; f++)
             {
-                float floorY = 1.3f + f * 3.0f;
-                if (floorY > height - 1.0f) break;
+                float floorY = 1.4f + f * 3.0f;
+                if (floorY > height - 0.8f) break;
 
                 for (int w = 1; w <= numWindowsH; w++)
                 {
-                    Vector3 winPos = startPos + tangent * (w * spacing) + Vector3.up * floorY + outwardNormal * 0.1f;
+                    Vector3 winPos = startPos + tangent * (w * winSpacing) + Vector3.up * floorY + outwardNormal * 0.05f;
                     structure.windows.Add(new BuildingStructure.BuildingWindow
                     {
                         id = structure.windows.Count + 1,
@@ -430,6 +432,125 @@ public class CityGenerator : MonoBehaviour
                 }
             }
         }
+
+        // 3. GÉNÉRATION VISUELLE 3D DES PORTES ET FENÊTRES (Mesh combiné ultra-performant)
+        BuildVisualOpenings(buildingGo, structure);
+    }
+
+    private static Material sharedDoorMaterial;
+    private static Material sharedWindowMaterial;
+
+    private void EnsureOpeningsMaterials()
+    {
+        Shader litShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+
+        if (sharedDoorMaterial == null)
+        {
+            sharedDoorMaterial = new Material(litShader);
+            Color doorCol = new Color(0.18f, 0.12f, 0.08f, 1f); // Porte bois massif foncé / acier
+            if (sharedDoorMaterial.HasProperty("_BaseColor")) sharedDoorMaterial.SetColor("_BaseColor", doorCol);
+            else sharedDoorMaterial.color = doorCol;
+            sharedDoorMaterial.SetFloat("_Smoothness", 0.3f);
+        }
+
+        if (sharedWindowMaterial == null)
+        {
+            sharedWindowMaterial = new Material(litShader);
+            Color winCol = new Color(0.08f, 0.16f, 0.25f, 1f); // Vitrage teinté bleu nuit réfléchissant
+            if (sharedWindowMaterial.HasProperty("_BaseColor")) sharedWindowMaterial.SetColor("_BaseColor", winCol);
+            else sharedWindowMaterial.color = winCol;
+            sharedWindowMaterial.SetFloat("_Metallic", 0.7f);
+            sharedWindowMaterial.SetFloat("_Smoothness", 0.9f);
+        }
+    }
+
+    /// <summary>
+    /// Construit les meshes visuels 3D des portes et fenêtres sur les façades.
+    /// </summary>
+    private void BuildVisualOpenings(GameObject buildingGo, BuildingStructure structure)
+    {
+        EnsureOpeningsMaterials();
+
+        // Visuel 3D des Portes
+        if (structure.doors != null && structure.doors.Count > 0)
+        {
+            List<Vector3> verts = new List<Vector3>();
+            List<Vector2> uvs = new List<Vector2>();
+            List<int> tris = new List<int>();
+
+            foreach (var door in structure.doors)
+            {
+                Vector3 n = door.entryDirection;
+                Vector3 t = new Vector3(-n.z, 0, n.x);
+                Vector3 center = door.position + Vector3.up * 1.1f + n * 0.03f;
+                AddOpeningQuad(verts, uvs, tris, center, t, Vector3.up, 1.2f, 2.2f);
+            }
+
+            GameObject doorsObj = new GameObject("Doors_Visual");
+            doorsObj.transform.SetParent(buildingGo.transform, false);
+            MeshFilter mf = doorsObj.AddComponent<MeshFilter>();
+            MeshRenderer mr = doorsObj.AddComponent<MeshRenderer>();
+            Mesh m = new Mesh();
+            m.vertices = verts.ToArray();
+            m.uv = uvs.ToArray();
+            m.triangles = tris.ToArray();
+            m.RecalculateNormals();
+            mf.sharedMesh = m;
+            mr.sharedMaterial = sharedDoorMaterial;
+        }
+
+        // Visuel 3D des Fenêtres
+        if (structure.windows != null && structure.windows.Count > 0)
+        {
+            List<Vector3> verts = new List<Vector3>();
+            List<Vector2> uvs = new List<Vector2>();
+            List<int> tris = new List<int>();
+
+            foreach (var win in structure.windows)
+            {
+                Vector3 n = win.outwardNormal;
+                Vector3 t = new Vector3(-n.z, 0, n.x);
+                Vector3 center = win.position + n * 0.03f;
+                AddOpeningQuad(verts, uvs, tris, center, t, Vector3.up, 1.1f, 1.4f);
+            }
+
+            GameObject winsObj = new GameObject("Windows_Visual");
+            winsObj.transform.SetParent(buildingGo.transform, false);
+            MeshFilter mf = winsObj.AddComponent<MeshFilter>();
+            MeshRenderer mr = winsObj.AddComponent<MeshRenderer>();
+            Mesh m = new Mesh();
+            m.vertices = verts.ToArray();
+            m.uv = uvs.ToArray();
+            m.triangles = tris.ToArray();
+            m.RecalculateNormals();
+            mf.sharedMesh = m;
+            mr.sharedMaterial = sharedWindowMaterial;
+        }
+    }
+
+    private void AddOpeningQuad(List<Vector3> verts, List<Vector2> uvs, List<int> tris, Vector3 center, Vector3 right, Vector3 up, float width, float height)
+    {
+        int startIdx = verts.Count;
+        Vector3 halfR = right * (width * 0.5f);
+        Vector3 halfU = up * (height * 0.5f);
+
+        verts.Add(center - halfR - halfU);
+        verts.Add(center + halfR - halfU);
+        verts.Add(center + halfR + halfU);
+        verts.Add(center - halfR + halfU);
+
+        uvs.Add(new Vector2(0, 0));
+        uvs.Add(new Vector2(1, 0));
+        uvs.Add(new Vector2(1, 1));
+        uvs.Add(new Vector2(0, 1));
+
+        tris.Add(startIdx + 0);
+        tris.Add(startIdx + 2);
+        tris.Add(startIdx + 1);
+
+        tris.Add(startIdx + 0);
+        tris.Add(startIdx + 3);
+        tris.Add(startIdx + 2);
     }
 
     private Mesh CreateBuildingMesh(List<Vector2> footprint, List<int> roofIndices, float height)
