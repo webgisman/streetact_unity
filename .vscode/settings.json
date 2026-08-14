@@ -67,5 +67,8 @@
         "*.sln": "*.csproj",
         "*.slnx": "*.csproj"
     },
-    "dotnet.defaultSolution": "My project.slnx"
+    "dotnet.defaultSolution": "My project.slnx",
+    "git.autofetch": false,
+    "git.autorefresh": true,
+    "git.autoRepositoryDetection": "subFolders"
 }
