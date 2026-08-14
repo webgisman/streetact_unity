@@ -1,0 +1,5 @@
+E:/streetact/My project/.utmp/RelWithDebInfo/2n3wr581/arm64-v8a/CMakeFiles/edit_cache.dir
+E:/streetact/My project/.utmp/RelWithDebInfo/2n3wr581/arm64-v8a/CMakeFiles/rebuild_cache.dir
+E:/streetact/My project/.utmp/RelWithDebInfo/2n3wr581/arm64-v8a/GameActivity/CMakeFiles/game.dir
+E:/streetact/My project/.utmp/RelWithDebInfo/2n3wr581/arm64-v8a/GameActivity/CMakeFiles/edit_cache.dir
+E:/streetact/My project/.utmp/RelWithDebInfo/2n3wr581/arm64-v8a/GameActivity/CMakeFiles/rebuild_cache.dir

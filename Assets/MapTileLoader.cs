@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 using UnityEngine.Networking;
 
@@ -14,6 +15,9 @@ public class MapTileLoader : MonoBehaviour
     [Header("References")]
     [Tooltip("The ground plane. If left empty, will search for a GameObject named 'Sol' or create one.")]
     public GameObject solPlane;
+
+    [Header("State")]
+    public bool isMapLoaded = false;
 
     [ContextMenu("Load Map")]
     public void LoadMap()
@@ -49,7 +53,7 @@ public class MapTileLoader : MonoBehaviour
     private IEnumerator DownloadAndApplyMap()
     {
         // 0. Get coordinates from CityGenerator to guarantee 100% perfect alignment
-        CityGenerator cityGen = FindFirstObjectByType<CityGenerator>();
+        CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
         if (cityGen == null)
         {
             Debug.LogError("CityGenerator introuvable ! Le MapTileLoader a besoin du CityGenerator pour se synchroniser.");
@@ -84,9 +88,15 @@ public class MapTileLoader : MonoBehaviour
 
         Debug.Log($"Downloading {numTilesX * numTilesY} tiles from OpenStreetMap...");
 
-        // 3. Download all tiles
+        // 3. Download or Load all tiles from Cache
         Texture2D[,] tiles = new Texture2D[numTilesX, numTilesY];
         int downloadedCount = 0;
+        
+        string cacheFolder = Path.Combine(Application.persistentDataPath, "MapCache");
+        if (!Directory.Exists(cacheFolder))
+        {
+            Directory.CreateDirectory(cacheFolder);
+        }
 
         for (int x = 0; x < numTilesX; x++)
         {
@@ -94,28 +104,57 @@ public class MapTileLoader : MonoBehaviour
             {
                 int tileX = minTileX + x;
                 int tileY = minTileY + y;
-                string url = $"https://tile.openstreetmap.org/{zoom}/{tileX}/{tileY}.png";
-
-                using (UnityWebRequest www = UnityWebRequestTexture.GetTexture(url))
-                {
-                    // OSM usage policy requires a valid User-Agent
-                    www.SetRequestHeader("User-Agent", "UnityTacticalGame/1.0");
-                    
-                    yield return www.SendWebRequest();
-
-                    if (www.result != UnityWebRequest.Result.Success)
-                    {
-                        Debug.LogError($"Error downloading tile {tileX},{tileY}: {www.error}");
-                    }
-                    else
-                    {
-                        tiles[x, y] = DownloadHandlerTexture.GetContent(www);
-                    }
-                }
                 
-                downloadedCount++;
+                string cacheFileName = $"tile_{zoom}_{tileX}_{tileY}.png";
+                string cacheFilePath = Path.Combine(cacheFolder, cacheFileName);
+                
+                if (File.Exists(cacheFilePath))
+                {
+                    // Charger depuis le cache local (extrêmement rapide)
+                    byte[] fileData = File.ReadAllBytes(cacheFilePath);
+                    Texture2D tex = new Texture2D(2, 2);
+                    tex.LoadImage(fileData); // Unity décode automatiquement l'image PNG/JPG
+                    tiles[x, y] = tex;
+                }
+                else
+                {
+                    // Télécharger depuis Internet
+                    string url = $"https://tile.openstreetmap.org/{zoom}/{tileX}/{tileY}.png";
+
+                    using (UnityWebRequest www = UnityWebRequestTexture.GetTexture(url))
+                    {
+                        // OSM usage policy requires a valid User-Agent
+                        www.SetRequestHeader("User-Agent", "UnityTacticalGame/1.0");
+                        
+                        yield return www.SendWebRequest();
+
+                        if (www.result != UnityWebRequest.Result.Success)
+                        {
+                            Debug.LogWarning($"[MapTileLoader] Échec du téléchargement de la tuile {tileX},{tileY} ({www.error}). Bascule automatique sur la carte de secours intégrée.");
+                            ApplyDefaultOfflineMap();
+                            isMapLoaded = true;
+                            yield break;
+                        }
+                        else
+                        {
+                            Texture2D downloadedTex = DownloadHandlerTexture.GetContent(www);
+                            tiles[x, y] = downloadedTex;
+                            
+                            // Sauvegarder dans le cache pour la prochaine fois
+                            byte[] pngBytes = downloadedTex.EncodeToPNG();
+                            File.WriteAllBytes(cacheFilePath, pngBytes);
+                        }
+                    }
+                    
+                    downloadedCount++;
+                }
             }
         }
+        
+        if (downloadedCount > 0)
+            Debug.Log($"[MapTileLoader] {downloadedCount} nouvelles tuiles téléchargées et mises en cache. Les autres ont été chargées depuis le disque.");
+        else
+            Debug.Log($"[MapTileLoader] Toutes les tuiles ont été chargées instantanément depuis le cache local !");
 
         // 4. Assemble the global texture
         int tileSize = 256;
@@ -140,32 +179,63 @@ public class MapTileLoader : MonoBehaviour
         }
         globalTexture.Apply();
 
-        // 5. Apply the texture to the Sol Material
+        // 6. Generate a custom Quad Mesh
+        GenerateQuadMesh(latitude, longitude, minTileX, maxTileX, minTileY, maxTileY);
+    }
+
+    public void ApplyDefaultOfflineMap()
+    {
+        Texture2D globalTexture = Resources.Load<Texture2D>("DefaultMapTexture");
+        if (globalTexture == null)
+        {
+            Debug.LogError("La texture DefaultMapTexture n'a pas été trouvée dans Resources !");
+            return;
+        }
+
+        ApplyTextureToMaterial(globalTexture);
+
+        CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
+        if (cityGen != null)
+        {
+            float latitude = cityGen.latitude;
+            float longitude = cityGen.longitude;
+            float radius = cityGen.radius;
+
+            double latRad = latitude * Mathf.Deg2Rad;
+            double metersPerDegLat = 111320.0;
+            double metersPerDegLon = (40075000.0 * Mathf.Cos((float)latRad)) / 360.0;
+
+            double deltaLat = radius / metersPerDegLat;
+            double deltaLon = radius / metersPerDegLon;
+
+            int minTileX = LonToTileX(longitude - deltaLon, zoom);
+            int maxTileX = LonToTileX(longitude + deltaLon, zoom);
+            int minTileY = LatToTileY(latitude + deltaLat, zoom);
+            int maxTileY = LatToTileY(latitude - deltaLat, zoom);
+
+            GenerateQuadMesh(latitude, longitude, minTileX, maxTileX, minTileY, maxTileY);
+        }
+    }
+
+    private void ApplyTextureToMaterial(Texture2D globalTexture)
+    {
         MeshRenderer mr = solPlane.GetComponent<MeshRenderer>();
         if (mr != null)
         {
             Material mat = mr.sharedMaterial;
             if (mat == null || mat.name == "Default-Material")
             {
-                // Using an Unlit shader is better for maps so it doesn't get washed out by the sun/lights
                 Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Texture");
                 mat = new Material(shader);
                 mr.sharedMaterial = mat;
             }
             
-            // Set the texture correctly depending on the render pipeline
-            if (mat.HasProperty("_BaseMap"))
-                mat.SetTexture("_BaseMap", globalTexture); // URP Unlit
-            else if (mat.HasProperty("_MainTex"))
-                mat.SetTexture("_MainTex", globalTexture); // Standard Unlit
+            if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", globalTexture);
+            else if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", globalTexture);
                 
-            // Ensure color is white so the map displays without a tint
-            if (mat.HasProperty("_BaseColor"))
-                mat.SetColor("_BaseColor", Color.white);
-            else if (mat.HasProperty("_Color"))
-                mat.SetColor("_Color", Color.white);
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
+            else if (mat.HasProperty("_Color")) mat.SetColor("_Color", Color.white);
 
-            // Force tiling to 1 and offset to 0 to prevent any manual user offsets
             if (mat.HasProperty("_BaseMap"))
             {
                 mat.SetTextureScale("_BaseMap", Vector2.one);
@@ -177,8 +247,10 @@ public class MapTileLoader : MonoBehaviour
                 mat.SetTextureOffset("_MainTex", Vector2.zero);
             }
         }
+    }
 
-        // 6. Generate a custom Quad Mesh to guarantee perfect alignment without relying on Unity Plane scaling
+    private void GenerateQuadMesh(float latitude, float longitude, int minTileX, int maxTileX, int minTileY, int maxTileY)
+    {
         double topLeftLat = TileYToLat(minTileY, zoom);
         double topLeftLon = TileXToLon(minTileX, zoom);
         double bottomRightLat = TileYToLat(maxTileY + 1, zoom);
@@ -187,12 +259,11 @@ public class MapTileLoader : MonoBehaviour
         Vector3 topLeftUnity = CoordinateToWorldPoint(topLeftLat, topLeftLon, latitude, longitude);
         Vector3 bottomRightUnity = CoordinateToWorldPoint(bottomRightLat, bottomRightLon, latitude, longitude);
         
-        // Custom mesh vertices
         Vector3[] vertices = new Vector3[4];
-        vertices[0] = new Vector3(topLeftUnity.x, -0.1f, bottomRightUnity.z); // Bottom-Left (South-West)
-        vertices[1] = new Vector3(bottomRightUnity.x, -0.1f, bottomRightUnity.z); // Bottom-Right (South-East)
-        vertices[2] = new Vector3(topLeftUnity.x, -0.1f, topLeftUnity.z); // Top-Left (North-West)
-        vertices[3] = new Vector3(bottomRightUnity.x, -0.1f, topLeftUnity.z); // Top-Right (North-East)
+        vertices[0] = new Vector3(topLeftUnity.x, -0.1f, bottomRightUnity.z); // Bottom-Left
+        vertices[1] = new Vector3(bottomRightUnity.x, -0.1f, bottomRightUnity.z); // Bottom-Right
+        vertices[2] = new Vector3(topLeftUnity.x, -0.1f, topLeftUnity.z); // Top-Left
+        vertices[3] = new Vector3(bottomRightUnity.x, -0.1f, topLeftUnity.z); // Top-Right
 
         Vector2[] uvs = new Vector2[4];
         uvs[0] = new Vector2(0, 0);
@@ -212,11 +283,24 @@ public class MapTileLoader : MonoBehaviour
         if (mf == null) mf = solPlane.AddComponent<MeshFilter>();
         mf.mesh = mesh;
 
-        // Reset transform to avoid any double-scaling
+        // Remplacement par un BoxCollider géant optimisé pour éviter le warning des triangles > 500 unités
+        MeshCollider mc = solPlane.GetComponent<MeshCollider>();
+        if (mc != null) Destroy(mc);
+
+        BoxCollider bc = solPlane.GetComponent<BoxCollider>();
+        if (bc == null) bc = solPlane.AddComponent<BoxCollider>();
+        
+        float width = Mathf.Abs(bottomRightUnity.x - topLeftUnity.x);
+        float height = Mathf.Abs(topLeftUnity.z - bottomRightUnity.z);
+        Vector3 center = new Vector3((topLeftUnity.x + bottomRightUnity.x) / 2f, -0.6f, (topLeftUnity.z + bottomRightUnity.z) / 2f);
+        bc.center = center;
+        bc.size = new Vector3(Mathf.Max(width, 10f), 1.0f, Mathf.Max(height, 10f));
+
         solPlane.transform.position = Vector3.zero;
         solPlane.transform.rotation = Quaternion.identity;
         solPlane.transform.localScale = Vector3.one;
 
+        isMapLoaded = true;
         Debug.Log("Map loaded, custom mesh generated, and perfectly aligned on 'Sol'!");
     }
 

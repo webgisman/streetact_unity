@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Networking;
+using UnityEngine.AI;
 using Unity.AI.Navigation;
 
 public class CityGenerator : MonoBehaviour
@@ -71,52 +72,158 @@ public class CityGenerator : MonoBehaviour
 
             if (webRequest.result == UnityWebRequest.Result.ConnectionError || webRequest.result == UnityWebRequest.Result.ProtocolError)
             {
-                Debug.LogError("Error fetching City Data: " + webRequest.error);
-                if (webRequest.downloadHandler != null)
-                {
-                    Debug.LogError("Overpass Response: " + webRequest.downloadHandler.text);
-                }
+                Debug.LogWarning($"[CityGenerator] Serveur OSM indisponible ou Gateway Timeout ({webRequest.error}). Tentative de récupération depuis le cache disque ou ville de secours.");
+                LoadDefaultOfflineCity();
             }
             else
             {
+                string jsonText = webRequest.downloadHandler.text;
                 Debug.Log("Data fetched successfully. Processing...");
-                ProcessData(webRequest.downloadHandler.text);
 
-                // 1. On attend que la carte de base (Sol) soit téléchargée par MapTileLoader
-                GameObject sol = null;
-                while (sol == null)
+                // Sauvegarde automatique du cache disque local pour réutilisation hors-ligne
+                string cacheFileName = string.Format(System.Globalization.CultureInfo.InvariantCulture, "CityCache_{0:F4}_{1:F4}_{2:F0}.json", latitude, longitude, radius);
+                string cachePath = System.IO.Path.Combine(Application.persistentDataPath, cacheFileName);
+                try
                 {
-                    sol = GameObject.Find("Sol");
-                    yield return null;
+                    System.IO.File.WriteAllText(cachePath, jsonText);
+                    Debug.Log($"[CityGenerator] 💾 Données de la carte sauvegardées dans le cache local : {cachePath}");
                 }
-                MeshFilter mf = sol.GetComponent<MeshFilter>();
-                while (mf == null || mf.sharedMesh == null)
+                catch (System.Exception ex)
                 {
-                    mf = sol.GetComponent<MeshFilter>();
-                    yield return null;
+                    Debug.LogWarning($"[CityGenerator] Erreur d'écriture du cache : {ex.Message}");
                 }
 
-                // 2. TRÈS IMPORTANT : Attendre une frame pour que Unity enregistre les nouveaux Mesh/Colliders !
+                ProcessData(jsonText);
+
+                // 1. On attend que la carte de base (Sol) soit VRAIMENT téléchargée et générée par MapTileLoader
+                MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
+                if (mapLoader != null)
+                {
+                    Debug.Log("[CityGenerator] En attente du chargement de la carte par MapTileLoader...");
+                    while (!mapLoader.isMapLoaded)
+                    {
+                        yield return null;
+                    }
+                }
+                else
+                {
+                    GameObject sol = null;
+                    while (sol == null)
+                    {
+                        sol = GameObject.Find("Sol");
+                        yield return null;
+                    }
+                }
+
+                // 2. TRÈS IMPORTANT : Attendre 2 frames pour que Unity enregistre tous les nouveaux Meshes et Colliders
+                yield return null;
                 yield return null;
 
                 // 3. Auto-Bake NavMesh
-                NavMeshSurface surface = FindFirstObjectByType<NavMeshSurface>();
+                NavMeshSurface surface = FindAnyObjectByType<NavMeshSurface>();
                 if (surface == null)
                 {
                     surface = gameObject.AddComponent<NavMeshSurface>();
                 }
+                
+                // --- CRITIQUE --- Désactiver temporairement les unités pour NE PAS les "cuire" dans le NavMesh
+                UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Include);
+                foreach(var unit in allUnits) { unit.gameObject.SetActive(false); }
+                yield return null; // Laisser 1 frame à Unity pour désactiver les colliders
+                
+                // Vider les anciennes données pour forcer un rebake propre
+                surface.RemoveData();
+                surface.collectObjects = CollectObjects.All;
+                surface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
+                surface.defaultArea = 0; // Walkable
                 surface.BuildNavMesh();
                 Debug.Log("NavMesh automatically baked and perfectly fitted around buildings!");
 
                 // 4. LÂCHER LES CHIENS ! On notifie les unités qu'elles peuvent enfin bouger.
-                UnitAI[] units = FindObjectsByType<UnitAI>(FindObjectsSortMode.None);
-                Debug.Log($"[CityGenerator] Notifying {units.Length} UnitAIs that NavMesh is ready.");
-                foreach (var unit in units)
+                foreach(var unit in allUnits) { unit.gameObject.SetActive(true); }
+                yield return null; // Laisser 1 frame pour la réactivation
+                
+                Debug.Log($"[CityGenerator] Notifying {allUnits.Length} UnitAIs that NavMesh is ready.");
+                foreach (var unit in allUnits)
                 {
                     unit.OnNavMeshReady();
                 }
+                
+                if (GameManagerUI.Instance != null) GameManagerUI.Instance.HideLoading();
             }
         }
+    }
+
+    public void LoadDefaultOfflineCity()
+    {
+        // 1. Vérifier si un cache local persistant existe sur le disque
+        string cacheFileName = string.Format(System.Globalization.CultureInfo.InvariantCulture, "CityCache_{0:F4}_{1:F4}_{2:F0}.json", latitude, longitude, radius);
+        string cachePath = System.IO.Path.Combine(Application.persistentDataPath, cacheFileName);
+
+        if (System.IO.File.Exists(cachePath))
+        {
+            try
+            {
+                string cachedJson = System.IO.File.ReadAllText(cachePath);
+                if (!string.IsNullOrEmpty(cachedJson) && cachedJson.Length > 20)
+                {
+                    Debug.Log($"<color=green>[CityGenerator] 📂 Ville restaurée avec succès depuis le cache disque local : {cacheFileName}</color>");
+                    StartCoroutine(ProcessOfflineData(cachedJson));
+                    return;
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"[CityGenerator] Impossible de lire le cache disque : {ex.Message}");
+            }
+        }
+
+        // 2. Fallback sur la ville par défaut intégrée dans Resources
+        TextAsset jsonAsset = Resources.Load<TextAsset>("DefaultCityData");
+        if (jsonAsset != null)
+        {
+            Debug.Log("[CityGenerator] Chargement de la ville de secours depuis le package Resources...");
+            StartCoroutine(ProcessOfflineData(jsonAsset.text));
+        }
+        else
+        {
+            Debug.LogError("Le fichier DefaultCityData n'a pas été trouvé dans le dossier Resources !");
+        }
+    }
+
+    private IEnumerator ProcessOfflineData(string json)
+    {
+        ProcessData(json);
+        
+        MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
+        if (mapLoader != null)
+        {
+            while (!mapLoader.isMapLoaded) yield return null;
+        }
+
+        yield return null;
+        yield return null;
+
+        NavMeshSurface surface = FindAnyObjectByType<NavMeshSurface>();
+        if (surface == null) surface = gameObject.AddComponent<NavMeshSurface>();
+        
+        UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Include);
+        foreach(var unit in allUnits) { unit.gameObject.SetActive(false); }
+        yield return null;
+        
+        surface.RemoveData();
+        surface.collectObjects = CollectObjects.All;
+        surface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
+        surface.defaultArea = 0;
+        surface.BuildNavMesh();
+        Debug.Log("NavMesh automatiquement généré pour le mode Hors-Ligne !");
+
+        foreach(var unit in allUnits) { unit.gameObject.SetActive(true); }
+        yield return null;
+        
+        foreach (var unit in allUnits) unit.OnNavMeshReady();
+        
+        if (GameManagerUI.Instance != null) GameManagerUI.Instance.HideLoading();
     }
 
     private void ProcessData(string json)
@@ -243,10 +350,86 @@ public class CityGenerator : MonoBehaviour
         MeshCollider mc = buildingGo.AddComponent<MeshCollider>();
         mc.sharedMesh = mesh;
 
-        // Force NavMesh to carve a hole
-        NavMeshModifier navMod = buildingGo.AddComponent<NavMeshModifier>();
-        navMod.overrideArea = true;
-        navMod.area = 1; // 1 = Not Walkable
+        // Nom pour identifier facilement les bâtiments
+        buildingGo.name = string.IsNullOrEmpty(name) ? $"Batiment_{mergedFootprint[0]}" : name;
+
+        // Génération et identification des portes et fenêtres pour le CQB / Garnison
+        BuildingStructure structure = buildingGo.AddComponent<BuildingStructure>();
+        GenerateDoorsAndWindows(buildingGo, structure, mergedFootprint, buildingHeight);
+    }
+
+    /// <summary>
+    /// Calcule et génère automatiquement les points de portes et fenêtres le long des façades du bâtiment.
+    /// </summary>
+    private void GenerateDoorsAndWindows(GameObject buildingGo, BuildingStructure structure, List<Vector2> footprint, float height)
+    {
+        if (footprint == null || footprint.Count < 3) return;
+
+        // Calcul du centre 2D du bâtiment pour orienter les normales vers l'extérieur
+        Vector2 centroid = Vector2.zero;
+        foreach (var p in footprint) centroid += p;
+        centroid /= footprint.Count;
+
+        for (int i = 0; i < footprint.Count; i++)
+        {
+            int next = (i + 1) % footprint.Count;
+            Vector2 p1 = footprint[i];
+            Vector2 p2 = footprint[next];
+
+            Vector3 startPos = new Vector3(p1.x, 0, p1.y);
+            Vector3 endPos = new Vector3(p2.x, 0, p2.y);
+            Vector3 seg = endPos - startPos;
+            float segLen = seg.magnitude;
+
+            if (segLen < 2.5f) continue; // Mur trop court
+
+            Vector3 tangent = seg / segLen;
+            Vector3 outwardNormal = new Vector3(-tangent.z, 0, tangent.x);
+
+            // S'assurer que la normale pointe vers l'extérieur du bâtiment
+            Vector2 mid2D = (p1 + p2) * 0.5f;
+            Vector2 fromCentroid = (mid2D - centroid).normalized;
+            if (Vector2.Dot(new Vector2(outwardNormal.x, outwardNormal.z), fromCentroid) < 0)
+            {
+                outwardNormal = -outwardNormal;
+            }
+
+            // 1. GÉNÉRATION DE PORTE (Rez-de-chaussée, sur murs >= 3.5m)
+            if (segLen >= 3.5f)
+            {
+                Vector3 doorPos = (startPos + endPos) * 0.5f + outwardNormal * 0.1f;
+                structure.doors.Add(new BuildingStructure.BuildingDoor
+                {
+                    position = doorPos,
+                    entryDirection = outwardNormal
+                });
+            }
+
+            // 2. GÉNÉRATION DE FENÊTRES (Tous les 3 mètres le long du mur et à chaque étage)
+            int numWindowsH = Mathf.Max(1, Mathf.FloorToInt((segLen - 1.2f) / 3.0f));
+            float spacing = segLen / (numWindowsH + 1);
+
+            int floorCount = Mathf.Max(1, Mathf.FloorToInt(height / 3.2f));
+            for (int f = 0; f < floorCount; f++)
+            {
+                float floorY = 1.3f + f * 3.0f;
+                if (floorY > height - 1.0f) break;
+
+                for (int w = 1; w <= numWindowsH; w++)
+                {
+                    Vector3 winPos = startPos + tangent * (w * spacing) + Vector3.up * floorY + outwardNormal * 0.1f;
+                    structure.windows.Add(new BuildingStructure.BuildingWindow
+                    {
+                        id = structure.windows.Count + 1,
+                        position = winPos,
+                        outwardNormal = outwardNormal,
+                        floorLevel = f,
+                        isOccupied = false,
+                        occupant = null
+                    });
+                }
+            }
+        }
     }
 
     private Mesh CreateBuildingMesh(List<Vector2> footprint, List<int> roofIndices, float height)
@@ -284,16 +467,23 @@ public class CityGenerator : MonoBehaviour
         {
             triangles.Add(floorOffset + roofIndices[i]);
         }
+        // CRITIQUE : Ajout de la face orientée vers le BAS ! 
+        // Le scanner de NavMesh ignore les backfaces. Sans cette face vers le bas, 
+        // il ne voit pas d'obstacle depuis le sol, et génère le NavMesh sous le bâtiment !
+        for (int i = roofIndices.Count - 1; i >= 0; i--)
+        {
+            triangles.Add(floorOffset + roofIndices[i]);
+        }
 
-        // 3. Murs (Walls)
+        // 3. Murs (Walls) - Double face pour une occlusion parfaite du NavMesh
         int vIndex = numPoints * 2;
         for (int i = 0; i < numPoints; i++)
         {
             int next = (i + 1) % numPoints;
             
-            // On enfonce un peu les murs à -1m pour l'esthétique
-            Vector3 p1 = new Vector3(footprint[i].x, -1f, footprint[i].y);
-            Vector3 p2 = new Vector3(footprint[next].x, -1f, footprint[next].y);
+            // On enfonce les murs à -2m sous le sol pour bloquer tout passage souterrain
+            Vector3 p1 = new Vector3(footprint[i].x, -2f, footprint[i].y);
+            Vector3 p2 = new Vector3(footprint[next].x, -2f, footprint[next].y);
             Vector3 p3 = new Vector3(footprint[i].x, height, footprint[i].y);
             Vector3 p4 = new Vector3(footprint[next].x, height, footprint[next].y);
 
@@ -308,8 +498,13 @@ public class CityGenerator : MonoBehaviour
             uvs[vIndex + 2] = new Vector2(0, height);
             uvs[vIndex + 3] = new Vector2(wallWidth, height);
 
+            // Face extérieure (CW)
             triangles.Add(vIndex); triangles.Add(vIndex + 3); triangles.Add(vIndex + 2);
             triangles.Add(vIndex); triangles.Add(vIndex + 1); triangles.Add(vIndex + 3);
+
+            // Face intérieure (CCW)
+            triangles.Add(vIndex); triangles.Add(vIndex + 2); triangles.Add(vIndex + 3);
+            triangles.Add(vIndex); triangles.Add(vIndex + 3); triangles.Add(vIndex + 1);
 
             vIndex += 4;
         }
