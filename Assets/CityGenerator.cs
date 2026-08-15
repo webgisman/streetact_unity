@@ -2,6 +2,8 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using StreetAct.Core;
+using StreetAct.Generation;
 using UnityEngine.Networking;
 using UnityEngine.AI;
 using Unity.AI.Navigation;
@@ -62,22 +64,53 @@ public class CityGenerator : MonoBehaviour
             radius, latitude, longitude);
 
         // Utilisation d'un POST et d'un WWWForm pour gérer automatiquement l'encodage URL et les requêtes longues
+        
+        // Initialiser la projection globale pour garantir l'alignement avec MapTileLoader
+        GeoProjection.SetCenter(latitude, longitude);
+
         WWWForm form = new WWWForm();
+
         form.AddField("data", query);
 
-        using (UnityWebRequest webRequest = UnityWebRequest.Post("https://overpass-api.de/api/interpreter", form))
-        {
-            webRequest.timeout = 90; // Empêcher Unity de couper la connexion trop tôt
-            yield return webRequest.SendWebRequest();
+        string[] endpoints = new string[] {
+            "https://overpass.openstreetmap.fr/api/interpreter", // Fast for France
+            "https://lz4.overpass-api.de/api/interpreter",
+            "https://overpass-api.de/api/interpreter"
+        };
 
-            if (webRequest.result == UnityWebRequest.Result.ConnectionError || webRequest.result == UnityWebRequest.Result.ProtocolError)
+        bool success = false;
+        string jsonText = "";
+
+        foreach (string endpoint in endpoints)
+        {
+            Debug.Log($"Trying Overpass API endpoint: {endpoint}");
+            using (UnityWebRequest webRequest = UnityWebRequest.Post(endpoint, form))
             {
-                Debug.LogWarning($"[CityGenerator] Serveur OSM indisponible ou Gateway Timeout ({webRequest.error}). Tentative de récupération depuis le cache disque ou ville de secours.");
-                LoadDefaultOfflineCity();
+                webRequest.timeout = 60; 
+                webRequest.SetRequestHeader("User-Agent", "UnityTacticalGame/1.0");
+                yield return webRequest.SendWebRequest();
+
+                if (webRequest.result == UnityWebRequest.Result.ConnectionError || webRequest.result == UnityWebRequest.Result.ProtocolError)
+                {
+                    Debug.LogWarning($"[CityGenerator] Endpoint {endpoint} failed: {webRequest.error}");
+                    continue; // Try next endpoint
+                }
+                else
+                {
+                    jsonText = webRequest.downloadHandler.text;
+                    success = true;
+                    break;
+                }
             }
-            else
-            {
-                string jsonText = webRequest.downloadHandler.text;
+        }
+
+        if (!success)
+        {
+            Debug.LogWarning("[CityGenerator] Tous les serveurs OSM sont indisponibles. Tentative de récupération depuis le cache disque ou ville de secours.");
+            LoadDefaultOfflineCity();
+        }
+        else
+        {
                 Debug.Log("Data fetched successfully. Processing...");
 
                 // Sauvegarde automatique du cache disque local pour réutilisation hors-ligne
@@ -149,8 +182,8 @@ public class CityGenerator : MonoBehaviour
                     unit.OnNavMeshReady();
                 }
                 
+                GameManagerUI.OptimizeSceneMaterials();
                 if (GameManagerUI.Instance != null) GameManagerUI.Instance.HideLoading();
-            }
         }
     }
 
@@ -193,7 +226,10 @@ public class CityGenerator : MonoBehaviour
 
     private IEnumerator ProcessOfflineData(string json)
     {
+        
+        GeoProjection.SetCenter(latitude, longitude);
         ProcessData(json);
+
         
         MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
         if (mapLoader != null)
@@ -246,7 +282,7 @@ public class CityGenerator : MonoBehaviour
                     List<Vector2> footprint = new List<Vector2>();
                     foreach (var geo in element.geometry)
                     {
-                        Vector3 pos = CoordinateToWorldPoint(geo.lat, geo.lon);
+                        Vector3 pos = GeoProjection.CoordinateToWorldPoint(geo.lat, geo.lon);
                         footprint.Add(new Vector2(pos.x, pos.z));
                     }
                     CreateBuildingObject(footprint, new List<List<Vector2>>(), "Building_" + element.id, cityRoot.transform);
@@ -263,7 +299,7 @@ public class CityGenerator : MonoBehaviour
                             List<Vector2> ring = new List<Vector2>();
                             foreach (var geo in member.geometry)
                             {
-                                Vector3 pos = CoordinateToWorldPoint(geo.lat, geo.lon);
+                                Vector3 pos = GeoProjection.CoordinateToWorldPoint(geo.lat, geo.lon);
                                 ring.Add(new Vector2(pos.x, pos.z));
                             }
 
@@ -289,6 +325,7 @@ public class CityGenerator : MonoBehaviour
         Debug.Log("City generation completed!");
     }
 
+
     private void CreateBuildingObject(List<Vector2> outer, List<List<Vector2>> inners, string name, Transform parent)
     {
         // Clean footprint (remove duplicate last point)
@@ -309,53 +346,262 @@ public class CityGenerator : MonoBehaviour
             if (inner.Count >= 3) cleanInners.Add(inner);
         }
 
+        // --- NEW: Inset and Random Height ---
+        float randomHeight = UnityEngine.Random.Range(4.5f, 7.5f); // 1 to 2 floors roughly
+        List<Vector2> insetOuter = InsetPolygon(outer, 0.15f);
+        if (insetOuter.Count < 3) insetOuter = outer; // fallback if inset fails
+
         // Merge holes into a single polygon
-        List<Vector2> mergedFootprint = MergeHoles(outer, cleanInners);
+        List<Vector2> mergedFootprint = MergeHoles(insetOuter, cleanInners);
         
         // Ensure orientation is Clockwise (CW) for Unity (left-handed) so roof normals point UP
         EnsureOrientation(mergedFootprint, false); 
 
-        // Triangulate
-        List<int> roofIndices = Triangulate(mergedFootprint);
-        if (roofIndices.Count == 0) return;
+        // --- NEW: Subdivide large blocks into individual row houses ---
+        // ONLY convex polygons will be split to prevent garbage geometry. 
+        // We also rely on 'building:part' from Overpass for complex buildings.
+        List<List<Vector2>> subLots = BuildingSubdivider.Subdivide(mergedFootprint);
 
-        // Build Mesh
-        Mesh mesh = CreateBuildingMesh(mergedFootprint, roofIndices, buildingHeight);
-
-        // Instantiate
-        GameObject buildingGo = new GameObject(name);
-        buildingGo.transform.parent = parent;
-
-        MeshFilter mf = buildingGo.AddComponent<MeshFilter>();
-        mf.sharedMesh = mesh;
-
-        // SUPPRIMÉ : Ne pas utiliser isStatic = true !
-        // Cela active le "Static Batching" d'Unity au lancement, ce qui verrouille la lecture des Meshes.
-        // C'est ce qui causait l'erreur "Source mesh Combined Mesh does not allow read access"
-        // et empêchait complètement le NavMesh de voir les bâtiments !
-        // buildingGo.isStatic = true;
-
-        MeshRenderer mr = buildingGo.AddComponent<MeshRenderer>();
-        if (buildingMaterial != null)
+        int lotIndex = 0;
+        foreach (var lotFootprint in subLots)
         {
-            mr.sharedMaterial = buildingMaterial;
+            EnsureOrientation(lotFootprint, false);
+            
+            // Randomize height slightly per subdivided lot to break the block effect
+            float lotHeight = UnityEngine.Random.Range(4.5f, 7.5f);
+
+            // Triangulate
+            List<int> roofIndices = Triangulate(lotFootprint);
+            if (roofIndices.Count == 0) continue;
+
+            // Instantiate Root
+            string lotName = subLots.Count > 1 ? $"{name}_Lot{lotIndex}" : name;
+            if (string.IsNullOrEmpty(name)) lotName = $"Batiment_{lotFootprint[0]}";
+            
+            GameObject buildingGo = new GameObject(lotName);
+            buildingGo.transform.parent = parent;
+
+            BuildingStructure structure = buildingGo.AddComponent<BuildingStructure>();
+            buildingGo.AddComponent<DestructibleEnvironment>();
+            
+            // Pre-calculate doors so we can make gaps in the walls
+            GenerateDoorsAndWindows(buildingGo, structure, lotFootprint, lotHeight);
+
+            // --- Create Sub-Meshes ---
+            
+            // 1. ROOF
+            Mesh roofMesh = CreateRoofMesh(lotFootprint, roofIndices, lotHeight);
+            GameObject roofGo = new GameObject("Roof");
+            roofGo.transform.parent = buildingGo.transform;
+            roofGo.AddComponent<MeshFilter>().sharedMesh = roofMesh;
+            roofGo.AddComponent<MeshRenderer>().sharedMaterial = GetRandomBuildingMaterial();
+            roofGo.AddComponent<MeshCollider>().sharedMesh = roofMesh;
+
+            // 2. FLOOR
+            Mesh floorMesh = CreateFloorMesh(lotFootprint, roofIndices, 0.05f);
+            GameObject floorGo = new GameObject("Interior_Floor");
+            floorGo.transform.parent = buildingGo.transform;
+            floorGo.AddComponent<MeshFilter>().sharedMesh = floorMesh;
+            floorGo.AddComponent<MeshRenderer>().sharedMaterial = GetRandomBuildingMaterial();
+            floorGo.AddComponent<MeshCollider>().sharedMesh = floorMesh;
+
+            // 3. WALLS
+            Mesh wallsMesh = CreateWallsMesh(lotFootprint, lotHeight, structure.doors);
+            GameObject wallsGo = new GameObject("Walls");
+            wallsGo.transform.parent = buildingGo.transform;
+            wallsGo.AddComponent<MeshFilter>().sharedMesh = wallsMesh;
+            wallsGo.AddComponent<MeshRenderer>().sharedMaterial = GetRandomBuildingMaterial();
+            wallsGo.AddComponent<MeshCollider>().sharedMesh = wallsMesh;
+
+            // Visual Openings
+            BuildVisualOpenings(buildingGo, structure);
+            
+            // --- Tactical Visibility ---
+            TacticalVisibility vis = buildingGo.AddComponent<TacticalVisibility>();
+            vis.roofObject = roofGo;
+            vis.structure = structure;
+
+            // --- Roof Access (Ladder) ---
+            CreateRoofAccess(buildingGo, lotFootprint, lotHeight);
+
+            lotIndex++;
         }
-        else
+        
+    }
+
+    private List<Vector2> InsetPolygon(List<Vector2> polygon, float insetAmount)
+    {
+        // First, ensure orientation is consistently Clockwise (so normals are predictable)
+        EnsureOrientation(polygon, false);
+
+        List<Vector2> insetPoly = new List<Vector2>();
+        int n = polygon.Count;
+        for (int i = 0; i < n; i++)
         {
-            // Fallback material setup for URP or Standard
-            Shader defaultShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-            mr.sharedMaterial = new Material(defaultShader);
+            Vector2 prev = polygon[(i - 1 + n) % n];
+            Vector2 curr = polygon[i];
+            Vector2 next = polygon[(i + 1) % n];
+
+            Vector2 dir1 = (curr - prev).normalized;
+            Vector2 dir2 = (next - curr).normalized;
+            
+            // For CW polygon, (dir.y, -dir.x) points INWARD
+            // Let's verify: going UP (0,1), inward is RIGHT (1,0). (dir.y, -dir.x) = (1, 0). Correct!
+            Vector2 norm1 = new Vector2(dir1.y, -dir1.x);
+            Vector2 norm2 = new Vector2(dir2.y, -dir2.x);
+
+            Vector2 sumNorm = (norm1 + norm2).normalized;
+            float dot = Vector2.Dot(norm1, sumNorm);
+            if (dot < 0.1f) dot = 0.1f; // Prevent division by zero or extreme spikes
+            Vector2 offset = sumNorm * (insetAmount / dot);
+
+            insetPoly.Add(curr + offset);
+        }
+        return insetPoly;
+    }
+
+    private Material GetRandomBuildingMaterial()
+    {
+        if (buildingMaterial != null) return buildingMaterial;
+        Shader defaultShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+        Material mat = new Material(defaultShader);
+        mat.color = UnityEngine.Random.ColorHSV(0f, 1f, 0.1f, 0.3f, 0.4f, 0.8f);
+        return mat;
+    }
+
+    private void CreateRoofAccess(GameObject building, List<Vector2> footprint, float height)
+    {
+        // Simple ladder creation at the back of the building
+        if (footprint.Count < 3) return;
+        
+        // Find longest edge for back face
+        float maxLen = 0;
+        Vector2 bestP1 = Vector2.zero, bestP2 = Vector2.zero;
+        for (int i=0; i<footprint.Count; i++)
+        {
+            Vector2 p1 = footprint[i];
+            Vector2 p2 = footprint[(i+1)%footprint.Count];
+            float len = Vector2.Distance(p1, p2);
+            if (len > maxLen)
+            {
+                maxLen = len;
+                bestP1 = p1;
+                bestP2 = p2;
+            }
+        }
+        
+        Vector2 mid = (bestP1 + bestP2) * 0.5f;
+        Vector3 pos = new Vector3(mid.x, 0, mid.y);
+        
+        GameObject linkGo = new GameObject("NavMeshLink_Ladder");
+        linkGo.transform.parent = building.transform;
+        linkGo.transform.position = pos;
+        
+        var link = linkGo.AddComponent<Unity.AI.Navigation.NavMeshLink>();
+        link.startPoint = new Vector3(0, 0.1f, 0);
+        link.endPoint = new Vector3(0, height + 0.1f, 0);
+        link.width = 1.0f;
+        link.bidirectional = true;
+    }
+
+    private Mesh CreateRoofMesh(List<Vector2> footprint, List<int> roofIndices, float height)
+    {
+        int numPoints = footprint.Count;
+        Vector3[] vertices = new Vector3[numPoints * 2]; // Top and Bottom face for thickness
+        Vector2[] uvs = new Vector2[numPoints * 2];
+        List<int> triangles = new List<int>();
+
+        for (int i = 0; i < numPoints; i++)
+        {
+            vertices[i] = new Vector3(footprint[i].x, height, footprint[i].y);
+            uvs[i] = new Vector2(footprint[i].x, footprint[i].y);
+        }
+        triangles.AddRange(roofIndices);
+
+        int offset = numPoints;
+        for (int i = 0; i < numPoints; i++)
+        {
+            vertices[offset + i] = new Vector3(footprint[i].x, height - 0.2f, footprint[i].y);
+            uvs[offset + i] = new Vector2(footprint[i].x, footprint[i].y);
+        }
+        for (int i = roofIndices.Count - 1; i >= 0; i--)
+        {
+            triangles.Add(offset + roofIndices[i]);
         }
 
-        MeshCollider mc = buildingGo.AddComponent<MeshCollider>();
-        mc.sharedMesh = mesh;
+        Mesh mesh = new Mesh();
+        mesh.vertices = vertices;
+        mesh.uv = uvs;
+        mesh.triangles = triangles.ToArray();
+        mesh.RecalculateNormals();
+        return mesh;
+    }
 
-        // Nom pour identifier facilement les bâtiments
-        buildingGo.name = string.IsNullOrEmpty(name) ? $"Batiment_{mergedFootprint[0]}" : name;
+    private Mesh CreateFloorMesh(List<Vector2> footprint, List<int> roofIndices, float yPos)
+    {
+        int numPoints = footprint.Count;
+        Vector3[] vertices = new Vector3[numPoints];
+        Vector2[] uvs = new Vector2[numPoints];
+        
+        for (int i = 0; i < numPoints; i++)
+        {
+            vertices[i] = new Vector3(footprint[i].x, yPos, footprint[i].y);
+            uvs[i] = new Vector2(footprint[i].x, footprint[i].y);
+        }
 
-        // Génération et identification des portes et fenêtres pour le CQB / Garnison
-        BuildingStructure structure = buildingGo.AddComponent<BuildingStructure>();
-        GenerateDoorsAndWindows(buildingGo, structure, mergedFootprint, buildingHeight);
+        Mesh mesh = new Mesh();
+        mesh.vertices = vertices;
+        mesh.uv = uvs;
+        mesh.triangles = roofIndices.ToArray();
+        mesh.RecalculateNormals();
+        return mesh;
+    }
+
+    private Mesh CreateWallsMesh(List<Vector2> footprint, float height, List<BuildingStructure.BuildingDoor> doors)
+    {
+        List<Vector3> vertices = new List<Vector3>();
+        List<Vector2> uvs = new List<Vector2>();
+        List<int> triangles = new List<int>();
+
+        int numPoints = footprint.Count;
+        for (int i = 0; i < numPoints; i++)
+        {
+            int next = (i + 1) % numPoints;
+            Vector2 p1 = footprint[i];
+            Vector2 p2 = footprint[next];
+            
+            AddWallSegment(vertices, uvs, triangles, p1, p2, -2f, height);
+        }
+
+        Mesh mesh = new Mesh();
+        mesh.vertices = vertices.ToArray();
+        mesh.uv = uvs.ToArray();
+        mesh.triangles = triangles.ToArray();
+        mesh.RecalculateNormals();
+        return mesh;
+    }
+    
+    private void AddWallSegment(List<Vector3> vertices, List<Vector2> uvs, List<int> tris, Vector2 p1, Vector2 p2, float yBottom, float yTop)
+    {
+        int vIndex = vertices.Count;
+        float width = Vector2.Distance(p1, p2);
+        
+        Vector3 v0 = new Vector3(p1.x, yBottom, p1.y);
+        Vector3 v1 = new Vector3(p2.x, yBottom, p2.y);
+        Vector3 v2 = new Vector3(p1.x, yTop, p1.y);
+        Vector3 v3 = new Vector3(p2.x, yTop, p2.y);
+        
+        vertices.Add(v0); vertices.Add(v1); vertices.Add(v2); vertices.Add(v3);
+        uvs.Add(new Vector2(0, 0)); uvs.Add(new Vector2(width, 0));
+        uvs.Add(new Vector2(0, yTop-yBottom)); uvs.Add(new Vector2(width, yTop-yBottom));
+        
+        // Outer face
+        tris.Add(vIndex); tris.Add(vIndex+3); tris.Add(vIndex+2);
+        tris.Add(vIndex); tris.Add(vIndex+1); tris.Add(vIndex+3);
+        
+        // Inner face
+        tris.Add(vIndex); tris.Add(vIndex+2); tris.Add(vIndex+3);
+        tris.Add(vIndex); tris.Add(vIndex+3); tris.Add(vIndex+1);
     }
 
     /// <summary>
@@ -405,12 +651,22 @@ public class CityGenerator : MonoBehaviour
                     position = doorPos,
                     entryDirection = outwardNormal
                 });
+                
+                // --- NEW: Add NavMeshLink for the door to allow passing through solid walls ---
+                // We link from outside to inside. 
+                GameObject doorLinkGo = new GameObject("Door_NavMeshLink");
+                doorLinkGo.transform.parent = buildingGo.transform;
+                doorLinkGo.transform.position = doorPos;
+                var navLink = doorLinkGo.AddComponent<Unity.AI.Navigation.NavMeshLink>();
+                navLink.startPoint = outwardNormal * 1.5f; // outside
+                navLink.endPoint = -outwardNormal * 1.5f; // inside
+                navLink.width = 1.5f;
+                navLink.bidirectional = true;
             }
 
-            // 2. GÉNÉRATION DE FENÊTRES (Min 2, Max 5 fenêtres par face et par étage)
+            // 2. GÉNÉRATION DE FENÊTRES
             int numWindowsH = Mathf.Clamp(Mathf.FloorToInt(segLen / 3.0f), 2, 5);
             float winSpacing = segLen / (numWindowsH + 1);
-
             int floorCount = Mathf.Max(1, Mathf.FloorToInt(height / 3.2f));
             for (int f = 0; f < floorCount; f++)
             {
@@ -432,9 +688,6 @@ public class CityGenerator : MonoBehaviour
                 }
             }
         }
-
-        // 3. GÉNÉRATION VISUELLE 3D DES PORTES ET FENÊTRES (Mesh combiné ultra-performant)
-        BuildVisualOpenings(buildingGo, structure);
     }
 
     private static Material sharedDoorMaterial;
@@ -447,7 +700,7 @@ public class CityGenerator : MonoBehaviour
         if (sharedDoorMaterial == null)
         {
             sharedDoorMaterial = new Material(litShader);
-            Color doorCol = new Color(0.18f, 0.12f, 0.08f, 1f); // Porte bois massif foncé / acier
+            Color doorCol = new Color(0.18f, 0.12f, 0.08f, 1f); 
             if (sharedDoorMaterial.HasProperty("_BaseColor")) sharedDoorMaterial.SetColor("_BaseColor", doorCol);
             else sharedDoorMaterial.color = doorCol;
             sharedDoorMaterial.SetFloat("_Smoothness", 0.3f);
@@ -456,7 +709,7 @@ public class CityGenerator : MonoBehaviour
         if (sharedWindowMaterial == null)
         {
             sharedWindowMaterial = new Material(litShader);
-            Color winCol = new Color(0.08f, 0.16f, 0.25f, 1f); // Vitrage teinté bleu nuit réfléchissant
+            Color winCol = new Color(0.08f, 0.16f, 0.25f, 1f); 
             if (sharedWindowMaterial.HasProperty("_BaseColor")) sharedWindowMaterial.SetColor("_BaseColor", winCol);
             else sharedWindowMaterial.color = winCol;
             sharedWindowMaterial.SetFloat("_Metallic", 0.7f);
@@ -464,42 +717,51 @@ public class CityGenerator : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Construit les meshes visuels 3D des portes et fenêtres sur les façades.
-    /// </summary>
     private void BuildVisualOpenings(GameObject buildingGo, BuildingStructure structure)
     {
         EnsureOpeningsMaterials();
 
-        // Visuel 3D des Portes
         if (structure.doors != null && structure.doors.Count > 0)
         {
-            List<Vector3> verts = new List<Vector3>();
-            List<Vector2> uvs = new List<Vector2>();
-            List<int> tris = new List<int>();
-
+            int doorIndex = 0;
             foreach (var door in structure.doors)
             {
                 Vector3 n = door.entryDirection;
                 Vector3 t = new Vector3(-n.z, 0, n.x);
-                Vector3 center = door.position + Vector3.up * 1.1f + n * 0.03f;
-                AddOpeningQuad(verts, uvs, tris, center, t, Vector3.up, 1.2f, 2.2f);
-            }
+                Vector3 center = door.position + Vector3.up * 1.1f + n * 0.05f;
 
-            GameObject doorsObj = new GameObject("Doors_Visual");
-            doorsObj.transform.SetParent(buildingGo.transform, false);
-            MeshFilter mf = doorsObj.AddComponent<MeshFilter>();
-            MeshRenderer mr = doorsObj.AddComponent<MeshRenderer>();
-            Mesh m = new Mesh();
-            m.vertices = verts.ToArray();
-            m.uv = uvs.ToArray();
-            m.triangles = tris.ToArray();
-            m.RecalculateNormals();
-            mf.sharedMesh = m;
-            mr.sharedMaterial = sharedDoorMaterial;
+                List<Vector3> verts = new List<Vector3>();
+                List<Vector2> uvs = new List<Vector2>();
+                List<int> tris = new List<int>();
+                AddOpeningQuad(verts, uvs, tris, center, t, Vector3.up, 1.2f, 2.2f);
+
+                GameObject doorObj = new GameObject($"Door_{doorIndex}");
+                doorObj.transform.SetParent(buildingGo.transform, false);
+
+                MeshFilter mf = doorObj.AddComponent<MeshFilter>();
+                MeshRenderer mr = doorObj.AddComponent<MeshRenderer>();
+                Mesh m = new Mesh();
+                m.vertices = verts.ToArray();
+                m.uv = uvs.ToArray();
+                m.triangles = tris.ToArray();
+                m.RecalculateNormals();
+                mf.sharedMesh = m;
+                mr.sharedMaterial = sharedDoorMaterial;
+
+                // BoxCollider pour la sélection et le survol à la souris
+                BoxCollider bc = doorObj.AddComponent<BoxCollider>();
+                bc.center = center;
+                bc.size = new Vector3(1.4f, 2.2f, 0.6f);
+
+                // Composant d'interaction avec surbrillance cyan
+                var doorInteract = doorObj.AddComponent<StreetAct.Interaction.DoorInteraction>();
+                doorInteract.Initialize(structure, door, sharedDoorMaterial);
+                structure.doorInteractions.Add(doorInteract);
+
+                doorIndex++;
+            }
         }
 
-        // Visuel 3D des Fenêtres
         if (structure.windows != null && structure.windows.Count > 0)
         {
             List<Vector3> verts = new List<Vector3>();
@@ -510,7 +772,7 @@ public class CityGenerator : MonoBehaviour
             {
                 Vector3 n = win.outwardNormal;
                 Vector3 t = new Vector3(-n.z, 0, n.x);
-                Vector3 center = win.position + n * 0.03f;
+                Vector3 center = win.position + n * 0.05f;
                 AddOpeningQuad(verts, uvs, tris, center, t, Vector3.up, 1.1f, 1.4f);
             }
 
@@ -544,6 +806,7 @@ public class CityGenerator : MonoBehaviour
         uvs.Add(new Vector2(1, 1));
         uvs.Add(new Vector2(0, 1));
 
+        // Face avant (Extérieure)
         tris.Add(startIdx + 0);
         tris.Add(startIdx + 2);
         tris.Add(startIdx + 1);
@@ -551,119 +814,17 @@ public class CityGenerator : MonoBehaviour
         tris.Add(startIdx + 0);
         tris.Add(startIdx + 3);
         tris.Add(startIdx + 2);
+
+        // Face arrière (Intérieure - Double-face pour vue depuis l'intérieur du bâtiment)
+        tris.Add(startIdx + 0);
+        tris.Add(startIdx + 1);
+        tris.Add(startIdx + 2);
+
+        tris.Add(startIdx + 0);
+        tris.Add(startIdx + 2);
+        tris.Add(startIdx + 3);
     }
-
-    private Mesh CreateBuildingMesh(List<Vector2> footprint, List<int> roofIndices, float height)
-    {
-        int numPoints = footprint.Count;
-        int numWallQuads = numPoints;
-        int totalVertices = numPoints * 2 + numWallQuads * 4;
-        
-        Vector3[] vertices = new Vector3[totalVertices];
-        Vector2[] uvs = new Vector2[totalVertices];
-        List<int> triangles = new List<int>();
-
-        // 1. Toit (Roof) - Regarde vers le ciel
-        for (int i = 0; i < numPoints; i++)
-        {
-            vertices[i] = new Vector3(footprint[i].x, height, footprint[i].y);
-            uvs[i] = new Vector2(footprint[i].x, footprint[i].y);
-        }
-        triangles.AddRange(roofIndices);
-
-        // 2. Sol Interne (Floor) - Regarde AUSSI vers le ciel pour bloquer le scanner !
-        int floorOffset = numPoints;
-        for (int i = 0; i < numPoints; i++)
-        {
-            // IMPORTANT : Placé à Y = 1.0f (1 mètre) au-dessus du sol. 
-            // Si on le met trop bas (0.05), le Voxelizer du NavMesh le fusionne avec le sol (-0.1)
-            // car la résolution verticale (Cell Height) est souvent de 0.2m par défaut.
-            // À 1.0m, il est bien détecté, et comme l'espace en dessous (1.1m) est inférieur à 
-            // la hauteur de l'agent (2m), le NavMesh ne se générera PAS en dessous !
-            vertices[floorOffset + i] = new Vector3(footprint[i].x, 1.0f, footprint[i].y);
-            uvs[floorOffset + i] = new Vector2(footprint[i].x, footprint[i].y);
-        }
-        // Copie exacte des triangles du toit pour être orienté vers le haut
-        for (int i = 0; i < roofIndices.Count; i++)
-        {
-            triangles.Add(floorOffset + roofIndices[i]);
-        }
-        // CRITIQUE : Ajout de la face orientée vers le BAS ! 
-        // Le scanner de NavMesh ignore les backfaces. Sans cette face vers le bas, 
-        // il ne voit pas d'obstacle depuis le sol, et génère le NavMesh sous le bâtiment !
-        for (int i = roofIndices.Count - 1; i >= 0; i--)
-        {
-            triangles.Add(floorOffset + roofIndices[i]);
-        }
-
-        // 3. Murs (Walls) - Double face pour une occlusion parfaite du NavMesh
-        int vIndex = numPoints * 2;
-        for (int i = 0; i < numPoints; i++)
-        {
-            int next = (i + 1) % numPoints;
-            
-            // On enfonce les murs à -2m sous le sol pour bloquer tout passage souterrain
-            Vector3 p1 = new Vector3(footprint[i].x, -2f, footprint[i].y);
-            Vector3 p2 = new Vector3(footprint[next].x, -2f, footprint[next].y);
-            Vector3 p3 = new Vector3(footprint[i].x, height, footprint[i].y);
-            Vector3 p4 = new Vector3(footprint[next].x, height, footprint[next].y);
-
-            vertices[vIndex] = p1;
-            vertices[vIndex + 1] = p2;
-            vertices[vIndex + 2] = p3;
-            vertices[vIndex + 3] = p4;
-
-            float wallWidth = Vector3.Distance(p1, p2);
-            uvs[vIndex] = new Vector2(0, 0);
-            uvs[vIndex + 1] = new Vector2(wallWidth, 0);
-            uvs[vIndex + 2] = new Vector2(0, height);
-            uvs[vIndex + 3] = new Vector2(wallWidth, height);
-
-            // Face extérieure (CW)
-            triangles.Add(vIndex); triangles.Add(vIndex + 3); triangles.Add(vIndex + 2);
-            triangles.Add(vIndex); triangles.Add(vIndex + 1); triangles.Add(vIndex + 3);
-
-            // Face intérieure (CCW)
-            triangles.Add(vIndex); triangles.Add(vIndex + 2); triangles.Add(vIndex + 3);
-            triangles.Add(vIndex); triangles.Add(vIndex + 3); triangles.Add(vIndex + 1);
-
-            vIndex += 4;
-        }
-
-        Mesh mesh = new Mesh();
-        mesh.indexFormat = totalVertices > 65535 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16;
-        mesh.vertices = vertices;
-        mesh.uv = uvs;
-        mesh.triangles = triangles.ToArray();
-        mesh.RecalculateNormals();
-        mesh.RecalculateBounds();
-        
-        return mesh;
-    }
-
-    private Vector3 CoordinateToWorldPoint(double lat, double lon)
-    {
-        double R = 6378137.0; // Earth radius in meters (Web Mercator)
-        
-        // Center coordinates in Web Mercator
-        double centerLonRad = longitude * Math.PI / 180.0;
-        double centerLatRad = latitude * Math.PI / 180.0;
-        double centerX = R * centerLonRad;
-        double centerY = R * Math.Log(Math.Tan(Math.PI / 4.0 + centerLatRad / 2.0));
-
-        // Target coordinates in Web Mercator
-        double lonRad = lon * Math.PI / 180.0;
-        double latRad = lat * Math.PI / 180.0;
-        double x = R * lonRad;
-        double y = R * Math.Log(Math.Tan(Math.PI / 4.0 + latRad / 2.0));
-
-        // Scale to actual real-world meters at this latitude to avoid size distortion
-        double scale = Math.Cos(latitude * Math.PI / 180.0);
-
-        return new Vector3((float)((x - centerX) * scale), 0, (float)((y - centerY) * scale));
-    }
-
-    private List<Vector2> MergeHoles(List<Vector2> outer, List<List<Vector2>> holes)
+private List<Vector2> MergeHoles(List<Vector2> outer, List<List<Vector2>> holes)
     {
         if (holes == null || holes.Count == 0) return outer;
 

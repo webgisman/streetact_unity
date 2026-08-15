@@ -27,6 +27,106 @@ public class BuildingStructure : MonoBehaviour
 
     public List<BuildingDoor> doors = new List<BuildingDoor>();
     public List<BuildingWindow> windows = new List<BuildingWindow>();
+    public List<StreetAct.Interaction.DoorInteraction> doorInteractions = new List<StreetAct.Interaction.DoorInteraction>();
+    public List<StreetAct.Interaction.WindowInteraction> windowInteractions = new List<StreetAct.Interaction.WindowInteraction>();
+    public List<UnitAI> unitsInside = new List<UnitAI>();
+    public List<UnitAI> unitsOnRoof = new List<UnitAI>();
+    public TacticalVisibility tacticalVisibility;
+
+    public static readonly List<BuildingStructure> AllBuildings = new List<BuildingStructure>();
+
+    void OnEnable()
+    {
+        if (!AllBuildings.Contains(this)) AllBuildings.Add(this);
+    }
+
+    void OnDisable()
+    {
+        AllBuildings.Remove(this);
+    }
+
+    void OnDestroy()
+    {
+        AllBuildings.Remove(this);
+    }
+
+    void Start()
+    {
+        if (!AllBuildings.Contains(this)) AllBuildings.Add(this);
+        if (GetComponent<DestructibleEnvironment>() == null)
+        {
+            gameObject.AddComponent<DestructibleEnvironment>();
+        }
+    }
+
+    public void RegisterUnitInside(UnitAI unit)
+    {
+        if (unit != null && !unitsInside.Contains(unit))
+        {
+            unitsInside.Add(unit);
+            if (tacticalVisibility != null) tacticalVisibility.OnUnitsChanged();
+        }
+    }
+
+    public void UnregisterUnitInside(UnitAI unit)
+    {
+        if (unit != null && unitsInside.Contains(unit))
+        {
+            unitsInside.Remove(unit);
+            if (tacticalVisibility != null) tacticalVisibility.OnUnitsChanged();
+        }
+    }
+
+    public bool IsAnyUnitInside()
+    {
+        unitsInside.RemoveAll(u => u == null || u.isDead);
+        return unitsInside.Count > 0;
+    }
+
+    public void RegisterUnitOnRoof(UnitAI unit)
+    {
+        if (unit != null && !unitsOnRoof.Contains(unit))
+        {
+            unitsOnRoof.Add(unit);
+            if (tacticalVisibility != null) tacticalVisibility.OnUnitsChanged();
+        }
+    }
+
+    public void UnregisterUnitOnRoof(UnitAI unit)
+    {
+        if (unit != null && unitsOnRoof.Contains(unit))
+        {
+            unitsOnRoof.Remove(unit);
+            if (tacticalVisibility != null) tacticalVisibility.OnUnitsChanged();
+        }
+    }
+
+    public bool IsAnyUnitOnRoof()
+    {
+        unitsOnRoof.RemoveAll(u => u == null || u.isDead);
+        return unitsOnRoof.Count > 0;
+    }
+
+    /// <summary>
+    /// Trouve le composant d'interaction de porte le plus proche.
+    /// </summary>
+    public StreetAct.Interaction.DoorInteraction GetClosestDoorInteraction(Vector3 fromPos, float maxDist = 3.5f)
+    {
+        if (doorInteractions == null || doorInteractions.Count == 0) return null;
+        StreetAct.Interaction.DoorInteraction best = null;
+        float minDist = maxDist;
+        foreach (var di in doorInteractions)
+        {
+            if (di == null || di.doorData == null) continue;
+            float d = Vector3.Distance(fromPos, di.doorData.position);
+            if (d < minDist)
+            {
+                minDist = d;
+                best = di;
+            }
+        }
+        return best;
+    }
 
     /// <summary>
     /// Trouve la porte d'entrée la plus proche d'une position donnée.

@@ -12,10 +12,10 @@ public class UnitSpawnerUI : MonoBehaviour
 {
     public static UnitSpawnerUI Instance { get; private set; }
 
-    public enum UnitType { Fantassin, CharLeopard, VehiculeCanon }
+    public enum UnitType { Fantassin, CharLeopard, VehiculeCanon, Mortier, BarricadeRoutiere }
 
     [Header("Configuration")]
-    public int maxUnits = 6;
+    public int maxUnitsPerTeam = 12;
     public int selectedTeam = 1; // 1 = Joueur (Bleu), 2 = Ennemi (Rouge)
 
     // État du Drag & Drop / Placement
@@ -48,6 +48,17 @@ public class UnitSpawnerUI : MonoBehaviour
         if (previewMat.HasProperty("_Color")) previewMat.SetColor("_Color", new Color(0f, 1f, 0.4f, 0.6f));
         previewRing.GetComponent<MeshRenderer>().sharedMaterial = previewMat;
         previewRing.SetActive(false);
+
+        StartCoroutine(AutoSpawnInitialUnitsRoutine());
+    }
+
+    private System.Collections.IEnumerator AutoSpawnInitialUnitsRoutine()
+    {
+        yield return new WaitForSeconds(0.8f);
+        if (GetTotalLivingUnitsCount() == 0)
+        {
+            AutoDeployBattlefield();
+        }
     }
 
     void Update()
@@ -74,13 +85,32 @@ public class UnitSpawnerUI : MonoBehaviour
 
     private void HandlePlacementPreview()
     {
-        if (Pointer.current == null) return;
+        Vector2 pointerPos = Vector2.zero;
+        bool hasPointer = false;
 
-        Ray ray = Camera.main.ScreenPointToRay(Pointer.current.position.ReadValue());
+        if (Pointer.current != null)
+        {
+            pointerPos = Pointer.current.position.ReadValue();
+            hasPointer = true;
+        }
+        else if (Input.touchCount > 0)
+        {
+            pointerPos = Input.GetTouch(0).position;
+            hasPointer = true;
+        }
+        else if (Input.mousePresent)
+        {
+            pointerPos = Input.mousePosition;
+            hasPointer = true;
+        }
+
+        if (!hasPointer) return;
+
+        Ray ray = Camera.main.ScreenPointToRay(pointerPos);
         if (Physics.Raycast(ray, out RaycastHit hit, 500f))
         {
-            // Vérifier si le point est sur le NavMesh
-            bool isValid = NavMesh.SamplePosition(hit.point, out NavMeshHit navHit, 3.0f, NavMesh.AllAreas);
+            // Vérifier si le point est sur le NavMesh avec rayon élargi (8.0m)
+            bool isValid = NavMesh.SamplePosition(hit.point, out NavMeshHit navHit, 8.0f, NavMesh.AllAreas);
 
             if (previewRing != null)
             {
@@ -89,14 +119,20 @@ public class UnitSpawnerUI : MonoBehaviour
                 ringPos.y += 0.05f;
                 previewRing.transform.position = ringPos;
 
-                // Vert si valide, Rouge si hors NavMesh
-                Color ringCol = isValid ? (selectedTeam == 1 ? new Color(0f, 0.8f, 1f, 0.7f) : new Color(1f, 0.3f, 0.2f, 0.7f)) : new Color(1f, 0f, 0f, 0.5f);
+                // Cyan si joueur, Rouge/Orange si ennemi, Rouge foncé si invalide
+                Color ringCol = isValid ? (selectedTeam == 1 ? new Color(0f, 0.9f, 1f, 0.8f) : new Color(1f, 0.35f, 0.2f, 0.8f)) : new Color(1f, 0f, 0f, 0.6f);
                 if (previewMat.HasProperty("_BaseColor")) previewMat.SetColor("_BaseColor", ringCol);
                 if (previewMat.HasProperty("_Color")) previewMat.SetColor("_Color", ringCol);
             }
 
-            // Clic Gauche pour déposer l'unité
-            if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
+            // Détection du Clic ou Touch Tap pour déposer l'unité (PC & Mobile)
+            bool isActionPressed = false;
+            if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame) isActionPressed = true;
+            if (Touchscreen.current != null && Touchscreen.current.primaryTouch.press.wasPressedThisFrame) isActionPressed = true;
+            if (Input.GetMouseButtonDown(0)) isActionPressed = true;
+            if (Input.touchCount > 0 && Input.GetTouch(0).phase == UnityEngine.TouchPhase.Began) isActionPressed = true;
+
+            if (isActionPressed)
             {
                 // Ignorer si on a cliqué sur un bouton d'interface
                 if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return;
@@ -105,10 +141,11 @@ public class UnitSpawnerUI : MonoBehaviour
                 {
                     SpawnUnitAt(activePlacingType.Value, navHit.position, selectedTeam);
                     CancelPlacement();
+                    if (Application.isMobilePlatform) Handheld.Vibrate();
                 }
                 else
                 {
-                    ShowMessage("Emplacement invalide ! Déposez l'unité sur une zone de route praticable.", 2.5f);
+                    ShowMessage("Emplacement invalide ! Touchez une rue ou un carrefour pour déposer l'unité.", 2.5f);
                 }
             }
         }
@@ -116,10 +153,11 @@ public class UnitSpawnerUI : MonoBehaviour
 
     public void StartPlacingUnit(UnitType type)
     {
-        int currentCount = GetTotalLivingUnitsCount();
-        if (currentCount >= maxUnits)
+        int teamCount = GetTeamLivingUnitsCount(selectedTeam);
+        if (teamCount >= maxUnitsPerTeam)
         {
-            ShowMessage($"Limite atteinte ! Vous ne pouvez pas dépasser {maxUnits} unités au total.", 3.0f);
+            string teamName = (selectedTeam == 1) ? "Joueur (Bleu)" : "Ennemi (Rouge)";
+            ShowMessage($"Limite atteinte pour l'équipe {teamName} ({maxUnitsPerTeam} unités max par camp) !", 3.0f);
             return;
         }
 
@@ -137,10 +175,11 @@ public class UnitSpawnerUI : MonoBehaviour
 
     public void SpawnUnitAt(UnitType type, Vector3 position, int team)
     {
-        int count = GetTotalLivingUnitsCount();
-        if (count >= maxUnits)
+        int teamCount = GetTeamLivingUnitsCount(team);
+        if (teamCount >= maxUnitsPerTeam)
         {
-            ShowMessage($"Limite de {maxUnits} unités atteinte !", 3.0f);
+            string teamName = (team == 1) ? "Joueur (Bleu)" : "Ennemi (Rouge)";
+            ShowMessage($"Limite de {maxUnitsPerTeam} unités atteinte pour l'équipe {teamName} !", 3.0f);
             return;
         }
 
@@ -148,42 +187,54 @@ public class UnitSpawnerUI : MonoBehaviour
 
         if (type == UnitType.Fantassin)
         {
-            // Chercher une unité d'infanterie existante dans la scène comme modèle
-            GameObject template = GameObject.Find("Unite_1") ?? GameObject.Find("Unite_2");
+            // Chercher une unité vivante comme modèle ou charger le modèle neuf
+            GameObject template = null;
+            foreach (var u in FindObjectsByType<UnitAI>(FindObjectsInactive.Include))
+            {
+                if (!u.isTank && !u.isDead) { template = u.gameObject; break; }
+            }
+            if (template == null) template = GameObject.Find("Unite_1") ?? GameObject.Find("Unite_2");
+
             if (template != null)
             {
                 newUnitObj = Instantiate(template, position, Quaternion.identity);
             }
             else
             {
-                // Fallback de création dynamique
                 newUnitObj = GameObject.CreatePrimitive(PrimitiveType.Capsule);
                 newUnitObj.AddComponent<NavMeshAgent>();
                 newUnitObj.AddComponent<UnitAI>();
             }
-            newUnitObj.name = $"Fantassin_{team}_{(count + 1)}";
+            newUnitObj.name = $"Fantassin_{team}_{(teamCount + 1)}";
         }
         else if (type == UnitType.CharLeopard)
         {
-            // Chercher le char Leopard dans la scène ou charger le prefab
-            GameObject tankTemplate = null;
-            foreach (var u in FindObjectsByType<UnitAI>(FindObjectsInactive.Include))
-            {
-                if (u.gameObject.name.ToLower().Contains("leopard"))
-                {
-                    tankTemplate = u.gameObject;
-                    break;
-                }
-            }
+            // 1. Charger en priorité absolue le prefab d'origine tout neuf
+            GameObject prefab = null;
+#if UNITY_EDITOR
+            prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Kucher/Tank Leopard2/Prefabs/Leopard2.prefab");
+#endif
+            if (prefab == null) prefab = Resources.Load<GameObject>("Kucher/Tank Leopard2/Prefabs/Leopard2");
 
-            if (tankTemplate != null)
+            if (prefab != null)
             {
-                newUnitObj = Instantiate(tankTemplate, position, Quaternion.identity);
+                newUnitObj = Instantiate(prefab, position, Quaternion.identity);
             }
             else
             {
-                GameObject prefab = Resources.Load<GameObject>("Kucher/Tank Leopard2/Prefabs/Leopard2");
-                if (prefab != null) newUnitObj = Instantiate(prefab, position, Quaternion.identity);
+                // Chercher un char vivant dans la scène
+                GameObject tankTemplate = null;
+                foreach (var u in FindObjectsByType<UnitAI>(FindObjectsInactive.Include))
+                {
+                    if (u.gameObject.name.ToLower().Contains("leopard") && !u.isDead)
+                    {
+                        tankTemplate = u.gameObject;
+                        break;
+                    }
+                }
+                if (tankTemplate == null) tankTemplate = GameObject.Find("Leopard2") ?? GameObject.Find("Leopard_1");
+
+                if (tankTemplate != null) newUnitObj = Instantiate(tankTemplate, position, Quaternion.identity);
                 else
                 {
                     newUnitObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -192,14 +243,14 @@ public class UnitSpawnerUI : MonoBehaviour
                     newUnitObj.AddComponent<UnitAI>();
                 }
             }
-            newUnitObj.name = $"Leopard2_{team}_{(count + 1)}";
+            newUnitObj.name = $"Leopard2_{team}_{(teamCount + 1)}";
         }
         else if (type == UnitType.VehiculeCanon)
         {
             GameObject canonTemplate = null;
             foreach (var u in FindObjectsByType<UnitAI>(FindObjectsInactive.Include))
             {
-                if (u.gameObject.name.ToLower().Contains("canon"))
+                if (u.gameObject.name.ToLower().Contains("canon") && !u.isDead)
                 {
                     canonTemplate = u.gameObject;
                     break;
@@ -212,9 +263,11 @@ public class UnitSpawnerUI : MonoBehaviour
             }
             else
             {
-                // Cloner le char en adaptant ses propriétés
-                GameObject tankTemplate = GameObject.Find("Leopard2") ?? GameObject.Find("Leopard_1");
-                if (tankTemplate != null) newUnitObj = Instantiate(tankTemplate, position, Quaternion.identity);
+                GameObject prefab = null;
+#if UNITY_EDITOR
+                prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Kucher/Tank Leopard2/Prefabs/Leopard2.prefab");
+#endif
+                if (prefab != null) newUnitObj = Instantiate(prefab, position, Quaternion.identity);
                 else
                 {
                     newUnitObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -223,13 +276,102 @@ public class UnitSpawnerUI : MonoBehaviour
                     newUnitObj.AddComponent<UnitAI>();
                 }
             }
-            newUnitObj.name = $"Canon_Vehicule_{team}_{(count + 1)}";
+            newUnitObj.name = $"Canon_Vehicule_{team}_{(teamCount + 1)}";
+        }
+        else if (type == UnitType.Mortier)
+        {
+            GameObject turretPrefab = Resources.Load<GameObject>("lowpoly_turret");
+            if (turretPrefab != null)
+            {
+                newUnitObj = Instantiate(turretPrefab, position, Quaternion.identity);
+                newUnitObj.transform.localScale = Vector3.one * 1.6f;
+            }
+            else
+            {
+                newUnitObj = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                newUnitObj.transform.localScale = new Vector3(2f, 1.2f, 2f);
+            }
+
+            // Application immédiate de la texture gradientTexturelar.png
+            Texture2D gradTex = Resources.Load<Texture2D>("gradientTexturelar");
+            if (gradTex == null)
+            {
+                string texPath = Application.dataPath + "/gradientTexturelar.png";
+                if (System.IO.File.Exists(texPath))
+                {
+                    byte[] rawData = System.IO.File.ReadAllBytes(texPath);
+                    gradTex = new Texture2D(2, 2);
+                    gradTex.LoadImage(rawData);
+                }
+            }
+
+            if (gradTex != null)
+            {
+                Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Unlit");
+                Material mat = new Material(shader);
+                mat.mainTexture = gradTex;
+                if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", gradTex);
+                if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", gradTex);
+
+                foreach (Renderer r in newUnitObj.GetComponentsInChildren<Renderer>())
+                {
+                    if (r.gameObject.name.Contains("Health") || r.gameObject.name.Contains("selectionRing")) continue;
+                    r.sharedMaterial = mat;
+                }
+            }
+
+            // Collider pour la sélection et clics
+            BoxCollider box = newUnitObj.GetComponent<BoxCollider>();
+            if (box == null) box = newUnitObj.AddComponent<BoxCollider>();
+            box.center = new Vector3(0, 0.8f, 0);
+            box.size = new Vector3(2.2f, 1.6f, 2.2f);
+
+            NavMeshAgent agent = newUnitObj.GetComponent<NavMeshAgent>();
+            if (agent == null) agent = newUnitObj.AddComponent<NavMeshAgent>();
+            agent.speed = 2.5f;
+            agent.angularSpeed = 180f;
+            agent.acceleration = 8f;
+            agent.radius = 1.1f;
+            agent.height = 2f;
+            agent.stoppingDistance = 0.5f;
+
+            newUnitObj.name = $"Mortier_{team}_{(teamCount + 1)}";
+        }
+        else if (type == UnitType.BarricadeRoutiere)
+        {
+            GameObject barrierPrefab = Resources.Load<GameObject>("Road_barrier");
+            if (barrierPrefab != null)
+            {
+                newUnitObj = Instantiate(barrierPrefab, position, Quaternion.identity);
+                newUnitObj.transform.localScale = Vector3.one * 1.3f;
+            }
+            else
+            {
+                newUnitObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                newUnitObj.transform.localScale = new Vector3(3f, 1.2f, 0.8f);
+            }
+
+            RoadBarrier barrier = newUnitObj.GetComponent<RoadBarrier>();
+            if (barrier == null) barrier = newUnitObj.AddComponent<RoadBarrier>();
+            barrier.teamID = team;
+            newUnitObj.name = $"Barricade_{team}_{(RoadBarrier.AllBarriers.Count)}";
+
+            // Son de pose de barricade
+            AudioClip clickClip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
+            if (clickClip != null) AudioSource.PlayClipAtPoint(clickClip, Camera.main.transform.position, 0.8f);
+            ShowMessage($"🚧 Barricade routière déployée avec succès !", 2.0f);
+            return;
         }
 
         if (newUnitObj != null)
         {
             newUnitObj.SetActive(true);
             newUnitObj.transform.position = position;
+
+            // Supprimer tout résidu de fumée ou particule de mort si le modèle a été cloné
+            Transform residualSmoke = newUnitObj.transform.Find("BlackSmoke");
+            if (residualSmoke != null) Destroy(residualSmoke.gameObject);
+            foreach (var ps in newUnitObj.GetComponentsInChildren<ParticleSystem>()) Destroy(ps.gameObject);
 
             UnitAI unitAI = newUnitObj.GetComponent<UnitAI>();
             if (unitAI == null) unitAI = newUnitObj.AddComponent<UnitAI>();
@@ -250,11 +392,27 @@ public class UnitSpawnerUI : MonoBehaviour
                 unitAI.maxHealth = 250f;
                 unitAI.health = 250;
             }
+            else if (type == UnitType.Mortier)
+            {
+                unitAI.isTank = true;
+                unitAI.isMortar = true;
+                unitAI.porteeDetection = 120f;
+                unitAI.maxHealth = 350f;
+                unitAI.health = 350;
+            }
             else
             {
                 unitAI.isTank = false;
                 unitAI.maxHealth = 100f;
                 unitAI.health = 100;
+            }
+
+            // Réinitialisation de l'animateur pour le fantassin
+            Animator anim = newUnitObj.GetComponentInChildren<Animator>();
+            if (anim != null)
+            {
+                anim.Rebind();
+                anim.Update(0f);
             }
 
             // Placement propre sur NavMesh
@@ -269,9 +427,14 @@ public class UnitSpawnerUI : MonoBehaviour
                 }
             }
 
-            unitAI.ResetOrderState(); // Réinitialise proprement les ordres pour éviter que l'unité ne soit bloquée
+            unitAI.ResetOrderState();
             unitAI.OnNavMeshReady();
-            unitAI.SetupHealthBar(); // Régénère une barre de vie neuve et 100% pleine avec la bonne couleur
+            unitAI.SetupHealthBar();
+
+            if (newUnitObj.GetComponent<FogOfWarEntity>() == null)
+            {
+                newUnitObj.AddComponent<FogOfWarEntity>();
+            }
 
             // Son de confirmation de déploiement
             AudioClip confirmClip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
@@ -282,23 +445,88 @@ public class UnitSpawnerUI : MonoBehaviour
 
     public void ClearAllUnits()
     {
-        UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude);
-        foreach (var u in allUnits)
+        for (int i = UnitAI.AllLivingUnits.Count - 1; i >= 0; i--)
         {
-            Destroy(u.gameObject);
+            UnitAI u = UnitAI.AllLivingUnits[i];
+            if (u != null) Destroy(u.gameObject);
         }
-        ShowMessage("Toutes les unités ont été retirées.", 2.0f);
+
+        for (int i = RoadBarrier.AllBarriers.Count - 1; i >= 0; i--)
+        {
+            RoadBarrier b = RoadBarrier.AllBarriers[i];
+            if (b != null) Destroy(b.gameObject);
+        }
+        RoadBarrier.AllBarriers.Clear();
+
+        ShowMessage("Toutes les unités et barricades ont été retirées.", 2.0f);
     }
 
     public int GetTotalLivingUnitsCount()
     {
-        UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude);
         int count = 0;
-        foreach (var u in allUnits)
+        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
         {
+            UnitAI u = UnitAI.AllLivingUnits[i];
             if (u != null && !u.isDead) count++;
         }
         return count;
+    }
+
+    public int GetTeamLivingUnitsCount(int team)
+    {
+        int count = 0;
+        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
+        {
+            UnitAI u = UnitAI.AllLivingUnits[i];
+            if (u != null && !u.isDead && u.teamID == team) count++;
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// Déploie instantanément une escouade ennemie IA (Fantassins, Char, Mortier) sur les routes.
+    /// </summary>
+    public void SpawnEnemyWave()
+    {
+        Vector3 enemyBase = new Vector3(25f, 0f, 25f);
+        if (NavMesh.SamplePosition(enemyBase, out NavMeshHit enh, 40f, NavMesh.AllAreas))
+        {
+            enemyBase = enh.position;
+        }
+
+        SpawnUnitAt(UnitType.Fantassin, enemyBase + new Vector3(-3f, 0, 3f), 2);
+        SpawnUnitAt(UnitType.Fantassin, enemyBase + new Vector3(3f, 0, -3f), 2);
+        SpawnUnitAt(UnitType.CharLeopard, enemyBase + new Vector3(6f, 0, 4f), 2);
+        SpawnUnitAt(UnitType.Mortier, enemyBase + new Vector3(-6f, 0, 5f), 2);
+        SpawnUnitAt(UnitType.BarricadeRoutiere, enemyBase + new Vector3(0f, 0, -8f), 2);
+
+        ShowMessage("🤖 [IA] Escouade ennemie complète déployée sur le champ de bataille !", 3.5f);
+        AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+    }
+
+    /// <summary>
+    /// Déploie automatiquement les deux camps (Joueur + IA) pour lancer la bataille.
+    /// </summary>
+    public void AutoDeployBattlefield()
+    {
+        // Camp Joueur (Sud-Ouest)
+        Vector3 playerPos = new Vector3(-25f, 0f, -25f);
+        if (NavMesh.SamplePosition(playerPos, out NavMeshHit pnh, 40f, NavMesh.AllAreas))
+        {
+            playerPos = pnh.position;
+        }
+
+        if (GetTeamLivingUnitsCount(1) == 0)
+        {
+            SpawnUnitAt(UnitType.Fantassin, playerPos + new Vector3(-2f, 0, -2f), 1);
+            SpawnUnitAt(UnitType.Fantassin, playerPos + new Vector3(2f, 0, 2f), 1);
+            SpawnUnitAt(UnitType.CharLeopard, playerPos + new Vector3(5f, 0, -3f), 1);
+            SpawnUnitAt(UnitType.Mortier, playerPos + new Vector3(-5f, 0, -4f), 1);
+        }
+
+        // Camp Ennemi IA (Nord-Est)
+        SpawnEnemyWave();
+        ShowMessage("⚡ Champ de bataille prêt : Escouades Joueur & IA déployées !", 3.5f);
     }
 
     private void ShowMessage(string msg, float duration)
@@ -313,11 +541,17 @@ public class UnitSpawnerUI : MonoBehaviour
         TacticalPathManager pathManager = FindAnyObjectByType<TacticalPathManager>();
         if (pathManager != null && pathManager.phaseActuelle == TacticalPathManager.GamePhase.Execution) return;
 
-        int livingCount = GetTotalLivingUnitsCount();
+        // Mise à l'échelle automatique +50% pour écrans mobiles (Portrait & Paysage)
+        Matrix4x4 origMat = GUI.matrix;
+        float uiScale = Mathf.Clamp(Screen.width / 480f, 1.35f, 2.2f);
+        GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
 
-        // 1. Bouton d'ouverture/fermeture du Dock de déploiement
-        string tabText = isPanelOpen ? "▼ Masquer Déploiement" : $"🎖️ Déployer Unités ({livingCount}/{maxUnits})";
-        if (GUI.Button(new Rect(20, 20, 240, 40), tabText))
+        int playerUnits = GetTeamLivingUnitsCount(1);
+        int enemyUnits = GetTeamLivingUnitsCount(2);
+
+        // 1. Bouton d'ouverture/fermeture du Dock de déploiement (Gros bouton tactile)
+        string tabText = isPanelOpen ? "▼ Masquer Déploiement" : $"🎖️ Déployer Unités ({playerUnits} vs {enemyUnits})";
+        if (GUI.Button(new Rect(15, 15, 230, 44), tabText))
         {
             isPanelOpen = !isPanelOpen;
             AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
@@ -327,55 +561,83 @@ public class UnitSpawnerUI : MonoBehaviour
         if (isPanelOpen)
         {
             GUIStyle panelStyle = new GUIStyle(GUI.skin.box);
-            panelStyle.fontSize = 14;
+            panelStyle.fontSize = 13;
             panelStyle.normal.textColor = Color.white;
 
-            GUI.Box(new Rect(20, 65, 270, 310), "QG TACTIQUE : DÉPLOIEMENT", panelStyle);
+            GUI.Box(new Rect(15, 65, 250, 430), "QG TACTIQUE : DÉPLOIEMENT", panelStyle);
 
-            // Compteur d'unités
+            // Compteur par équipe
             GUIStyle counterStyle = new GUIStyle(GUI.skin.label);
             counterStyle.fontStyle = FontStyle.Bold;
-            counterStyle.normal.textColor = (livingCount >= maxUnits) ? Color.red : Color.cyan;
-            GUI.Label(new Rect(35, 95, 240, 25), $"Effectifs : {livingCount} / {maxUnits} Unités Max", counterStyle);
+            counterStyle.fontSize = 12;
+            int currentTeamCount = (selectedTeam == 1) ? playerUnits : enemyUnits;
+            counterStyle.normal.textColor = (currentTeamCount >= maxUnitsPerTeam) ? Color.red : Color.cyan;
+            GUI.Label(new Rect(25, 92, 230, 22), $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}", counterStyle);
 
             // Sélecteur d'Équipe
-            GUI.Label(new Rect(35, 125, 100, 25), "Équipe :");
-            string team1Label = (selectedTeam == 1) ? "🔵 JOUEUR (Allié)" : "Joueur";
-            string team2Label = (selectedTeam == 2) ? "🔴 ENNEMI (IA)" : "Ennemi";
+            string team1Label = (selectedTeam == 1) ? $"🔵 Joueur ({playerUnits})" : $"Joueur ({playerUnits})";
+            string team2Label = (selectedTeam == 2) ? $"🔴 IA ({enemyUnits})" : $"IA ({enemyUnits})";
 
-            if (GUI.Button(new Rect(105, 122, 85, 28), team1Label))
+            if (GUI.Button(new Rect(25, 116, 110, 32), team1Label))
             {
                 selectedTeam = 1;
                 AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
             }
-            if (GUI.Button(new Rect(195, 122, 80, 28), team2Label))
+            if (GUI.Button(new Rect(140, 116, 110, 32), team2Label))
             {
                 selectedTeam = 2;
                 AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
             }
 
-            GUI.Label(new Rect(35, 155, 240, 20), "Cliquez pour placer sur la carte :");
-
-            // Bouton 1 : Fantassin
-            if (GUI.Button(new Rect(35, 180, 240, 35), "🎖️ Fantassin (100 PV | Fusil)"))
+            // Boutons de Sélection d'Unités (+50% de hauteur pour le tactile)
+            if (GUI.Button(new Rect(25, 154, 225, 32), "🎖️ Fantassin (Fusil)"))
             {
                 StartPlacingUnit(UnitType.Fantassin);
             }
 
-            // Bouton 2 : Char Leopard 2
-            if (GUI.Button(new Rect(35, 220, 240, 35), "🛡️ Char Leopard 2 (500 PV | Obus)"))
+            if (GUI.Button(new Rect(25, 190, 225, 32), "🛡️ Char Leopard 2 (Obus)"))
             {
                 StartPlacingUnit(UnitType.CharLeopard);
             }
 
-            // Bouton 3 : Véhicule Canon
-            if (GUI.Button(new Rect(35, 260, 240, 35), "💥 Véhicule Canon (250 PV)"))
+            if (GUI.Button(new Rect(25, 226, 225, 32), "💥 Véhicule Canon"))
             {
                 StartPlacingUnit(UnitType.VehiculeCanon);
             }
 
-            // Bouton Retirer / Effacer
-            if (GUI.Button(new Rect(35, 310, 240, 30), "🧹 Nettoyer le Terrain"))
+            if (GUI.Button(new Rect(25, 262, 225, 32), "🎯 Mortier Lourd (120m)"))
+            {
+                StartPlacingUnit(UnitType.Mortier);
+            }
+
+            if (GUI.Button(new Rect(25, 298, 225, 32), "🚧 Barricade Routière"))
+            {
+                StartPlacingUnit(UnitType.BarricadeRoutiere);
+            }
+
+            // Actions rapides IA et Déploiement Auto
+            GUIStyle aiBtnStyle = new GUIStyle(GUI.skin.button);
+            aiBtnStyle.fontStyle = FontStyle.Bold;
+            aiBtnStyle.fontSize = 12;
+            aiBtnStyle.normal.textColor = new Color(1f, 0.35f, 0.25f);
+
+            if (GUI.Button(new Rect(25, 336, 225, 34), "🤖 ESCOUADE IA (Rouge)", aiBtnStyle))
+            {
+                SpawnEnemyWave();
+            }
+
+            GUIStyle autoBtnStyle = new GUIStyle(GUI.skin.button);
+            autoBtnStyle.fontStyle = FontStyle.Bold;
+            autoBtnStyle.fontSize = 12;
+            autoBtnStyle.normal.textColor = Color.yellow;
+
+            if (GUI.Button(new Rect(25, 374, 225, 34), "⚡ DÉPLOIEMENT AUTO", autoBtnStyle))
+            {
+                AutoDeployBattlefield();
+            }
+
+            // Bouton Nettoyer
+            if (GUI.Button(new Rect(25, 412, 225, 28), "🧹 Nettoyer le Terrain"))
             {
                 ClearAllUnits();
             }
@@ -385,18 +647,24 @@ public class UnitSpawnerUI : MonoBehaviour
         if (IsPlacingUnit && activePlacingType.HasValue)
         {
             GUIStyle placingStyle = new GUIStyle(GUI.skin.box);
-            placingStyle.fontSize = 16;
+            placingStyle.fontSize = 14;
+            placingStyle.fontStyle = FontStyle.Bold;
             placingStyle.normal.textColor = (selectedTeam == 1) ? Color.cyan : Color.red;
-            GUI.Box(new Rect(Screen.width / 2 - 220, 20, 440, 50), $"MODE PLACEMENT : {activePlacingType.Value}\n[Clic Gauche] Déposer | [Clic Droit] Annuler", placingStyle);
+            float virtualW = Screen.width / uiScale;
+            GUI.Box(new Rect(virtualW / 2 - 160, 15, 320, 48), $"MODE PLACEMENT : {activePlacingType.Value}\n[Touchez la rue] Poser | [Annuler]", placingStyle);
         }
 
         // 4. Message d'alerte / feedback
         if (!string.IsNullOrEmpty(statusMessage))
         {
             GUIStyle msgStyle = new GUIStyle(GUI.skin.box);
-            msgStyle.fontSize = 15;
+            msgStyle.fontSize = 13;
             msgStyle.normal.textColor = Color.yellow;
-            GUI.Box(new Rect(Screen.width / 2 - 250, Screen.height - 70, 500, 40), statusMessage, msgStyle);
+            float virtualW = Screen.width / uiScale;
+            float virtualH = Screen.height / uiScale;
+            GUI.Box(new Rect(virtualW / 2 - 180, virtualH - 60, 360, 40), statusMessage, msgStyle);
         }
+
+        GUI.matrix = origMat;
     }
 }

@@ -19,18 +19,28 @@ public partial class UnitAI
     {
         if (!isDead)
         {
+            UpdateCoverAura();
+            
             // --- COMBAT LOGIC (TEMPS REEL) ---
             if (shootCooldown > 0) shootCooldown -= Time.deltaTime;
 
-            lookUpdateTimer -= Time.deltaTime;
-            if (lookUpdateTimer <= 0f)
+            // Le mortier du joueur obéit strictement aux coordonnées ciblées et n'engage pas de cibles aléatoires
+            if (!isMortar || !isPlayerControlled)
             {
-                currentLookTarget = GetVisibleEnemy();
-                lookUpdateTimer = 0.25f; // Scan 4 fois par seconde pour une réactivité maximale
+                lookUpdateTimer -= Time.deltaTime;
+                if (lookUpdateTimer <= 0f)
+                {
+                    currentLookTarget = GetVisibleEnemy();
+                    lookUpdateTimer = 0.25f; // Scan 4 fois par seconde pour une réactivité maximale
+                }
+            }
+            else
+            {
+                currentLookTarget = null;
             }
 
-            // Détection si nous sommes en phase d'exécution globale du tour
-            TacticalPathManager pathManager = FindAnyObjectByType<TacticalPathManager>();
+            // Détection si nous sommes en phase d'exécution globale du tour (Zéro allocation)
+            TacticalPathManager pathManager = TacticalPathManager.Instance;
             bool isExecutionPhase = (pathManager != null && pathManager.phaseActuelle == TacticalPathManager.GamePhase.Execution) || isExecuting;
 
             if (currentLookTarget != null && !currentLookTarget.isDead)
@@ -87,32 +97,33 @@ public partial class UnitAI
                 }
             }
 
-            // --- ANIMATION ET AUDIO (Mouvement) ---
+            // --- ANIMATION ET AUDIO (Mouvement & Moteurs) ---
             float currentSpeed = 0f;
             if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
             {
                 currentSpeed = agent.velocity.magnitude;
             }
-            
-            bool isAgentMoving = agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh && !agent.isStopped;
-            if (currentSpeed > 0.1f && isAgentMoving)
+            else if (animator != null)
             {
-                if (isTank)
+                currentSpeed = animator.GetFloat("Speed");
+            }
+            
+            bool isActuallyMoving = currentSpeed > 0.15f && !isDead && (isPlayerControlled || isVisible);
+
+            if (isActuallyMoving)
+            {
+                if (footstepAudioSource != null && !footstepAudioSource.isPlaying && footstepAudioSource.clip != null)
                 {
-                    if (!footstepAudioSource.isPlaying)
-                    {
-                        footstepAudioSource.pitch = Random.Range(0.95f, 1.05f);
-                        footstepAudioSource.Play();
-                    }
-                }
-                else
-                {
-                    if (footstepAudioSource.isPlaying) footstepAudioSource.Stop();
+                    footstepAudioSource.pitch = isTank ? Random.Range(0.95f, 1.05f) : 1.0f;
+                    footstepAudioSource.Play();
                 }
             }
             else
             {
-                if (footstepAudioSource != null && footstepAudioSource.isPlaying) footstepAudioSource.Stop();
+                if (footstepAudioSource != null && footstepAudioSource.isPlaying)
+                {
+                    footstepAudioSource.Stop();
+                }
             }
             
             if (animator != null && !isTank)
@@ -163,18 +174,81 @@ public partial class UnitAI
     }
 
     /// <summary>
-    /// Utilise un Raycast pour trouver l'ennemi visible le plus proche.
+    /// Vérifie si une unité ennemie est réellement repérée par un éclaireur avec ligne de vue dégagée.
     /// </summary>
-    private UnitAI GetVisibleEnemy()
+    public static bool IsUnitSpottedByTeam(UnitAI target, int observingTeam)
     {
-        UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude);
+        if (target == null || target.isDead) return false;
+        if (target.isCamouflaged) return false;
+
+        for (int i = 0; i < AllLivingUnits.Count; i++)
+        {
+            UnitAI observer = AllLivingUnits[i];
+            if (observer == null || observer.isDead || observer.teamID != observingTeam) continue;
+
+            float maxSight = observer.isRooftopSniper ? 55f : (observer.isMortar ? 25f : 35f);
+            float dist = Vector3.Distance(observer.transform.position, target.transform.position);
+
+            if (dist <= maxSight)
+            {
+                Vector3 start = observer.transform.position + Vector3.up * 1.5f;
+                Vector3 end = target.transform.position + Vector3.up * 1.5f;
+                Vector3 dir = (end - start);
+
+                RaycastHit[] hits = Physics.RaycastAll(start, dir.normalized, dist, ~0, QueryTriggerInteraction.Ignore);
+                bool blocked = false;
+
+                foreach (var h in hits)
+                {
+                    if (h.collider.transform.IsChildOf(observer.transform) || h.collider.transform.IsChildOf(target.transform)) continue;
+
+                    string colName = h.collider.gameObject.name.ToLower();
+                    if (colName.Contains("wall") || colName.Contains("mur") || colName.Contains("building") || colName.Contains("batiment"))
+                    {
+                        if (target.isRooftopSniper && h.distance > dist - 2f) continue;
+                        blocked = true;
+                        break;
+                    }
+                }
+
+                if (!blocked) return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Recherche l'ennemi le plus proche visible dans la ligne de mire ou à portée de mortier.
+    /// </summary>
+    public UnitAI GetVisibleEnemy()
+    {
         UnitAI bestTarget = null;
-        float maxRange = isRooftopSniper ? (porteeDetection + 20f) : porteeDetection;
+        float maxRange = isMortar ? 120f : (isRooftopSniper ? (porteeDetection + 20f) : porteeDetection);
         float minDistance = maxRange;
 
-        foreach (var unit in allUnits)
+        if (isMortar)
         {
-            if (unit == this || unit.isDead || unit.teamID == this.teamID) continue; // Ignorer soi-même, les morts et ses alliés !
+            // Artillerie Mortier : Tir indirect parabolique (15m à 120m)
+            for (int i = 0; i < AllLivingUnits.Count; i++)
+            {
+                UnitAI unit = AllLivingUnits[i];
+                if (unit == null || unit == this || unit.isDead || unit.teamID == this.teamID || unit.isCamouflaged) continue;
+
+                float dist = Vector3.Distance(transform.position, unit.transform.position);
+                if (dist <= 120f && dist < minDistance)
+                {
+                    bestTarget = unit;
+                    minDistance = dist;
+                }
+            }
+            return bestTarget;
+        }
+
+        for (int i = 0; i < AllLivingUnits.Count; i++)
+        {
+            UnitAI unit = AllLivingUnits[i];
+            if (unit == null || unit == this || unit.isDead || unit.teamID == this.teamID || unit.isCamouflaged) continue; // Ignorer soi-même, les morts, ses alliés et les ennemis camouflés !
 
             float dist = Vector3.Distance(transform.position, unit.transform.position);
             if (dist < minDistance)
@@ -200,13 +274,38 @@ public partial class UnitAI
                     UnitAI hitUnit = hit.collider.GetComponentInParent<UnitAI>();
                     if (hitUnit == this) continue; // Ignore son propre collider
                     if (hitUnit == unit) continue; // Atteint la cible
-                    
-                    // Si on tire depuis une fenêtre, ignorer le bâtiment dans lequel on est
-                    if (isGarrisoned && hit.collider.GetComponentInParent<BuildingStructure>() != null && hit.distance < 1.0f) continue;
+
+                    // CAS 1 : L'attaquant (this) tire depuis son propre bâtiment (fenêtre, porte ou toit)
+                    if ((isGarrisoned || isRooftopSniper || currentBuilding != null) && (hit.collider.GetComponentInParent<BuildingStructure>() == currentBuilding || hit.distance < 2.5f)) continue;
+
+                    // CAS 2 : La cible (unit) est retranchée à une fenêtre ou une porte et l'attaquant (this) lui tire dessus depuis la rue
+                    if (unit.isGarrisoned || unit.currentBuilding != null)
+                    {
+                        BuildingStructure targetBuilding = unit.currentBuilding ?? hit.collider.GetComponentInParent<BuildingStructure>();
+                        if (targetBuilding != null && hit.collider.GetComponentInParent<BuildingStructure>() == targetBuilding)
+                        {
+                            float distToTarget = Vector3.Distance(hit.point, unit.transform.position + Vector3.up * 1.0f);
+                            if (distToTarget < 2.5f)
+                            {
+                                // La balle passe par l'ouverture (fenêtre/porte) où est posté le défenseur
+                                continue;
+                            }
+                        }
+                    }
+
+                    // CAS 3 : La cible (unit) est sur un toit (Sniper de toit)
+                    if (unit.isRooftopSniper || unit.transform.position.y > 2.5f)
+                    {
+                        float distToTarget = Vector3.Distance(hit.point, unit.transform.position + Vector3.up * 1.0f);
+                        if (distToTarget < 2.5f)
+                        {
+                            continue;
+                        }
+                    }
 
                     if (hit.collider.gameObject.name.Contains("Terrain") || hit.collider.gameObject.name.Contains("Building") || hit.collider.gameObject.name.Contains("City") || hit.collider.gameObject.name.Contains("Polygone") || hit.collider.gameObject.name.Contains("Mur") || hit.collider.gameObject.name.Contains("Wall") || hit.collider.gameObject.name.Contains("Batiment"))
                     {
-                        hasLineOfSight = false; // Un mur extérieur bloque la vue
+                        hasLineOfSight = false; // Un mur extérieur opaque bloque la vue
                         break;
                     }
                 }
@@ -226,7 +325,16 @@ public partial class UnitAI
     /// </summary>
     private void ShootAt(UnitAI target)
     {
+        if (isMortar)
+        {
+            FireMortarShell(target.transform.position);
+            return;
+        }
+
         Debug.Log($"<color=orange>[{gameObject.name}] Tire sur {target.gameObject.name} !</color>");
+        
+        FogOfWarEntity fow = GetComponent<FogOfWarEntity>();
+        if (fow != null) fow.NotifyAttack();
         
         // --- JOUER LE SON DU TIR SANS DÉCALAGE ---
         if (combatAudioSource != null && combatAudioSource.clip != null)
@@ -275,6 +383,14 @@ public partial class UnitAI
         Vector3 hitDirection = (target.transform.position - transform.position).normalized;
         // Calcul des dégâts équilibrés
         float damageToDeal = isTank ? (isCanonVehicle ? 75f : 150f) : 15f; 
+
+        if (isCamouflaged)
+        {
+            damageToDeal *= 1.75f;
+            isCamouflaged = false;
+            Debug.Log($"<color=red><b>[{gameObject.name}] 💥 CRITIQUE D'EMBUSCADE ! Dégâts augmentés (+75%) et rupture du camouflage.</b></color>");
+        }
+
         target.TakeDamage(damageToDeal, hitDirection);
     }
 }

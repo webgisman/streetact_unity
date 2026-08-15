@@ -1,18 +1,21 @@
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 
 public class TacticalCamera : MonoBehaviour
 {
-    [Header("Mouvement")]
-    public float panSpeed = 20f;
+    [Header("Mouvement & Vitesse")]
+    public float panSpeed = 28f;
+    public float touchPanSpeed = 0.04f;
     
-    [Header("Zoom")]
-    public float zoomSpeed = 20f; // Multiplié car scroll de la souris est souvent autour de 120
-    public float minHeight = 5f;
-    public float maxHeight = 50f;
+    [Header("Zoom & Recul")]
+    public float zoomSpeed = 25f;
+    public float pinchZoomSensitivity = 0.065f;
+    public float minHeight = 8f;
+    public float maxHeight = 180f; // Recul majeur permettant de voir toute la ville
 
     [Header("Rotation")]
-    public float rotationSensitivity = 0.15f;
+    public float rotationSensitivity = 0.2f;
 
     private Vector3 targetPosition;
     private Vector3 currentVelocity;
@@ -23,20 +26,28 @@ public class TacticalCamera : MonoBehaviour
     private float orbitDistance;
     private bool isRotating = false;
 
+    private float shakeDuration = 0f;
+    private float shakeIntensity = 0f;
+
     [Header("Juice & Feel")]
-    public float smoothTime = 0.15f; // Temps de lissage (inertie)
+    public float smoothTime = 0.12f; // Inertie fluide
 
     void Start()
     {
-        // Forcer un bel angle isométrique au démarrage pour que tout soit beau !
-        transform.rotation = Quaternion.Euler(50f, 45f, 0f);
+        // 1. Forcer l'autorotation de l'écran sur mobile
+        Screen.orientation = ScreenOrientation.AutoRotation;
+        Screen.autorotateToPortrait = true;
+        Screen.autorotateToPortraitUpsideDown = false;
+        Screen.autorotateToLandscapeLeft = true;
+        Screen.autorotateToLandscapeRight = true;
+
+        // 2. Bel angle isométrique de vue d'ensemble avec recul confortable (Y = 65m)
+        transform.rotation = Quaternion.Euler(52f, 45f, 0f);
+        pitch = 52f;
+        yaw = 45f;
         
-        // Récupérer les angles initiaux pour la rotation
-        pitch = transform.eulerAngles.x;
-        yaw = transform.eulerAngles.y;
-        
-        // S'assurer qu'on est à une hauteur correcte
         Vector3 pos = transform.position;
+        if (pos.y < 35f) pos.y = 65f; // Vue haute initiale sur toute la ville
         pos.y = Mathf.Clamp(pos.y, minHeight, maxHeight);
         transform.position = pos;
         targetPosition = pos;
@@ -44,19 +55,154 @@ public class TacticalCamera : MonoBehaviour
 
     void Update()
     {
-        HandlePan();
-        HandleZoom();
-        HandleRotation();
+        HandleTouchGestures();
+        HandleMouseAndKeyboard();
         
-        // Mouvement ultra-fluide avec inertie (Juiciness)
-        transform.position = Vector3.SmoothDamp(transform.position, targetPosition, ref currentVelocity, smoothTime);
+        // Mouvement fluide avec amortissement inertiel
+        Vector3 finalPos = Vector3.SmoothDamp(transform.position, targetPosition, ref currentVelocity, smoothTime);
+        
+        if (shakeDuration > 0)
+        {
+            finalPos += Random.insideUnitSphere * shakeIntensity;
+            shakeDuration -= Time.deltaTime;
+        }
+        
+        transform.position = finalPos;
     }
 
-    private void HandlePan()
+    public void ShakeCamera(float intensity, float duration)
     {
-        Vector3 move = Vector3.zero;
+        shakeIntensity = intensity;
+        shakeDuration = duration;
+    }
 
-        // Gestion du clavier (Supporte QWERTY et AZERTY + Flèches)
+    /// <summary>
+    /// Gestion tactile complète multi-touch pour téléphone Android :
+    /// - 1 doigt : Glisser pour déplacer la carte (Pan)
+    /// - 2 doigts : Pincer pour zoomer/dézoomer + Glisser pour Pan
+    /// </summary>
+    private void HandleTouchGestures()
+    {
+        int touchCount = Input.touchCount;
+        
+        // Fallback InputSystem Touches
+        if (touchCount == 0 && Touchscreen.current != null)
+        {
+            touchCount = Touchscreen.current.touches.Count;
+        }
+
+        // -------------------------------------------------------------
+        // CAS 1 : DEUX DOIGTS (PINCH TO ZOOM & DEZOOM AUX DOIGTS)
+        // -------------------------------------------------------------
+        if (touchCount >= 2)
+        {
+            Vector2 t0Pos, t1Pos;
+            Vector2 t0Delta = Vector2.zero, t1Delta = Vector2.zero;
+
+            if (Input.touchCount >= 2)
+            {
+                Touch t0 = Input.GetTouch(0);
+                Touch t1 = Input.GetTouch(1);
+                t0Pos = t0.position;
+                t1Pos = t1.position;
+                t0Delta = t0.deltaPosition;
+                t1Delta = t1.deltaPosition;
+            }
+            else
+            {
+                var t0 = Touchscreen.current.touches[0];
+                var t1 = Touchscreen.current.touches[1];
+                t0Pos = t0.position.ReadValue();
+                t1Pos = t1.position.ReadValue();
+                t0Delta = t0.delta.ReadValue();
+                t1Delta = t1.delta.ReadValue();
+            }
+
+            // A. Calcul du Zoom (Distance entre les 2 doigts)
+            float currentDist = Vector2.Distance(t0Pos, t1Pos);
+            Vector2 prevT0 = t0Pos - t0Delta;
+            Vector2 prevT1 = t1Pos - t1Delta;
+            float prevDist = Vector2.Distance(prevT0, prevT1);
+            float distDelta = currentDist - prevDist;
+
+            if (Mathf.Abs(distDelta) > 0.5f)
+            {
+                float zoomAmount = distDelta * pinchZoomSensitivity * (targetPosition.y / 30f);
+                Vector3 zoomMove = transform.forward * zoomAmount;
+                targetPosition += zoomMove;
+                targetPosition.y = Mathf.Clamp(targetPosition.y, minHeight, maxHeight);
+            }
+
+            // B. Déplacement (Pan avec 2 doigts en parallèle)
+            Vector2 averageDelta = (t0Delta + t1Delta) * 0.5f;
+            if (averageDelta.sqrMagnitude > 1f)
+            {
+                Vector3 forward = transform.forward; forward.y = 0; forward.Normalize();
+                Vector3 right = transform.right; right.y = 0; right.Normalize();
+                Vector3 panMove = (-right * averageDelta.x - forward * averageDelta.y) * touchPanSpeed * (targetPosition.y / 25f);
+                targetPosition += panMove;
+            }
+
+            return;
+        }
+
+        // -------------------------------------------------------------
+        // CAS 2 : UN SEUL DOIGT (PAN DU TERRAIN)
+        // -------------------------------------------------------------
+        if (touchCount == 1)
+        {
+            // Vérifier que le doigt ne clique pas sur un bouton UI ou une unité en planification
+            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return;
+
+            Vector2 delta = Vector2.zero;
+            bool isMoved = false;
+
+            if (Input.touchCount == 1)
+            {
+                Touch t = Input.GetTouch(0);
+                if (t.phase == UnityEngine.TouchPhase.Moved)
+                {
+                    delta = t.deltaPosition;
+                    isMoved = true;
+                }
+            }
+            else if (Touchscreen.current != null)
+            {
+                var t = Touchscreen.current.touches[0];
+                if (t.phase.ReadValue() == UnityEngine.InputSystem.TouchPhase.Moved)
+                {
+                    delta = t.delta.ReadValue();
+                    isMoved = true;
+                }
+            }
+
+            // Ne pas déplacer la caméra si le joueur trace un chemin avec une unité sélectionnée
+            TacticalPathManager pathMgr = TacticalPathManager.Instance;
+            if (pathMgr != null && pathMgr.uniteSelectionnee != null && pathMgr.phaseActuelle == TacticalPathManager.GamePhase.Planification)
+            {
+                // Si on a une unité active, le pan tactile se fait à 2 doigts pour ne pas gêner le tracé
+                return;
+            }
+
+            if (isMoved && delta.sqrMagnitude > 0.5f)
+            {
+                Vector3 forward = transform.forward; forward.y = 0; forward.Normalize();
+                Vector3 right = transform.right; right.y = 0; right.Normalize();
+                
+                float dynamicSpeed = touchPanSpeed * (targetPosition.y / 25f);
+                Vector3 panMove = (-right * delta.x - forward * delta.y) * dynamicSpeed;
+                targetPosition += panMove;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Contrôles PC (Souris & Clavier)
+    /// </summary>
+    private void HandleMouseAndKeyboard()
+    {
+        // 1. Clavier Pan
+        Vector3 move = Vector3.zero;
         if (Keyboard.current != null)
         {
             if (Keyboard.current.wKey.isPressed || Keyboard.current.zKey.isPressed || Keyboard.current.upArrowKey.isPressed) move += Vector3.forward;
@@ -65,19 +211,6 @@ public class TacticalCamera : MonoBehaviour
             if (Keyboard.current.dKey.isPressed || Keyboard.current.rightArrowKey.isPressed) move += Vector3.right;
         }
 
-        // Gestion du tactile (Glisser pour se déplacer avec 1 doigt)
-        if (Touchscreen.current != null && Touchscreen.current.touches.Count == 1)
-        {
-            var touch = Touchscreen.current.touches[0];
-            if (touch.phase.ReadValue() == UnityEngine.InputSystem.TouchPhase.Moved)
-            {
-                Vector2 delta = touch.delta.ReadValue();
-                // Inverser le mouvement pour faire "glisser la carte"
-                move += new Vector3(-delta.x, 0, -delta.y) * 0.05f; 
-            }
-        }
-
-        // Gestion du glisser de souris (Clic molette ou clic droit s'il n'y a pas de rotation)
         if (Mouse.current != null && Mouse.current.middleButton.isPressed)
         {
             Vector2 delta = Mouse.current.delta.ReadValue();
@@ -87,140 +220,66 @@ public class TacticalCamera : MonoBehaviour
         if (move.sqrMagnitude > 0)
         {
             move.Normalize();
-            
-            // Le mouvement doit être relatif à l'angle de vue de la caméra
-            Vector3 forward = transform.forward;
-            forward.y = 0;
-            forward.Normalize();
-
-            Vector3 right = transform.right;
-            right.y = 0;
-            right.Normalize();
-
-            Vector3 finalMove = (forward * move.z + right * move.x) * panSpeed * Time.deltaTime;
-            // On modifie la cible, pas la position réelle !
-            targetPosition += finalMove;
+            Vector3 forward = transform.forward; forward.y = 0; forward.Normalize();
+            Vector3 right = transform.right; right.y = 0; right.Normalize();
+            targetPosition += (forward * move.z + right * move.x) * panSpeed * (targetPosition.y / 30f) * Time.deltaTime;
         }
-    }
 
-    private void HandleZoom()
-    {
+        // 2. Molette Zoom PC
         float scrollDelta = 0f;
-
         if (Mouse.current != null)
         {
             float scroll = Mouse.current.scroll.ReadValue().y;
             if (scroll > 0) scrollDelta = 1f;
             else if (scroll < 0) scrollDelta = -1f;
         }
-        
-        // Fallback Clavier : Touches R (Zoom In) et F (Zoom Out)
         if (Keyboard.current != null)
         {
             if (Keyboard.current.rKey.isPressed) scrollDelta = 1f;
             if (Keyboard.current.fKey.isPressed) scrollDelta = -1f;
         }
 
-        // Zoom Tactile (Pinch-to-zoom avec 2 doigts)
-        if (Touchscreen.current != null && Touchscreen.current.touches.Count == 2)
-        {
-            var touch0 = Touchscreen.current.touches[0];
-            var touch1 = Touchscreen.current.touches[1];
-
-            Vector2 touch0PrevPos = touch0.position.ReadValue() - touch0.delta.ReadValue();
-            Vector2 touch1PrevPos = touch1.position.ReadValue() - touch1.delta.ReadValue();
-
-            float prevMagnitude = (touch0PrevPos - touch1PrevPos).magnitude;
-            float currentMagnitude = (touch0.position.ReadValue() - touch1.position.ReadValue()).magnitude;
-
-            float difference = currentMagnitude - prevMagnitude;
-            scrollDelta = difference * 0.02f; // Ajuster la sensibilité du pincement
-        }
-
         if (scrollDelta != 0)
         {
-            Camera cam = GetComponent<Camera>();
-            if (cam != null && cam.orthographic)
-            {
-                float newSize = cam.orthographicSize - scrollDelta * zoomSpeed * 0.5f;
-                cam.orthographicSize = Mathf.Clamp(newSize, 5f, 100f);
-            }
-            else
-            {
-                Vector3 move = transform.forward * scrollDelta * zoomSpeed * 0.2f;
-                // On modifie la cible !
-                targetPosition += move;
-                targetPosition.y = Mathf.Clamp(targetPosition.y, minHeight, 200f);
-            }
+            Vector3 zoomMove = transform.forward * scrollDelta * zoomSpeed * 0.25f;
+            targetPosition += zoomMove;
+            targetPosition.y = Mathf.Clamp(targetPosition.y, minHeight, maxHeight);
         }
-    }
 
-    private void HandleRotation()
-    {
-        bool startRotation = false;
-        bool isRotatingInput = false;
-        Vector2 rotationDelta = Vector2.zero;
-
-        // Détection Souris (Clic droit)
+        // 3. Clic Droit Rotation PC
         if (Mouse.current != null)
         {
-            if (Mouse.current.rightButton.wasPressedThisFrame) startRotation = true;
-            if (Mouse.current.rightButton.isPressed)
+            if (Mouse.current.rightButton.wasPressedThisFrame)
             {
-                isRotatingInput = true;
-                rotationDelta = Mouse.current.delta.ReadValue();
+                isRotating = true;
+                Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
+                Ray ray = new Ray(transform.position, transform.forward);
+                if (groundPlane.Raycast(ray, out float enterDistance))
+                {
+                    rotationPivot = ray.GetPoint(enterDistance);
+                }
+                else
+                {
+                    rotationPivot = transform.position + transform.forward * 25f;
+                }
+                orbitDistance = Vector3.Distance(transform.position, rotationPivot);
             }
-        }
 
-        // Détection Tactile (Rotation à 3 doigts ou condition spécifique)
-        if (Touchscreen.current != null && Touchscreen.current.touches.Count == 3)
-        {
-            var touch = Touchscreen.current.touches[0];
-            if (touch.phase.ReadValue() == UnityEngine.InputSystem.TouchPhase.Began) startRotation = true;
-            if (touch.phase.ReadValue() == UnityEngine.InputSystem.TouchPhase.Moved)
+            if (Mouse.current.rightButton.isPressed && isRotating)
             {
-                isRotatingInput = true;
-                rotationDelta = touch.delta.ReadValue();
-            }
-        }
+                Vector2 delta = Mouse.current.delta.ReadValue();
+                yaw += delta.x * rotationSensitivity;
+                pitch -= delta.y * rotationSensitivity;
+                pitch = Mathf.Clamp(pitch, 15f, 85f);
 
-        // Quand on commence la rotation, on définit le point pivot au sol
-        if (startRotation)
-        {
-            isRotating = true;
-            
-            // Lancer un rayon virtuel vers le sol (Y = 0) pour trouver le pivot de rotation
-            Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
-            Ray ray = new Ray(transform.position, transform.forward);
-            if (groundPlane.Raycast(ray, out float enterDistance))
+                Quaternion rotation = Quaternion.Euler(pitch, yaw, 0f);
+                transform.rotation = rotation;
+                targetPosition = rotationPivot - (rotation * Vector3.forward * orbitDistance);
+            }
+            else if (Mouse.current.rightButton.wasReleasedThisFrame)
             {
-                rotationPivot = ray.GetPoint(enterDistance);
+                isRotating = false;
             }
-            else
-            {
-                rotationPivot = transform.position + transform.forward * 20f;
-            }
-            orbitDistance = Vector3.Distance(transform.position, rotationPivot);
-        }
-
-        // Pendant qu'on maintient l'input, on tourne autour du pivot
-        if (isRotatingInput && isRotating)
-        {
-            yaw += rotationDelta.x * rotationSensitivity;
-            pitch -= rotationDelta.y * rotationSensitivity;
-            
-            // Clamper l'inclinaison verticale (pitch) pour ne pas retourner la caméra ou passer sous la carte
-            pitch = Mathf.Clamp(pitch, 15f, 85f);
-
-            Quaternion rotation = Quaternion.Euler(pitch, yaw, 0f);
-            transform.rotation = rotation;
-
-            // Repositionner la cible de la caméra pour conserver la même distance par rapport au pivot
-            targetPosition = rotationPivot - (rotation * Vector3.forward * orbitDistance);
-        }
-        else if (!isRotatingInput)
-        {
-            isRotating = false;
         }
     }
 }

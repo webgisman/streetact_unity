@@ -15,6 +15,9 @@ public partial class UnitAI
     /// </summary>
     public void OnNavMeshReady()
     {
+        if (agent == null) agent = GetComponent<NavMeshAgent>();
+        if (agent == null) return;
+
         navMeshReady = true;
         
         // Réactiver l'agent et le placer sur le NavMesh
@@ -82,78 +85,8 @@ public partial class UnitAI
 
         if (!navMeshReady) return;
 
-        tacticalPath.Clear();
-        currentNodeIndex = 0;
-
-        // 1. Trouver l'unité du joueur la plus proche
-        UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude);
-        UnitAI closestPlayer = null;
-        float closestDist = float.MaxValue;
-
-        foreach (var unit in allUnits)
-        {
-            if (unit != null && !unit.isDead && unit.isPlayerControlled)
-            {
-                float d = Vector3.Distance(transform.position, unit.transform.position);
-                if (d < closestDist)
-                {
-                    closestDist = d;
-                    closestPlayer = unit;
-                }
-            }
-        }
-
-        if (closestPlayer == null) return;
-
-        // 2. Calculer le chemin vers le joueur
-        Vector3 startPos = transform.position;
-        // Si c'est un char à l'arrêt, son centre est creusé dans le NavMesh par l'obstacle. On trouve le point valide le plus proche.
-        if (isTank && obstacle != null && obstacle.enabled)
-        {
-            UnityEngine.AI.NavMeshHit startHit;
-            if (UnityEngine.AI.NavMesh.SamplePosition(startPos, out startHit, 5.0f, agent.areaMask))
-            {
-                startPos = startHit.position;
-            }
-        }
-
-        UnityEngine.AI.NavMeshPath path = new UnityEngine.AI.NavMeshPath();
-        if (UnityEngine.AI.NavMesh.CalculatePath(startPos, closestPlayer.transform.position, agent.areaMask, path) && path.corners.Length > 1)
-        {
-            float totalPathLength = 0f;
-            for (int i = 0; i < path.corners.Length - 1; i++)
-            {
-                totalPathLength += Vector3.Distance(path.corners[i], path.corners[i + 1]);
-            }
-
-            // L'IA doit toujours s'arrêter à 3m pour ne jamais chevaucher le joueur
-            float stopDistanceBeforePlayer = 3.0f;
-            float targetDistanceAlongPath = Mathf.Min(maxMovementPerTurn, totalPathLength - stopDistanceBeforePlayer);
-
-            if (targetDistanceAlongPath <= 0.5f)
-            {
-                AddTacticalNode(new TacticalPathManager.TacticalNode { position = transform.position, action = TacticalPathManager.NodeAction.Attendre5Min });
-                return;
-            }
-
-            float accumulatedDist = 0f;
-            Vector3 targetPosition = path.corners[path.corners.Length - 1];
-
-            for (int i = 0; i < path.corners.Length - 1; i++)
-            {
-                float segmentLength = Vector3.Distance(path.corners[i], path.corners[i + 1]);
-                if (accumulatedDist + segmentLength >= targetDistanceAlongPath)
-                {
-                    float remainingOnSegment = targetDistanceAlongPath - accumulatedDist;
-                    Vector3 direction = (path.corners[i + 1] - path.corners[i]).normalized;
-                    targetPosition = path.corners[i] + direction * remainingOnSegment;
-                    break;
-                }
-                accumulatedDist += segmentLength;
-            }
-
-            AddTacticalNode(new TacticalPathManager.TacticalNode { position = targetPosition, action = TacticalPathManager.NodeAction.Continuer });
-        }
+        // Déléguer au planificateur tactique IA avancé (gestion des toits, mortiers, barricades, etc.)
+        TacticalAIPlanner.PlanTurnForUnit(this);
     }
 
     /// <summary>
@@ -185,24 +118,200 @@ public partial class UnitAI
     /// </summary>
     private IEnumerator ExecuteMovementCoroutine()
     {
-        // 0. Attendre que l'Agent soit actif sur le NavMesh avant de donner des ordres
-        if (isTank && agent != null && !agent.isOnNavMesh)
+        // 0. S'assurer que l'Agent est actif et positionné sur le NavMesh
+        if (agent != null && !agent.isOnNavMesh && !isRooftopSniper && currentBuilding == null)
         {
-            yield return new WaitUntil(() => agent.isOnNavMesh);
+            if (NavMesh.SamplePosition(transform.position, out NavMeshHit initHit, 6.0f, NavMesh.AllAreas))
+            {
+                agent.enabled = true;
+                agent.Warp(initHit.position);
+            }
+            yield return null;
         }
 
         for (currentNodeIndex = 0; currentNodeIndex < tacticalPath.Count; currentNodeIndex++)
         {
             Vector3 targetPos = tacticalPath[currentNodeIndex].position;
+            TacticalPathManager.NodeAction nodeAction = tacticalPath[currentNodeIndex].action;
             
-            if (agent == null || !agent.isActiveAndEnabled || !agent.isOnNavMesh) break;
+            if (agent == null) break;
+
+            // 1. ESCALADE OU DESCENTE DU TOIT (Priorité absolue avant tout calcul de chemin classique)
+            float heightDelta = targetPos.y - transform.position.y;
+            bool isClimbUp = !isTank && (nodeAction == TacticalPathManager.NodeAction.Escalade || heightDelta > 1.8f);
+            bool isClimbDown = !isTank && (heightDelta < -1.8f);
+
+            if (isClimbUp)
+            {
+                yield return StartCoroutine(ExecuteClimb(targetPos));
+                continue;
+            }
+            else if (isClimbDown)
+            {
+                yield return StartCoroutine(ExecuteClimbDown(targetPos));
+                continue;
+            }
+
+            // 2. ENTRÉE DIRECTE DANS LE BÂTIMENT PAR LA PORTE
+            if (!isTank && nodeAction == TacticalPathManager.NodeAction.EntrerBatiment)
+            {
+                yield return StartCoroutine(ExecuteEnterBuilding(targetPos));
+                continue;
+            }
+
+            // 3. SORTIE DIRECTE DU BÂTIMENT VERS LA RUE
+            if (!isTank && nodeAction == TacticalPathManager.NodeAction.SortirBatiment)
+            {
+                yield return StartCoroutine(ExecuteExitBuilding(targetPos));
+                continue;
+            }
+
+            // 4. TIR DE MORTIER (Bombardement AoE)
+            if (nodeAction == TacticalPathManager.NodeAction.TirMortier)
+            {
+                yield return StartCoroutine(ExecuteMortarStrike(targetPos));
+                continue;
+            }
+
+            // 5. DÉPLACEMENT SUR LA SURFACE DU TOIT (Infanterie en poste haut)
+            if (!isTank && (isRooftopSniper || transform.position.y > 1.8f || targetPos.y > 1.8f))
+            {
+                if (agent != null && agent.enabled)
+                {
+                    agent.isStopped = true;
+                    agent.ResetPath();
+                    agent.enabled = false; // Évite que le NavMesh au sol n'aspire le soldat vers le bas
+                }
+
+                float roofY = transform.position.y;
+                if (Physics.Raycast(new Vector3(targetPos.x, roofY + 3.0f, targetPos.z), Vector3.down, out RaycastHit rHit, 8.0f))
+                {
+                    roofY = rHit.point.y;
+                }
+
+                Vector3 roofMoveTarget = new Vector3(targetPos.x, roofY, targetPos.z);
+                Vector3 roofDir = (roofMoveTarget - transform.position);
+                roofDir.y = 0;
+                if (roofDir.sqrMagnitude > 0.04f)
+                {
+                    transform.rotation = Quaternion.LookRotation(roofDir.normalized);
+                    if (animator != null) animator.SetFloat("Speed", 2.5f);
+                    while (Vector3.Distance(new Vector3(transform.position.x, 0, transform.position.z), new Vector3(roofMoveTarget.x, 0, roofMoveTarget.z)) > 0.4f && !isDead)
+                    {
+                        Vector3 curDir = (roofMoveTarget - transform.position);
+                        curDir.y = 0;
+                        if (curDir.sqrMagnitude > 0.01f)
+                        {
+                            transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(curDir.normalized), 360f * Time.deltaTime);
+                        }
+                        transform.position = Vector3.MoveTowards(transform.position, roofMoveTarget, 3.5f * Time.deltaTime);
+                        yield return null;
+                    }
+                    if (animator != null) animator.SetFloat("Speed", 0f);
+                }
+                isRooftopSniper = true;
+                continue;
+            }
+
+            // 6. DÉPLACEMENT À L'INTÉRIEUR DU BÂTIMENT
+            if (currentBuilding != null && !isRooftopSniper && (agent == null || !agent.isActiveAndEnabled || !agent.isOnNavMesh))
+            {
+                Vector3 interiorMoveTarget = new Vector3(targetPos.x, 0.05f, targetPos.z);
+                Vector3 interiorDir = (interiorMoveTarget - transform.position);
+                interiorDir.y = 0;
+                if (interiorDir.sqrMagnitude > 0.04f)
+                {
+                    transform.rotation = Quaternion.LookRotation(interiorDir.normalized);
+                    if (animator != null) animator.SetFloat("Speed", 2.5f);
+                    while (Vector3.Distance(transform.position, interiorMoveTarget) > 0.4f && !isDead)
+                    {
+                        transform.position = Vector3.MoveTowards(transform.position, interiorMoveTarget, 3.5f * Time.deltaTime);
+                        yield return null;
+                    }
+                    if (animator != null) animator.SetFloat("Speed", 0f);
+                }
+                continue;
+            }
+
+            // 7. DÉPLACEMENT SUR LES RUINES D'UN BÂTIMENT DÉTRUIT (Franchissement direct sans obstacle pour Engins et Troupes)
+            if (DestructibleEnvironment.IsPositionInRubble(targetPos) || DestructibleEnvironment.IsPositionInRubble(transform.position))
+            {
+                Vector3 rubbleTarget = new Vector3(targetPos.x, 0.05f, targetPos.z);
+                Vector3 rubbleDir = (rubbleTarget - transform.position);
+                rubbleDir.y = 0;
+                if (rubbleDir.sqrMagnitude > 0.04f)
+                {
+                    bool wasAgentEnabled = (agent != null && agent.enabled);
+                    if (agent != null && agent.enabled)
+                    {
+                        agent.isStopped = true;
+                        agent.ResetPath();
+                        agent.enabled = false; // CRITIQUE : Empêche le NavMesh d'éjecter le char hors des ruines
+                    }
+
+                    if (animator != null && !isTank) animator.SetFloat("Speed", 2.5f);
+
+                    float moveSpeed = isTank ? 3.8f : 4.2f;
+                    float rotSpeed = isTank ? 180f : 360f;
+
+                    while (Vector3.Distance(new Vector3(transform.position.x, 0, transform.position.z), new Vector3(rubbleTarget.x, 0, rubbleTarget.z)) > 0.5f && !isDead)
+                    {
+                        Vector3 currentDir = (rubbleTarget - transform.position);
+                        currentDir.y = 0;
+                        if (currentDir.sqrMagnitude > 0.01f)
+                        {
+                            transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(currentDir.normalized), rotSpeed * Time.deltaTime);
+                        }
+                        transform.position = Vector3.MoveTowards(transform.position, rubbleTarget, moveSpeed * Time.deltaTime);
+                        yield return null;
+                    }
+
+                    if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
+
+                    if (wasAgentEnabled && agent != null)
+                    {
+                        if (NavMesh.SamplePosition(transform.position, out NavMeshHit nh, 5.0f, NavMesh.AllAreas))
+                        {
+                            agent.enabled = true;
+                            agent.Warp(nh.position);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if (!agent.isActiveAndEnabled || !agent.isOnNavMesh)
+            {
+                // Avancement direct vers la cible si hors-NavMesh ou sur un décor aplati
+                Vector3 directTarget = new Vector3(targetPos.x, transform.position.y, targetPos.z);
+                Vector3 directDir = (directTarget - transform.position);
+                directDir.y = 0;
+                if (directDir.sqrMagnitude > 0.04f)
+                {
+                    if (animator != null && !isTank) animator.SetFloat("Speed", 2.5f);
+                    float moveSpeed = isTank ? 3.8f : 4.0f;
+                    while (Vector3.Distance(new Vector3(transform.position.x, 0, transform.position.z), new Vector3(directTarget.x, 0, directTarget.z)) > 0.4f && !isDead)
+                    {
+                        Vector3 cDir = (directTarget - transform.position);
+                        cDir.y = 0;
+                        if (cDir.sqrMagnitude > 0.01f)
+                        {
+                            transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(cDir.normalized), 360f * Time.deltaTime);
+                        }
+                        transform.position = Vector3.MoveTowards(transform.position, directTarget, moveSpeed * Time.deltaTime);
+                        yield return null;
+                    }
+                    if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
+                }
+                continue;
+            }
 
             agent.isStopped = false;
             agent.stoppingDistance = 0.5f;
             agent.autoBraking = true;
             agent.SetDestination(targetPos);
             
-            // 1. Attendre que le NavMesh démarre
+            // Attendre que le NavMesh démarre
             yield return null;
             while (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh && agent.pathPending) yield return null;
 
@@ -229,12 +338,46 @@ public partial class UnitAI
                 if (Vector3.Distance(transform.position, lastPos) < 0.002f)
                 {
                     stuckTimer += Time.deltaTime;
-                    if (stuckTimer > stuckThreshold)
+
+                    // Si l'engin est bloqué sur le bord d'une ruine détruite, forcer le passage direct
+                    if (stuckTimer > 1.2f && (DestructibleEnvironment.IsPositionInRubble(targetPos) || DestructibleEnvironment.IsPositionInRubble(transform.position)))
+                    {
+                        if (agent != null && agent.enabled)
+                        {
+                            agent.isStopped = true;
+                            agent.ResetPath();
+                            agent.enabled = false;
+                        }
+                        float moveSpeed = isTank ? 3.8f : 4.2f;
+                        while (Vector3.Distance(new Vector3(transform.position.x, 0, transform.position.z), new Vector3(targetPos.x, 0, targetPos.z)) > 0.5f && !isDead)
+                        {
+                            Vector3 curDir = (targetPos - transform.position);
+                            curDir.y = 0;
+                            if (curDir.sqrMagnitude > 0.01f)
+                            {
+                                transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(curDir.normalized), 180f * Time.deltaTime);
+                            }
+                            transform.position = Vector3.MoveTowards(transform.position, new Vector3(targetPos.x, 0.05f, targetPos.z), moveSpeed * Time.deltaTime);
+                            yield return null;
+                        }
+                        if (NavMesh.SamplePosition(transform.position, out NavMeshHit warpHit, 5.0f, NavMesh.AllAreas))
+                        {
+                            agent.enabled = true;
+                            agent.Warp(warpHit.position);
+                        }
+                        break;
+                    }
+
+                    if (stuckTimer > 4.5f)
                     {
                         if (!isTank)
                         {
-                            Debug.LogWarning($"[{gameObject.name}] Infanterie bloquée ! Annulation de la fin de trajectoire.");
-                            break;
+                            // Réinitialiser la destination plutôt que d'annuler le mouvement
+                            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
+                            {
+                                agent.SetDestination(targetPos);
+                            }
+                            stuckTimer = 0f;
                         }
                         else
                         {
@@ -246,11 +389,14 @@ public partial class UnitAI
                             
                             // Je reprends la route
                             SetObstacleMode(false);
-                            if (agent != null && !agent.isOnNavMesh) yield return new WaitUntil(() => agent.isOnNavMesh);
+                            yield return null;
+                            if (agent != null && !agent.isOnNavMesh && NavMesh.SamplePosition(transform.position, out NavMeshHit warpHit, 5.0f, NavMesh.AllAreas))
+                            {
+                                agent.Warp(warpHit.position);
+                            }
                             if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.SetDestination(targetPos);
                             
                             stuckTimer = 0f;
-                            stuckThreshold = Random.Range(1.5f, 3.0f); // Nouveau seuil de patience
                             lastPos = transform.position;
                         }
                     }
@@ -264,35 +410,29 @@ public partial class UnitAI
                 yield return null;
             }
 
-            // Exécution réelle de l'action tactique associée au checkpoint
-            TacticalPathManager.NodeAction nodeAction = tacticalPath[currentNodeIndex].action;
+            // Exécution réelle de l'action tactique après arrivée au checkpoint
+            if (!isTank && nodeAction == TacticalPathManager.NodeAction.GuetterPorte)
+            {
+                yield return StartCoroutine(ExecuteOverwatchDoor(targetPos));
+                continue;
+            }
 
-            // Vérifier s'il s'agit d'une entrée en garnison / prise de fenêtre
             if (!isTank && nodeAction == TacticalPathManager.NodeAction.GarnisonFenetre)
             {
                 yield return StartCoroutine(ExecuteEnterGarrison(targetPos));
                 continue;
             }
 
-            // Vérifier s'il s'agit d'une escalade ou d'un changement d'élévation (Sol <-> Toit)
-            float heightDelta = targetPos.y - transform.position.y;
-            bool requiresClimb = !isTank && (nodeAction == TacticalPathManager.NodeAction.Escalade || Mathf.Abs(heightDelta) > 2.0f);
-
-            if (requiresClimb)
-            {
-                yield return StartCoroutine(ExecuteClimb(targetPos));
-                continue;
-            }
-
-            if (nodeAction == TacticalPathManager.NodeAction.Attendre5Min)
+            if (nodeAction == TacticalPathManager.NodeAction.Attendre30s || nodeAction == TacticalPathManager.NodeAction.Attendre5Min)
             {
                 isPerformingCheckpointAction = true;
-                Debug.Log($"<color=cyan>[{gameObject.name}] Halte tactique au checkpoint : pause de 2.5s en couverture.</color>");
+                float waitDuration = (nodeAction == TacticalPathManager.NodeAction.Attendre30s) ? 30.0f : 2.5f;
+                Debug.Log($"<color=cyan>[{gameObject.name}] ⏳ Halte tactique au checkpoint : pause de {waitDuration}s.</color>");
                 if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
                 if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
 
                 float waitTimer = 0f;
-                while (waitTimer < 2.5f && !isDead)
+                while (waitTimer < waitDuration && !isDead)
                 {
                     waitTimer += Time.deltaTime;
                     yield return null;
@@ -302,14 +442,38 @@ public partial class UnitAI
             else if (nodeAction == TacticalPathManager.NodeAction.Guetter)
             {
                 isPerformingCheckpointAction = true;
-                Debug.Log($"<color=cyan>[{gameObject.name}] Guet / Surveillance du secteur pendant 2.0s.</color>");
+                isGuarding = true;
+                Debug.Log($"<color=cyan>[{gameObject.name}] 🛡️ Posture de Guet / Overwatch active (+50% défense).</color>");
                 if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
                 if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
 
                 float lookTimer = 0f;
-                while (lookTimer < 2.0f && !isDead)
+                while (lookTimer < 3.0f && !isDead)
                 {
                     lookTimer += Time.deltaTime;
+                    yield return null;
+                }
+                isPerformingCheckpointAction = false;
+            }
+            else if (nodeAction == TacticalPathManager.NodeAction.SeCacher)
+            {
+                isPerformingCheckpointAction = true;
+                isCamouflaged = true;
+                Debug.Log($"<color=green><b>[{gameObject.name}] 🥷 Furtivité activée : Plaquage contre le mur (Invisible pour l'ennemi) !</b></color>");
+                if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
+                if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
+
+                // S'orienter face à la rue le long du mur
+                RaycastHit wallHit;
+                if (Physics.Raycast(transform.position + Vector3.up * 1f, transform.forward, out wallHit, 2.5f))
+                {
+                    transform.rotation = Quaternion.LookRotation(-wallHit.normal);
+                }
+
+                float hideTimer = 0f;
+                while (hideTimer < 2.0f && !isDead)
+                {
+                    hideTimer += Time.deltaTime;
                     yield return null;
                 }
                 isPerformingCheckpointAction = false;
@@ -317,6 +481,7 @@ public partial class UnitAI
             else if (nodeAction == TacticalPathManager.NodeAction.Embuscade)
             {
                 isPerformingCheckpointAction = true;
+                isGuarding = true;
                 Debug.Log($"<color=cyan>[{gameObject.name}] Posture d'embuscade et tir d'opportunité pendant 2.0s.</color>");
                 if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
                 if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
@@ -329,9 +494,56 @@ public partial class UnitAI
                 }
                 isPerformingCheckpointAction = false;
             }
+            else if (nodeAction == TacticalPathManager.NodeAction.TirMortier)
+            {
+                yield return StartCoroutine(ExecuteMortarStrike(targetPos));
+                continue;
+            }
         }
 
         TerminerOrdres();
+    }
+
+    /// <summary>
+    /// <summary>
+    /// Coroutine gérant la séquence d'artillerie lourde (visée, rotation et tirs en cloche multiples de 3 obus).
+    /// </summary>
+    private IEnumerator ExecuteMortarStrike(Vector3 targetPos)
+    {
+        isPerformingCheckpointAction = true;
+        isMortarFiringMode = true;
+        mortarTargetLock = targetPos;
+        mortarSalvoTimer = 0f;
+
+        if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
+
+        // Rotation fluide vers la cible de bombardement
+        Vector3 dir = (targetPos - transform.position);
+        dir.y = 0;
+        if (dir != Vector3.zero)
+        {
+            Quaternion targetRot = Quaternion.LookRotation(dir);
+            float rotElapsed = 0f;
+            while (rotElapsed < 0.6f)
+            {
+                rotElapsed += Time.deltaTime;
+                transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotElapsed / 0.6f);
+                yield return null;
+            }
+        }
+
+        Debug.Log($"<color=orange><b>[{gameObject.name}] 🎯 BOMBARDEMENT D'ARTILLERIE STRICT : Salve de 3 obus sur ({targetPos.x:F1}, {targetPos.z:F1}) !</b></color>");
+
+        // Salve de 3 obus frappant STRICTEMENT la cible désignée par le joueur
+        for (int i = 0; i < 3; i++)
+        {
+            FireMortarShell(targetPos);
+            if (i < 2) yield return new WaitForSeconds(0.9f);
+        }
+
+        yield return new WaitForSeconds(1.0f);
+        isPerformingCheckpointAction = false;
+        isMortarFiringMode = false;
     }
 
     /// <summary>
@@ -349,7 +561,7 @@ public partial class UnitAI
         float horizontalDist = horizontalDir.magnitude;
         Vector3 forwardNorm = (horizontalDist > 0.01f) ? horizontalDir.normalized : transform.forward;
 
-        // 1. CALCUL DU POINT D'IMPACT SUR LA FAÇADE EXTÉRIEURE DU BÂTIMENT
+        // 1. Détection précise de la façade extérieure
         Vector3 wallHitPoint = startPos;
         Vector3 wallNormal = -forwardNorm;
         bool foundWall = false;
@@ -357,7 +569,7 @@ public partial class UnitAI
         RaycastHit wallHit;
         if (Physics.Raycast(startPos + Vector3.up * 1.0f, forwardNorm, out wallHit, horizontalDist + 5f))
         {
-            if (wallHit.collider.name.Contains("Batiment") || wallHit.collider.name.Contains("Building") || wallHit.point.y > 0.5f)
+            if (wallHit.collider.name.Contains("Batiment") || wallHit.collider.name.Contains("Building") || wallHit.collider.name.Contains("Wall") || wallHit.point.y > 0.5f)
             {
                 wallHitPoint = wallHit.point;
                 wallNormal = wallHit.normal;
@@ -367,25 +579,32 @@ public partial class UnitAI
 
         if (!foundWall)
         {
-            wallHitPoint = startPos + forwardNorm * Mathf.Max(0.5f, horizontalDist - 2.0f);
+            wallHitPoint = startPos + forwardNorm * Mathf.Max(0.5f, horizontalDist - 1.5f);
             wallNormal = -forwardNorm;
         }
 
-        // Le point de départ d'escalade est à 0.4m À L'EXTÉRIEUR du mur au sol
-        Vector3 climbBasePos = new Vector3(wallHitPoint.x, startPos.y, wallHitPoint.z) + wallNormal * 0.4f;
-        // Le point haut d'escalade est au niveau du toit, TOUJOURS à 0.4m À L'EXTÉRIEUR du mur
-        Vector3 climbTopPos = new Vector3(climbBasePos.x, destinationRoof.y, climbBasePos.z);
-        // Le point de réception sur le toit
-        Vector3 roofLandPos = destinationRoof;
+        float roofHeight = destinationRoof.y;
+        Vector3 climbBasePos = new Vector3(wallHitPoint.x, startPos.y, wallHitPoint.z) + wallNormal * 0.35f;
+        Vector3 climbTopPos = new Vector3(climbBasePos.x, roofHeight, climbBasePos.z);
 
         // --- PHASE 1 : MARCHE AU SOL JUSQU'AU PIED DU MUR ---
         if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
         {
             agent.isStopped = false;
-            agent.SetDestination(climbBasePos);
-            while (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh && agent.hasPath && agent.remainingDistance > 0.6f)
+            if (NavMesh.SamplePosition(climbBasePos, out NavMeshHit baseNavHit, 3.0f, NavMesh.AllAreas))
+            {
+                agent.SetDestination(baseNavHit.position);
+            }
+            else
+            {
+                agent.SetDestination(climbBasePos);
+            }
+            
+            float approachTimer = 0f;
+            while (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh && agent.hasPath && agent.remainingDistance > 0.8f && approachTimer < 8.0f)
             {
                 if (isDead) yield break;
+                approachTimer += Time.deltaTime;
                 yield return null;
             }
         }
@@ -400,60 +619,135 @@ public partial class UnitAI
         {
             animator.SetBool("IsClimbing", true);
             animator.SetFloat("Speed", 0f);
+            animator.transform.localPosition = Vector3.zero;
         }
 
-        // --- PHASE 2 : ASCENSION STRICTEMENT VERTICALE SUR LA FAÇADE EXTÉRIEURE ---
+        // --- PHASE 2 : ASCENSION STRICTEMENT VERTICALE SUR LA FAÇADE ---
         float heightDiff = Mathf.Abs(climbTopPos.y - climbBasePos.y);
-        float climbDuration = Mathf.Max(2.0f, heightDiff * 0.35f);
+        float climbDuration = Mathf.Max(1.6f, heightDiff * 0.28f);
         float elapsed = 0f;
 
-        Debug.Log($"<color=green>[{gameObject.name}] 🧗 Escalade sur la façade extérieure (Hauteur: {heightDiff:F1}m)...</color>");
+        Debug.Log($"<color=green>[{gameObject.name}] 🧗 Escalade sur la façade (Hauteur: {heightDiff:F1}m)...</color>");
 
         while (elapsed < climbDuration && !isDead)
         {
             elapsed += Time.deltaTime;
             float t = Mathf.Clamp01(elapsed / climbDuration);
-
-            // Ascension STRICTEMENT verticale (X et Z restent constants, seul Y monte le long de la façade !)
             transform.position = Vector3.Lerp(climbBasePos, climbTopPos, t);
+            if (animator != null) animator.transform.localPosition = Vector3.zero;
             yield return null;
         }
 
-        // --- PHASE 3 : ENJAMBEMENT DU REBORD SUR LE TOIT ---
+        // --- PHASE 3 : ENJAMBEMENT ET ÉTABLISSEMENT NET SUR LE TOIT ---
         float stepElapsed = 0f;
         Vector3 stepStart = climbTopPos;
-        Vector3 stepTarget = climbTopPos - wallNormal * 0.8f;
-        while (stepElapsed < 0.4f && !isDead)
+        Vector3 stepTarget = climbTopPos - wallNormal * 1.5f;
+
+        // Détection précise de la surface supérieure du toit pour un appui au sol parfait
+        if (Physics.Raycast(new Vector3(stepTarget.x, roofHeight + 3.0f, stepTarget.z), Vector3.down, out RaycastHit roofSurfaceHit, 8.0f))
+        {
+            stepTarget.y = roofSurfaceHit.point.y + 0.05f;
+        }
+        else
+        {
+            stepTarget.y = roofHeight + 0.05f;
+        }
+
+        while (stepElapsed < 0.5f && !isDead)
         {
             stepElapsed += Time.deltaTime;
-            float t = Mathf.Clamp01(stepElapsed / 0.4f);
+            float t = Mathf.Clamp01(stepElapsed / 0.5f);
             transform.position = Vector3.Lerp(stepStart, stepTarget, t);
+            if (animator != null) animator.transform.localPosition = Vector3.zero;
             yield return null;
         }
 
         if (animator != null)
         {
             animator.SetBool("IsClimbing", false);
+            animator.SetFloat("Speed", 0f);
+            animator.transform.localPosition = Vector3.zero;
         }
 
+        transform.position = stepTarget;
+        isClimbing = false;
+        isRooftopSniper = true;
+        isPerformingCheckpointAction = false;
+        if (agent != null) agent.enabled = false; // Reste en mode toiture directe sans interférence NavMesh sol
+
+        Debug.Log($"<color=green><b>[{gameObject.name}] 🎖️ Établi fermement au-dessus du toit (y={stepTarget.y:F2}m) ! Prêt pour la suite du trajet.</b></color>");
+
+        Debug.Log($"<color=green><b>[{gameObject.name}] 🎖️ Position sur le toit sécurisée (Poste Haut - AK-47) !</b></color>");
+    }
+
+    /// <summary>
+    /// Coroutine gérant la descente en rappel / escalade inverse depuis le toit vers la rue.
+    /// </summary>
+    private IEnumerator ExecuteClimbDown(Vector3 destinationGround)
+    {
+        isClimbing = true;
+        isPerformingCheckpointAction = true;
+        isRooftopSniper = false;
+
+        Vector3 startRoofPos = transform.position;
+        Vector3 horizontalDir = (destinationGround - startRoofPos);
+        horizontalDir.y = 0;
+        Vector3 forwardNorm = (horizontalDir.sqrMagnitude > 0.01f) ? horizontalDir.normalized : transform.forward;
+
+        Vector3 edgePos = startRoofPos + forwardNorm * 1.2f;
+        Vector3 groundLandPos = new Vector3(edgePos.x, destinationGround.y, edgePos.z);
+
+        if (agent != null) agent.enabled = false;
+
+        transform.rotation = Quaternion.LookRotation(forwardNorm);
+
+        if (animator != null)
+        {
+            animator.SetBool("IsClimbing", true);
+            animator.SetFloat("Speed", 0f);
+            animator.transform.localPosition = Vector3.zero;
+        }
+
+        float heightDiff = Mathf.Abs(startRoofPos.y - groundLandPos.y);
+        float descendDuration = Mathf.Max(1.4f, heightDiff * 0.25f);
+        float elapsed = 0f;
+
+        Debug.Log($"<color=cyan>[{gameObject.name}] 🧗 Descente en rappel du toit vers la rue ({heightDiff:F1}m)...</color>");
+
+        while (elapsed < descendDuration && !isDead)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / descendDuration);
+            transform.position = Vector3.Lerp(startRoofPos, groundLandPos, t);
+            if (animator != null) animator.transform.localPosition = Vector3.zero;
+            yield return null;
+        }
+
+        if (animator != null)
+        {
+            animator.SetBool("IsClimbing", false);
+            animator.transform.localPosition = Vector3.zero;
+        }
+
+        transform.position = groundLandPos;
         isClimbing = false;
         isPerformingCheckpointAction = false;
 
-        // Reconnexion propre au NavMesh du toit
         if (agent != null)
         {
             agent.enabled = true;
-            if (NavMesh.SamplePosition(destinationRoof, out NavMeshHit roofHit, 4.0f, NavMesh.AllAreas))
+            if (NavMesh.SamplePosition(groundLandPos, out NavMeshHit gHit, 5.0f, NavMesh.AllAreas))
             {
-                agent.Warp(roofHit.position);
+                agent.Warp(gHit.position);
             }
             else
             {
-                agent.Warp(stepTarget);
+                agent.Warp(groundLandPos);
             }
+            agent.isStopped = false;
         }
 
-        Debug.Log($"<color=green>[{gameObject.name}] 🎖️ Position sur le toit sécurisée !</color>");
+        Debug.Log($"<color=cyan>[{gameObject.name}] 🎖️ Au sol dans la rue !</color>");
     }
 
     /// <summary>
@@ -466,8 +760,7 @@ public partial class UnitAI
         BuildingStructure structure = null;
         BuildingStructure.BuildingWindow targetWindow = null;
 
-        BuildingStructure[] allBuildings = FindObjectsByType<BuildingStructure>(FindObjectsInactive.Exclude);
-        foreach (var b in allBuildings)
+        foreach (var b in BuildingStructure.AllBuildings)
         {
             BuildingStructure.BuildingWindow w = b.GetClosestWindow(windowTargetPos, false);
             if (w != null && Vector3.Distance(w.position, windowTargetPos) < 2.5f)
@@ -527,6 +820,250 @@ public partial class UnitAI
         {
             isPerformingCheckpointAction = false;
         }
+    }
+
+    /// <summary>
+    /// Coroutine gérant le déplacement vers la porte, l'infiltration à l'intérieur du polygone
+    /// et l'enregistrement de l'unité auprès de TacticalVisibility pour masquer/rendre transparent le toit.
+    /// </summary>
+    private IEnumerator ExecuteEnterBuilding(Vector3 doorTargetPos)
+    {
+        isPerformingCheckpointAction = true;
+
+        BuildingStructure structure = null;
+        BuildingStructure.BuildingDoor targetDoor = null;
+
+        foreach (var b in BuildingStructure.AllBuildings)
+        {
+            BuildingStructure.BuildingDoor d = b.GetClosestDoor(doorTargetPos);
+            if (d != null && Vector3.Distance(d.position, doorTargetPos) < 4.0f)
+            {
+                structure = b;
+                targetDoor = d;
+                break;
+            }
+        }
+
+        if (structure != null && targetDoor != null)
+        {
+            Vector3 outsidePos = targetDoor.position + targetDoor.entryDirection * 1.2f;
+            Vector3 insidePos = targetDoor.position - targetDoor.entryDirection * 1.8f;
+            insidePos.y = 0.05f; // Sol intérieur
+
+            // 1. Déplacement sur le NavMesh jusqu'au pas de la porte
+            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
+            {
+                agent.isStopped = false;
+                agent.SetDestination(outsidePos);
+                while (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh && agent.hasPath && agent.remainingDistance > 0.8f)
+                {
+                    if (isDead) yield break;
+                    yield return null;
+                }
+            }
+
+            // 2. Franchissement de la porte
+            if (agent != null) agent.enabled = false;
+            if (animator != null && !isTank) animator.SetFloat("Speed", 2f);
+
+            Vector3 enterStart = transform.position;
+            float transitTime = 0.9f;
+            float elapsed = 0f;
+            while (elapsed < transitTime && !isDead)
+            {
+                elapsed += Time.deltaTime;
+                transform.position = Vector3.Lerp(enterStart, insidePos, elapsed / transitTime);
+                if (targetDoor.entryDirection != Vector3.zero)
+                {
+                    transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(-targetDoor.entryDirection), elapsed / transitTime);
+                }
+                yield return null;
+            }
+
+            if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
+
+            // 3. Quitter l'ancien bâtiment si nécessaire et s'enregistrer dans le nouveau
+            if (currentBuilding != null && currentBuilding != structure)
+            {
+                currentBuilding.UnregisterUnitInside(this);
+            }
+            currentBuilding = structure;
+            structure.RegisterUnitInside(this);
+
+            // 4. Reconnexion propre au NavMesh intérieur
+            if (agent != null)
+            {
+                agent.enabled = true;
+                if (NavMesh.SamplePosition(insidePos, out NavMeshHit insideHit, 3.0f, NavMesh.AllAreas))
+                {
+                    agent.Warp(insideHit.position);
+                }
+                else
+                {
+                    agent.Warp(insidePos);
+                }
+            }
+
+            // Son de clic / confirmation
+            AudioClip clickClip = ProceduralAudioBuilder.CreateClickSound();
+            if (clickClip != null) AudioSource.PlayClipAtPoint(clickClip, transform.position);
+
+            Debug.Log($"<color=green>[{gameObject.name}] 🚪 Infiltration réussie à l'intérieur de {structure.gameObject.name} ! Toit masqué pour la vue tactique.</color>");
+        }
+
+        isPerformingCheckpointAction = false;
+    }
+
+    /// <summary>
+    /// Coroutine gérant le déplacement de l'intérieur du polygone vers la porte, le franchissement vers la rue
+    /// et le désenregistrement auprès de BuildingStructure / TacticalVisibility.
+    /// </summary>
+    private IEnumerator ExecuteExitBuilding(Vector3 outsideTargetPos)
+    {
+        isPerformingCheckpointAction = true;
+
+        BuildingStructure structure = currentBuilding;
+        BuildingStructure.BuildingDoor exitDoor = null;
+
+        if (structure != null)
+        {
+            exitDoor = structure.GetClosestDoor(outsideTargetPos);
+        }
+        else
+        {
+            foreach (var b in BuildingStructure.AllBuildings)
+            {
+                BuildingStructure.BuildingDoor d = b.GetClosestDoor(outsideTargetPos);
+                if (d != null && Vector3.Distance(d.position, outsideTargetPos) < 4.0f)
+                {
+                    structure = b;
+                    exitDoor = d;
+                    break;
+                }
+            }
+        }
+
+        if (structure != null && exitDoor != null)
+        {
+            Vector3 insidePos = exitDoor.position - exitDoor.entryDirection * 1.5f;
+            Vector3 outsidePos = exitDoor.position + exitDoor.entryDirection * 1.5f;
+
+            // 1. Déplacement sur le NavMesh intérieur jusqu'au seuil intérieur de la porte
+            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
+            {
+                agent.isStopped = false;
+                agent.SetDestination(insidePos);
+                while (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh && agent.hasPath && agent.remainingDistance > 0.8f)
+                {
+                    if (isDead) yield break;
+                    yield return null;
+                }
+            }
+
+            // 2. Franchissement de la porte vers la rue
+            if (agent != null) agent.enabled = false;
+            if (animator != null && !isTank) animator.SetFloat("Speed", 2f);
+
+            Vector3 exitStart = transform.position;
+            float transitTime = 0.9f;
+            float elapsed = 0f;
+            while (elapsed < transitTime && !isDead)
+            {
+                elapsed += Time.deltaTime;
+                transform.position = Vector3.Lerp(exitStart, outsidePos, elapsed / transitTime);
+                if (exitDoor.entryDirection != Vector3.zero)
+                {
+                    transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(exitDoor.entryDirection), elapsed / transitTime);
+                }
+                yield return null;
+            }
+
+            if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
+
+            // 3. Quitter officiellement le bâtiment
+            structure.UnregisterUnitInside(this);
+            currentBuilding = null;
+            LeaveGarrison();
+
+            // 4. Reconnexion propre au NavMesh de la rue
+            if (agent != null)
+            {
+                agent.enabled = true;
+                if (NavMesh.SamplePosition(outsidePos, out NavMeshHit streetHit, 3.0f, NavMesh.AllAreas))
+                {
+                    agent.Warp(streetHit.position);
+                }
+                else
+                {
+                    agent.Warp(outsidePos);
+                }
+            }
+
+            AudioClip clickClip = ProceduralAudioBuilder.CreateClickSound();
+            if (clickClip != null) AudioSource.PlayClipAtPoint(clickClip, transform.position);
+
+            Debug.Log($"<color=green>[{gameObject.name}] 🚪 Sortie réussie de {structure.gameObject.name} vers la rue !</color>");
+        }
+
+        isPerformingCheckpointAction = false;
+    }
+
+    /// <summary>
+    /// Coroutine gérant la prise de poste à l'encadrement intérieur d'une porte pour surveiller et tirer dans la rue.
+    /// </summary>
+    private IEnumerator ExecuteOverwatchDoor(Vector3 doorTargetPos)
+    {
+        isPerformingCheckpointAction = true;
+
+        BuildingStructure structure = currentBuilding;
+        BuildingStructure.BuildingDoor door = null;
+
+        if (structure != null)
+        {
+            door = structure.GetClosestDoor(doorTargetPos);
+        }
+        else
+        {
+            foreach (var b in BuildingStructure.AllBuildings)
+            {
+                var d = b.GetClosestDoor(doorTargetPos);
+                if (d != null && Vector3.Distance(d.position, doorTargetPos) < 4.0f)
+                {
+                    structure = b;
+                    door = d;
+                    break;
+                }
+            }
+        }
+
+        if (door != null)
+        {
+            Vector3 stancePos = door.position - door.entryDirection * 0.8f;
+            stancePos.y = 0.05f;
+
+            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
+            {
+                agent.isStopped = false;
+                agent.SetDestination(stancePos);
+                while (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh && agent.hasPath && agent.remainingDistance > 0.4f)
+                {
+                    if (isDead) yield break;
+                    yield return null;
+                }
+                agent.isStopped = true;
+            }
+
+            // Orientation face à la rue
+            if (door.entryDirection != Vector3.zero)
+            {
+                transform.rotation = Quaternion.LookRotation(door.entryDirection);
+            }
+
+            isGarrisoned = true;
+            Debug.Log($"<color=cyan>[{gameObject.name}] 👁️ En joue à l'encadrement de porte ! Surveillance active de la rue avec couverture lourde.</color>");
+        }
+
+        isPerformingCheckpointAction = false;
     }
 
     /// <summary>

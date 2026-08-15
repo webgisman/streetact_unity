@@ -13,6 +13,7 @@ public partial class UnitAI : MonoBehaviour
     [Header("Unit Settings")]
     public int teamID;
     public bool isPlayerControlled = true;
+    public bool isVisible = true; // Visibilité par rapport au brouillard de guerre
     public bool isSelected = false; // Permet de savoir si le joueur planifie pour cette unité
     public float maxMovementPerTurn = 50f;
 
@@ -32,20 +33,32 @@ public partial class UnitAI : MonoBehaviour
     public Transform turretBone;
     public Transform cannonBone;
 
+    [Header("Mode Mortier")]
+    public bool isMortar = false;
+    public bool isMortarFiringMode = false;
+    public Vector3 mortarTargetLock;
+    public float mortarSalvoTimer = 0f;
+
     [Header("Escalade & Toits")]
     public bool isClimbing = false;
-    public bool isRooftopSniper => (!isTank && transform.position.y > 2.5f);
+    private bool _isRooftopSniperManual = false;
+    public bool isRooftopSniper
+    {
+        get => (!isTank && (transform.position.y > 2.2f || _isRooftopSniperManual));
+        set => _isRooftopSniperManual = value;
+    }
 
-    [Header("Garnison & Fenêtres")]
+    [Header("Garnison & Bâtiments")]
     public bool isGarrisoned = false;
     public BuildingStructure.BuildingWindow currentWindow = null;
+    public BuildingStructure currentBuilding = null;
 
     // --- VARIABLES PRIVÉES COMMUNES ---
     private GameObject equippedWeapon;
     private AudioSource combatAudioSource;
     private float shootCooldown = 0f;
     private float stuckThreshold = 1.5f;
-    private UnityEngine.AI.NavMeshObstacle obstacle;
+    [HideInInspector] public UnityEngine.AI.NavMeshObstacle obstacle;
 
     // Prefabs WarFX
     private GameObject muzzleFlashPrefab;
@@ -60,8 +73,12 @@ public partial class UnitAI : MonoBehaviour
 
     // Tactical Path
     public List<TacticalPathManager.TacticalNode> tacticalPath = new List<TacticalPathManager.TacticalNode>();
-    private int currentNodeIndex = 0;
+    [HideInInspector] public int currentNodeIndex = 0;
     private bool isExecuting = false;
+
+    [Header("Tactique & Furtivité")]
+    public bool isCamouflaged = false;
+    public bool isGuarding = false;
 
     private Transform hipsBone;
     private Vector3 initialHipsLocalPos;
@@ -69,26 +86,49 @@ public partial class UnitAI : MonoBehaviour
     private GameObject selectionRing;
     private AudioSource footstepAudioSource;
 
-    // UI
     private Transform healthBarBg;
     private Transform healthBarFill;
+    public LineRenderer tacticalLineRenderer;
 
     private bool isCanonVehicle = false;
+
+    // Registre global optimisé pour éliminer tous les FindObjectsByType coûteux
+    public static readonly List<UnitAI> AllLivingUnits = new List<UnitAI>();
+
+    void OnEnable()
+    {
+        if (!AllLivingUnits.Contains(this)) AllLivingUnits.Add(this);
+    }
+
+    void OnDisable()
+    {
+        AllLivingUnits.Remove(this);
+    }
 
     /// <summary>
     /// Initialisation et configuration dynamique de l'unité (Physique, UI, Sons).
     /// </summary>
     void Start()
     {
+        if (!AllLivingUnits.Contains(this)) AllLivingUnits.Add(this);
         agent = GetComponent<NavMeshAgent>();
+
+        if (GetComponent<FogOfWarEntity>() == null)
+        {
+            gameObject.AddComponent<FogOfWarEntity>();
+        }
 
         // AUTO-DETECTION DU TANK ET DU CANON-VEHICLE :
         // Si l'utilisateur pose le prefab brut sans le configurer, on le détecte !
         string objName = gameObject.name.ToLower();
         bool isLeopard = objName.Contains("leopard");
         isCanonVehicle = objName.Contains("canon");
+        if (objName.Contains("mortier") || objName.Contains("mortar") || objName.Contains("turret"))
+        {
+            isMortar = true;
+        }
 
-        if (isLeopard || isCanonVehicle)
+        if (isLeopard || isCanonVehicle || isMortar)
         {
             isTank = true;
             
@@ -184,39 +224,32 @@ public partial class UnitAI : MonoBehaviour
         selectionRing.GetComponent<MeshRenderer>().sharedMaterial = ringMat;
         selectionRing.SetActive(false); // Caché par défaut
 
-        // --- SETUP AUDIO ---
+        // --- SETUP AUDIO (MOUVEMENT & MOTEURS) ---
         footstepAudioSource = gameObject.AddComponent<AudioSource>();
-        footstepAudioSource.spatialBlend = 1f;
-        footstepAudioSource.volume = 1f; // Volume MAX pour les bruits de pas
+        footstepAudioSource.spatialBlend = 0.35f; // Audible et clair depuis la caméra tactique
+        footstepAudioSource.rolloffMode = AudioRolloffMode.Linear;
+        footstepAudioSource.minDistance = 15f;
+        footstepAudioSource.maxDistance = 140f;
+        footstepAudioSource.volume = isTank ? 0.85f : 0.65f;
+        footstepAudioSource.playOnAwake = false;
         
         if (isTank)
         {
-            if (isCanonVehicle)
-            {
-                AudioClip canonWalk = Resources.Load<AudioClip>("Sounds/vehicle-walk");
-                if (canonWalk != null) { footstepAudioSource.clip = canonWalk; footstepAudioSource.loop = true; }
-                footstepAudioSource.volume = 1f;
-            }
-            else
-            {
-                AudioClip tankWalk = Resources.Load<AudioClip>("Sounds/tank-walk-sound");
-                if (tankWalk != null) { footstepAudioSource.clip = tankWalk; footstepAudioSource.loop = true; }
-                footstepAudioSource.volume = 1f;
-            }
+            AudioClip vehicleClip = null;
+            if (isCanonVehicle) vehicleClip = Resources.Load<AudioClip>("Sounds/vehicle-walk");
+            else vehicleClip = Resources.Load<AudioClip>("Sounds/tank-walk-sound");
+            
+            if (vehicleClip == null) vehicleClip = ProceduralAudioBuilder.CreateVehicleEngineSound();
+            footstepAudioSource.clip = vehicleClip;
+            footstepAudioSource.loop = true;
         }
         else
         {
             AudioClip realFootstep = Resources.Load<AudioClip>("FootstepSound");
-            if (realFootstep != null)
-            {
-                footstepAudioSource.clip = realFootstep;
-                footstepAudioSource.loop = true; // Le MP3 importé est une piste continue
-            }
-            else
-            {
-                footstepAudioSource.clip = ProceduralAudioBuilder.CreateFootstepSound();
-                footstepAudioSource.loop = true; // Boucler le procédural aussi
-            }
+            if (realFootstep == null) realFootstep = Resources.Load<AudioClip>("Sounds/footstep");
+            if (realFootstep == null) realFootstep = ProceduralAudioBuilder.CreateFootstepSound();
+            footstepAudioSource.clip = realFootstep;
+            footstepAudioSource.loop = true;
         }
 
         combatAudioSource = gameObject.AddComponent<AudioSource>();
@@ -247,12 +280,21 @@ public partial class UnitAI : MonoBehaviour
         {
             // Les chars utiliseront l'évitement dynamique de Unity (RVO) avec un grand rayon
             // ET agiront aussi comme des murs (NavMeshObstacle) quand ils sont à l'arrêt complet
-            obstacle = gameObject.AddComponent<UnityEngine.AI.NavMeshObstacle>();
-            obstacle.shape = UnityEngine.AI.NavMeshObstacleShape.Box;
-            obstacle.carving = true;
-            obstacle.enabled = false;
-            obstacle.size = isCanonVehicle ? new Vector3(2f, 2f, 4f) : new Vector3(3.5f, 3f, 7.5f);
+            obstacle = GetComponent<UnityEngine.AI.NavMeshObstacle>();
+            if (obstacle == null) obstacle = gameObject.AddComponent<UnityEngine.AI.NavMeshObstacle>();
+            if (obstacle != null)
+            {
+                obstacle.shape = UnityEngine.AI.NavMeshObstacleShape.Box;
+                obstacle.carving = true;
+                obstacle.enabled = false;
+                obstacle.size = isCanonVehicle ? new Vector3(2f, 2f, 4f) : new Vector3(3.5f, 3f, 7.5f);
+            }
         }
+
+        // Réinitialisation de l'état de vie et nettoyage des particules
+        isDead = false;
+        Transform leftoverSmoke = transform.Find("BlackSmoke");
+        if (leftoverSmoke != null) Destroy(leftoverSmoke.gameObject);
 
         // --- SETUP TANK OU FANTASSIN (Initialiser la vie AVANT la barre de vie) ---
         if (isTank)
@@ -279,41 +321,106 @@ public partial class UnitAI : MonoBehaviour
                 }
             }
 
-            // COLORATION URP (Résout le tank rose) et SCALE (Résout les murs)
-#if UNITY_EDITOR
-            Shader urpLit = Shader.Find("Universal Render Pipeline/Lit");
-            
+            // APPLICATION ROBUSTE DES TEXTURES DU CHAR LEOPARD 2 (URP / Standard)
             if (isLeopard)
             {
-                Texture2D bodyTex = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Kucher/Tank Leopard2/Textures/Tank Body Textures/TankBodyDiffuseMap.png");
-                Texture2D trackTex = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Kucher/Tank Leopard2/Textures/Tank Track Textures/TankTrackDiffuseMap.png");
-                
-                foreach (Renderer r in GetComponentsInChildren<Renderer>())
-                {
-                    if (r.gameObject.name.Contains("Health") || r.gameObject.name.Contains("selectionRing")) continue; // Ne pas repeindre la barre de vie !
+                Texture2D bodyTex = null;
+                Texture2D trackTex = null;
+                Texture2D bumpTex = null;
 
-                    if (urpLit != null) r.material.shader = urpLit;
-                    
-                    string rName = r.gameObject.name.ToLower();
-                    Texture2D texToUse = rName.Contains("track") ? trackTex : bodyTex;
-                    
-                    if (texToUse != null)
+#if UNITY_EDITOR
+                bodyTex = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Kucher/Tank Leopard2/Textures/Tank Body Textures/TankBodyDiffuseMap.png");
+                trackTex = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Kucher/Tank Leopard2/Textures/Tank Track Textures/TankTrackDiffuseMap.png");
+                bumpTex = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Kucher/Tank Leopard2/Textures/Tank Body Textures/TankBodyNormalMap.png");
+#endif
+                if (bodyTex == null)
+                {
+                    string bPath = Application.dataPath + "/Kucher/Tank Leopard2/Textures/Tank Body Textures/TankBodyDiffuseMap.png";
+                    if (System.IO.File.Exists(bPath))
                     {
-                        if (r.material.HasProperty("_BaseMap")) r.material.SetTexture("_BaseMap", texToUse);
-                        else r.material.mainTexture = texToUse;
+                        byte[] raw = System.IO.File.ReadAllBytes(bPath);
+                        bodyTex = new Texture2D(2, 2);
+                        bodyTex.LoadImage(raw);
                     }
                 }
-            }
-            else if (isCanonVehicle)
-            {
-                // Appliquer seulement le shader URP sans écraser les textures
+                if (trackTex == null)
+                {
+                    string tPath = Application.dataPath + "/Kucher/Tank Leopard2/Textures/Tank Track Textures/TankTrackDiffuseMap.png";
+                    if (System.IO.File.Exists(tPath))
+                    {
+                        byte[] raw = System.IO.File.ReadAllBytes(tPath);
+                        trackTex = new Texture2D(2, 2);
+                        trackTex.LoadImage(raw);
+                    }
+                }
+
+                Shader shaderToUse = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Unlit");
+
+                Material sharedBodyMat = new Material(shaderToUse);
+                if (bodyTex != null)
+                {
+                    sharedBodyMat.mainTexture = bodyTex;
+                    if (sharedBodyMat.HasProperty("_BaseMap")) sharedBodyMat.SetTexture("_BaseMap", bodyTex);
+                    if (sharedBodyMat.HasProperty("_MainTex")) sharedBodyMat.SetTexture("_MainTex", bodyTex);
+                }
+                if (bumpTex != null && sharedBodyMat.HasProperty("_BumpMap"))
+                {
+                    sharedBodyMat.SetTexture("_BumpMap", bumpTex);
+                }
+                if (sharedBodyMat.HasProperty("_BaseColor")) sharedBodyMat.SetColor("_BaseColor", Color.white);
+                if (sharedBodyMat.HasProperty("_Color")) sharedBodyMat.SetColor("_Color", Color.white);
+
+                Material sharedTrackMat = new Material(shaderToUse);
+                if (trackTex != null)
+                {
+                    sharedTrackMat.mainTexture = trackTex;
+                    if (sharedTrackMat.HasProperty("_BaseMap")) sharedTrackMat.SetTexture("_BaseMap", trackTex);
+                    if (sharedTrackMat.HasProperty("_MainTex")) sharedTrackMat.SetTexture("_MainTex", trackTex);
+                }
+                if (sharedTrackMat.HasProperty("_BaseColor")) sharedTrackMat.SetColor("_BaseColor", Color.white);
+                if (sharedTrackMat.HasProperty("_Color")) sharedTrackMat.SetColor("_Color", Color.white);
+
                 foreach (Renderer r in GetComponentsInChildren<Renderer>())
                 {
                     if (r.gameObject.name.Contains("Health") || r.gameObject.name.Contains("selectionRing")) continue;
-                    if (urpLit != null) r.material.shader = urpLit;
+
+                    string rName = r.gameObject.name.ToLower();
+                    r.sharedMaterial = rName.Contains("track") ? sharedTrackMat : sharedBodyMat;
                 }
             }
-#endif
+            else if (isMortar)
+            {
+                health = 350;
+                maxHealth = 350f;
+                porteeDetection = 120f;
+
+                Texture2D gradTex = Resources.Load<Texture2D>("gradientTexturelar");
+                if (gradTex == null)
+                {
+                    string p = Application.dataPath + "/gradientTexturelar.png";
+                    if (System.IO.File.Exists(p))
+                    {
+                        byte[] raw = System.IO.File.ReadAllBytes(p);
+                        gradTex = new Texture2D(2, 2);
+                        gradTex.LoadImage(raw);
+                    }
+                }
+
+                if (gradTex != null)
+                {
+                    Shader litShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Unlit");
+                    Material mortarMat = new Material(litShader);
+                    mortarMat.mainTexture = gradTex;
+                    if (mortarMat.HasProperty("_BaseMap")) mortarMat.SetTexture("_BaseMap", gradTex);
+                    if (mortarMat.HasProperty("_MainTex")) mortarMat.SetTexture("_MainTex", gradTex);
+
+                    foreach (Renderer r in GetComponentsInChildren<Renderer>())
+                    {
+                        if (r.gameObject.name.Contains("Health") || r.gameObject.name.Contains("selectionRing")) continue;
+                        r.sharedMaterial = mortarMat;
+                    }
+                }
+            }
         }
         else
         {
@@ -371,9 +478,7 @@ public partial class UnitAI : MonoBehaviour
     /// </summary>
     public bool IsMovingOrActing()
     {
-        return (isExecuting && agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh && !agent.isStopped && agent.hasPath) 
-               || isPerformingCheckpointAction 
-               || isClimbing;
+        return isExecuting || isPerformingCheckpointAction || isClimbing;
     }
 
     /// <summary>
@@ -409,10 +514,38 @@ public partial class UnitAI : MonoBehaviour
                 equippedWeapon.transform.localEulerAngles = weaponRotOffset;
                 equippedWeapon.transform.localScale = new Vector3(weaponScale, weaponScale, weaponScale);
             }
-            else
+        }
+    }
+
+    /// <summary>
+    /// Active ou masque complètement tous les visuels de l'unité (corps, arme AK-47, barre de vie, audio) pour le Fog of War.
+    /// </summary>
+    public void SetVisualsVisibility(bool isVisible)
+    {
+        this.isVisible = isVisible;
+        Renderer[] allRenderers = GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < allRenderers.Length; i++)
+        {
+            Renderer r = allRenderers[i];
+            if (r != null && !r.gameObject.name.Contains("Health") && !r.gameObject.name.Contains("selectionRing"))
             {
-                Debug.LogError("Impossible de charger l'arme VerzatileAK. Assurez-vous qu'elle est dans un dossier Resources.");
+                r.enabled = isVisible;
             }
+        }
+
+        if (healthBarBg != null)
+        {
+            healthBarBg.gameObject.SetActive(isVisible && !isDead);
+        }
+
+        if (selectionRing != null)
+        {
+            selectionRing.SetActive(isVisible && isSelected);
+        }
+
+        if (!isVisible && footstepAudioSource != null && footstepAudioSource.isPlaying)
+        {
+            footstepAudioSource.Stop();
         }
     }
 
@@ -533,14 +666,25 @@ public partial class UnitAI : MonoBehaviour
     /// </summary>
     public void TakeDamage(float amount, Vector3 hitDirection)
     {
-        if (isDead) return;
-
         // Protection Heavy Cover : 75% de réduction des dégâts derrière le mur de la fenêtre
         if (isGarrisoned)
         {
             amount = Mathf.Max(1f, amount * 0.25f);
             Debug.Log($"<color=cyan>[{gameObject.name}] 🛡️ Couverture Lourde à la fenêtre ! Dégâts réduits à {amount:F0}.</color>");
         }
+        else if (RoadBarrier.IsUnitNearBarrier(transform.position, 2.2f))
+        {
+            amount = Mathf.Max(1f, amount * 0.4f);
+            Debug.Log($"<color=cyan>[{gameObject.name}] 🚧 Couverture Barricade Routière (-60% dégâts) ! Dégâts réduits à {amount:F0}.</color>");
+        }
+        else if (isGuarding)
+        {
+            amount = Mathf.Max(1f, amount * 0.5f);
+            Debug.Log($"<color=cyan>[{gameObject.name}] 🛡️ Posture Guet active (+50% défense) ! Dégâts réduits à {amount:F0}.</color>");
+        }
+
+        // Tout impact reçu rompt l'invisibilité/camouflage
+        isCamouflaged = false;
 
         health -= (int)amount;
         Debug.Log($"[{gameObject.name}] a pris {amount} degats. Vie restante: {health}");
@@ -602,8 +746,17 @@ public partial class UnitAI : MonoBehaviour
     private void Die()
     {
         isDead = true;
+        AllLivingUnits.Remove(this);
         Debug.Log($"<color=black><b>[{gameObject.name}] EST MORT !</b></color>");
         
+        // Quitter le bâtiment et libérer la garnison
+        if (currentBuilding != null)
+        {
+            currentBuilding.UnregisterUnitInside(this);
+            currentBuilding = null;
+        }
+        LeaveGarrison();
+
         // Cacher la barre de vie
         if (healthBarBg != null) healthBarBg.gameObject.SetActive(false);
 
@@ -705,6 +858,29 @@ public partial class UnitAI : MonoBehaviour
     }
 
     /// <summary>
+    /// Tire un obus d'artillerie parabolique vers la position cible avec effet visuel et sonore.
+    /// </summary>
+    public void FireMortarShell(Vector3 targetPos)
+    {
+        Vector3 muzzlePos = transform.position + Vector3.up * 1.8f;
+        AudioClip launchClip = ProceduralAudioBuilder.CreateMortarLaunchSound();
+        if (launchClip != null) AudioSource.PlayClipAtPoint(launchClip, muzzlePos, 1.0f);
+
+        if (muzzleFlashPrefab != null)
+        {
+            GameObject mf = Instantiate(muzzleFlashPrefab, muzzlePos, Quaternion.LookRotation(Vector3.up));
+            mf.transform.localScale = Vector3.one * 5f;
+            Destroy(mf, 1.0f);
+        }
+
+        StreetAct.Combat.MortarShell.Launch(muzzlePos, targetPos, teamID);
+        Debug.Log($"<color=orange>[{gameObject.name}] 💥 Obus de mortier tiré vers ({targetPos.x:F1}, {targetPos.z:F1}) !</color>");
+        
+        FogOfWarEntity fow = GetComponent<FogOfWarEntity>();
+        if (fow != null) fow.NotifyAttack();
+    }
+
+    /// <summary>
     /// Réinitialise l'état de l'unité à la fin forcée ou normale du tour.
     /// </summary>
     public void ResetOrderState()
@@ -713,6 +889,8 @@ public partial class UnitAI : MonoBehaviour
         isPerformingCheckpointAction = false;
         tacticalPath.Clear();
         currentNodeIndex = 0;
+        if (tacticalLineRenderer != null) tacticalLineRenderer.positionCount = 0;
+
         if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
         {
             agent.isStopped = true;
@@ -723,6 +901,31 @@ public partial class UnitAI : MonoBehaviour
         {
             animator.SetFloat("Speed", 0f);
             animator.SetBool("IsShooting", false);
+        }
+    }
+
+    /// <summary>
+    /// Efface l'ensemble de la trajectoire planifiée de l'unité.
+    /// </summary>
+    public void ClearTacticalPath()
+    {
+        tacticalPath.Clear();
+        currentNodeIndex = 0;
+        if (tacticalLineRenderer != null) tacticalLineRenderer.positionCount = 0;
+    }
+
+    /// <summary>
+    /// Annule le dernier point/ordre ajouté à la trajectoire.
+    /// </summary>
+    public void RemoveLastTacticalNode()
+    {
+        if (tacticalPath.Count > 0)
+        {
+            tacticalPath.RemoveAt(tacticalPath.Count - 1);
+            if (tacticalPath.Count == 0 && tacticalLineRenderer != null)
+            {
+                tacticalLineRenderer.positionCount = 0;
+            }
         }
     }
 }

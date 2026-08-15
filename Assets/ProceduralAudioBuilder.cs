@@ -69,21 +69,53 @@ public static class ProceduralAudioBuilder
 
     public static AudioClip CreateFootstepSound()
     {
-        float duration = 0.15f;
+        // Boucle de marche cadencée réaliste (deux pas par seconde avec impact et silence)
+        float duration = 0.65f;
         int sampleCount = (int)(sampleRate * duration);
         float[] samples = new float[sampleCount];
         
         for (int i = 0; i < sampleCount; i++)
         {
             float t = (float)i / sampleRate;
-            // Bruit blanc filtré (grave) pour simuler un impact sur le béton/terre
-            float noise = Random.Range(-1f, 1f);
-            float lowPass = Mathf.Sin(t * Mathf.PI * 2 * 50f); // Résonance grave
+            float step1 = Mathf.Max(0f, 1f - (t / 0.12f));
+            float step2 = Mathf.Max(0f, 1f - (Mathf.Abs(t - 0.32f) / 0.12f));
             
-            samples[i] = (noise * 0.3f + lowPass * 0.7f) * Mathf.Exp(-t * 25f) * 0.2f;
+            float noise = Random.Range(-0.8f, 0.8f);
+            float lowRumble = Mathf.Sin(t * Mathf.PI * 2 * 65f);
+            
+            float val = 0f;
+            if (t < 0.15f) val = (noise * 0.4f + lowRumble * 0.6f) * Mathf.Exp(-t * 22f) * 0.35f;
+            else if (t >= 0.32f && t < 0.47f)
+            {
+                float tRel = t - 0.32f;
+                val = (noise * 0.4f + lowRumble * 0.6f) * Mathf.Exp(-tRel * 22f) * 0.32f;
+            }
+            samples[i] = Mathf.Clamp(val, -1f, 1f);
         }
 
         AudioClip clip = AudioClip.Create("FootstepSound", sampleCount, 1, sampleRate, false);
+        clip.SetData(samples, 0);
+        return clip;
+    }
+
+    public static AudioClip CreateVehicleEngineSound()
+    {
+        // Boucle de grondement de moteur diesel lourd et chenilles blindées
+        float duration = 1.0f;
+        int sampleCount = (int)(sampleRate * duration);
+        float[] samples = new float[sampleCount];
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float t = (float)i / sampleRate;
+            float enginePiston = Mathf.Sin(t * Mathf.PI * 2 * 45f) * 0.4f 
+                               + Mathf.Sin(t * Mathf.PI * 2 * 90f) * 0.25f
+                               + Mathf.Sin(t * Mathf.PI * 2 * 135f) * 0.15f;
+            float trackRumble = Random.Range(-0.15f, 0.15f);
+            samples[i] = Mathf.Clamp((enginePiston + trackRumble) * 0.45f, -1f, 1f);
+        }
+
+        AudioClip clip = AudioClip.Create("VehicleEngineSound", sampleCount, 1, sampleRate, false);
         clip.SetData(samples, 0);
         return clip;
     }
@@ -144,6 +176,58 @@ public static class ProceduralAudioBuilder
         }
 
         AudioClip clip = AudioClip.Create("Gunshot", sampleCount, 1, sampleRate, false);
+        clip.SetData(samples, 0);
+        return clip;
+    }
+
+    public static AudioClip CreateMortarLaunchSound()
+    {
+        float duration = 0.8f;
+        int sampleCount = (int)(sampleRate * duration);
+        float[] samples = new float[sampleCount];
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float t = (float)i / sampleRate;
+            // 1. Coup sourd de tube (Thump)
+            float freq = Mathf.Lerp(90f, 30f, t / 0.3f);
+            float tubeThump = Mathf.Sin(t * Mathf.PI * 2 * freq) * Mathf.Exp(-t * 12f) * 1.8f;
+
+            // 2. Souffle de gaz comprimé (Whoosh)
+            float gasNoise = Random.Range(-1f, 1f) * Mathf.Exp(-t * 6f) * 0.5f;
+
+            float mix = Mathf.Clamp((tubeThump + gasNoise) * 2.0f, -0.95f, 0.95f);
+            samples[i] = mix;
+        }
+
+        AudioClip clip = AudioClip.Create("MortarLaunch", sampleCount, 1, sampleRate, false);
+        clip.SetData(samples, 0);
+        return clip;
+    }
+
+    public static AudioClip CreateMortarExplosionSound()
+    {
+        float duration = 1.5f;
+        int sampleCount = (int)(sampleRate * duration);
+        float[] samples = new float[sampleCount];
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float t = (float)i / sampleRate;
+            // 1. Onde de choc initiale
+            float shock = Random.Range(-1f, 1f) * Mathf.Exp(-t * 25f) * 2.0f;
+
+            // 2. Grondement sub-bass lourd (45Hz -> 20Hz)
+            float subBass = Mathf.Sin(t * Mathf.PI * 2 * Mathf.Lerp(45f, 20f, t / duration)) * Mathf.Exp(-t * 3f) * 1.5f;
+
+            // 3. Débris et réverbération urbaine
+            float rumble = Random.Range(-0.8f, 0.8f) * Mathf.Exp(-t * 2f) * 0.6f;
+
+            float mix = Mathf.Clamp((shock + subBass + rumble) * 2.5f, -0.95f, 0.95f);
+            samples[i] = mix;
+        }
+
+        AudioClip clip = AudioClip.Create("MortarExplosion", sampleCount, 1, sampleRate, false);
         clip.SetData(samples, 0);
         return clip;
     }
