@@ -271,9 +271,8 @@ extern void RadarPing__ctor_m55733E4DBD7F5FDAACB349C76BEFDF797474319B (void);
 extern void TacticalCamera_Start_m243003F56DAC052EE0A75118BE2AED1DAC2B3D58 (void);
 extern void TacticalCamera_Update_m9BE3CE61EC2EE2E2342D1D3930387E52F49B096E (void);
 extern void TacticalCamera_ShakeCamera_m113B37F51C0BB68492D5D513BBA0951D59578838 (void);
-extern void TacticalCamera_HandlePan_m684D3179E7A50E8F67ED4EC99C93B9B1E9AC3D8D (void);
-extern void TacticalCamera_HandleZoom_mB1D61758FEFF1DB9A12222BC82741DC7AA59CE66 (void);
-extern void TacticalCamera_HandleRotation_mCC4C53E66537592848172E548AFB7A0A89E4E438 (void);
+extern void TacticalCamera_HandleTouchGestures_m937439DA3957BD2DACA3C54BCAF063CAD882377F (void);
+extern void TacticalCamera_HandleMouseAndKeyboard_m2AE93DF70BAD25EECE6D594E93F6B9B05DB56704 (void);
 extern void TacticalCamera__ctor_m2A0C92CDE95074FEE468BB654716350529551F6B (void);
 extern void TacticalPathManager_get_Instance_m9298FB699FB70365DC3AF41116D3A651C3698B98 (void);
 extern void TacticalPathManager_set_Instance_m96CC5EF8DDD9552894160A442B92AED20140E716 (void);
@@ -455,8 +454,6 @@ extern void DoorInteraction_get_CurrentHoveredDoor_mFD6FE0CA2D40E70386A9F30DF6DE
 extern void DoorInteraction_Awake_mCF96EDEE6524F9340411F1E1A4A6082CF4455011 (void);
 extern void DoorInteraction_Initialize_m3C0BDD2533B40E17F78F8FEBFCAED6ED0FC22C1A (void);
 extern void DoorInteraction_SetHighlight_mF5500EC81963B2C74CE4671A68F5C1D05B6B0AA2 (void);
-extern void DoorInteraction_OnMouseEnter_m5D214521F5D3B2631457CBF9FE030FBB222FFC9A (void);
-extern void DoorInteraction_OnMouseExit_m86B8C202DD22606979C490DAEBC96671D28C0808 (void);
 extern void DoorInteraction_OnDisable_m8D31A90EE42AC3176A60E1D80BE5DC4CAB00DEE3 (void);
 extern void DoorInteraction_GetOutsidePosition_mB5E9A534367552722B0F1F09B45DF22C43FBD272 (void);
 extern void DoorInteraction_GetInsidePosition_m3FC2FB522329E694690CA50BD409C271CC68C690 (void);
@@ -465,8 +462,6 @@ extern void WindowInteraction_get_CurrentHoveredWindow_m8D4450EBA0A7C7EE97458AB2
 extern void WindowInteraction_Awake_mE37F4B4442CEE900F2A8BFB4A56535102CA9DFF0 (void);
 extern void WindowInteraction_Initialize_m2374E68F6A9BBF9C151C4BBFF58EF6BBB5D8FCFB (void);
 extern void WindowInteraction_SetHighlight_m619791FEDA9DA038F2B7E172C6B5BFB61A86CE29 (void);
-extern void WindowInteraction_OnMouseEnter_m19784DE08276183A06036281DE8A889A320EEBC2 (void);
-extern void WindowInteraction_OnMouseExit_m534741E2506DA94017496AB33780761B7FEDDAAE (void);
 extern void WindowInteraction_OnDisable_m4535452571A33B31F4ED82466864832A9607756B (void);
 extern void WindowInteraction_GetInteriorStancePosition_mE549F964697E1A1022749B02D4649EFC83E900D1 (void);
 extern void WindowInteraction__ctor_mD54507E1C03FACA2A00DD252E899960011BF348D (void);
@@ -494,7 +489,7 @@ extern void U3CFlightCoroutineU3Ed__10_MoveNext_m81F3EA7CBE2DA9C983C6A25A78035E5
 extern void U3CFlightCoroutineU3Ed__10_System_Collections_Generic_IEnumeratorU3CSystem_ObjectU3E_get_Current_m414EAD086B487E5F9777296C9DE1370DC23C7923 (void);
 extern void U3CFlightCoroutineU3Ed__10_System_Collections_IEnumerator_Reset_mF26537B61893CEE71312B190B1CC6859068A518B (void);
 extern void U3CFlightCoroutineU3Ed__10_System_Collections_IEnumerator_get_Current_m48F7EED0645791DE62A87E32FD1DA5DEF9FC2D15 (void);
-static Il2CppMethodPointer s_methodPointers[487] = 
+static Il2CppMethodPointer s_methodPointers[482] = 
 {
 	BuildingStructure_OnEnable_m00F3EE3FDE8B7BF14BE988D113B23415FA80D650,
 	BuildingStructure_OnDisable_mD792050E52D6F770EADD60EE1D8DFE6AF62BD1DF,
@@ -760,9 +755,8 @@ static Il2CppMethodPointer s_methodPointers[487] =
 	TacticalCamera_Start_m243003F56DAC052EE0A75118BE2AED1DAC2B3D58,
 	TacticalCamera_Update_m9BE3CE61EC2EE2E2342D1D3930387E52F49B096E,
 	TacticalCamera_ShakeCamera_m113B37F51C0BB68492D5D513BBA0951D59578838,
-	TacticalCamera_HandlePan_m684D3179E7A50E8F67ED4EC99C93B9B1E9AC3D8D,
-	TacticalCamera_HandleZoom_mB1D61758FEFF1DB9A12222BC82741DC7AA59CE66,
-	TacticalCamera_HandleRotation_mCC4C53E66537592848172E548AFB7A0A89E4E438,
+	TacticalCamera_HandleTouchGestures_m937439DA3957BD2DACA3C54BCAF063CAD882377F,
+	TacticalCamera_HandleMouseAndKeyboard_m2AE93DF70BAD25EECE6D594E93F6B9B05DB56704,
 	TacticalCamera__ctor_m2A0C92CDE95074FEE468BB654716350529551F6B,
 	TacticalPathManager_get_Instance_m9298FB699FB70365DC3AF41116D3A651C3698B98,
 	TacticalPathManager_set_Instance_m96CC5EF8DDD9552894160A442B92AED20140E716,
@@ -944,8 +938,6 @@ static Il2CppMethodPointer s_methodPointers[487] =
 	DoorInteraction_Awake_mCF96EDEE6524F9340411F1E1A4A6082CF4455011,
 	DoorInteraction_Initialize_m3C0BDD2533B40E17F78F8FEBFCAED6ED0FC22C1A,
 	DoorInteraction_SetHighlight_mF5500EC81963B2C74CE4671A68F5C1D05B6B0AA2,
-	DoorInteraction_OnMouseEnter_m5D214521F5D3B2631457CBF9FE030FBB222FFC9A,
-	DoorInteraction_OnMouseExit_m86B8C202DD22606979C490DAEBC96671D28C0808,
 	DoorInteraction_OnDisable_m8D31A90EE42AC3176A60E1D80BE5DC4CAB00DEE3,
 	DoorInteraction_GetOutsidePosition_mB5E9A534367552722B0F1F09B45DF22C43FBD272,
 	DoorInteraction_GetInsidePosition_m3FC2FB522329E694690CA50BD409C271CC68C690,
@@ -954,8 +946,6 @@ static Il2CppMethodPointer s_methodPointers[487] =
 	WindowInteraction_Awake_mE37F4B4442CEE900F2A8BFB4A56535102CA9DFF0,
 	WindowInteraction_Initialize_m2374E68F6A9BBF9C151C4BBFF58EF6BBB5D8FCFB,
 	WindowInteraction_SetHighlight_m619791FEDA9DA038F2B7E172C6B5BFB61A86CE29,
-	WindowInteraction_OnMouseEnter_m19784DE08276183A06036281DE8A889A320EEBC2,
-	WindowInteraction_OnMouseExit_m534741E2506DA94017496AB33780761B7FEDDAAE,
 	WindowInteraction_OnDisable_m4535452571A33B31F4ED82466864832A9607756B,
 	WindowInteraction_GetInteriorStancePosition_mE549F964697E1A1022749B02D4649EFC83E900D1,
 	WindowInteraction__ctor_mD54507E1C03FACA2A00DD252E899960011BF348D,
@@ -984,7 +974,7 @@ static Il2CppMethodPointer s_methodPointers[487] =
 	U3CFlightCoroutineU3Ed__10_System_Collections_IEnumerator_Reset_mF26537B61893CEE71312B190B1CC6859068A518B,
 	U3CFlightCoroutineU3Ed__10_System_Collections_IEnumerator_get_Current_m48F7EED0645791DE62A87E32FD1DA5DEF9FC2D15,
 };
-static const int32_t s_InvokerIndices[487] = 
+static const int32_t s_InvokerIndices[482] = 
 {
 	10343,
 	10343,
@@ -1253,7 +1243,6 @@ static const int32_t s_InvokerIndices[487] =
 	10343,
 	10343,
 	10343,
-	10343,
 	15730,
 	15479,
 	10343,
@@ -1435,8 +1424,6 @@ static const int32_t s_InvokerIndices[487] =
 	1884,
 	7615,
 	10343,
-	10343,
-	10343,
 	10332,
 	10332,
 	10343,
@@ -1444,8 +1431,6 @@ static const int32_t s_InvokerIndices[487] =
 	10343,
 	1884,
 	7615,
-	10343,
-	10343,
 	10343,
 	10332,
 	10343,
@@ -1478,7 +1463,7 @@ IL2CPP_EXTERN_C const Il2CppCodeGenModule g_AssemblyU2DCSharp_CodeGenModule;
 const Il2CppCodeGenModule g_AssemblyU2DCSharp_CodeGenModule = 
 {
 	"Assembly-CSharp.dll",
-	487,
+	482,
 	s_methodPointers,
 	0,
 	NULL,

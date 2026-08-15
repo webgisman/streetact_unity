@@ -472,7 +472,6 @@ UnityEngine.Camera::set_backgroundColor_Injected
 UnityEngine.Camera::set_clearFlags_Injected
 UnityEngine.Camera::set_depthTextureMode_Injected
 UnityEngine.Camera::set_fieldOfView_Injected
-UnityEngine.Camera::set_orthographicSize_Injected
 UnityEngine.Camera::set_rect_Injected
 UnityEngine.Camera::set_targetTexture_Injected
 UnityEngine.Camera::get_clearFlags_Injected
@@ -1604,7 +1603,9 @@ UnityEngine.Screen::GetMSAASamples
 UnityEngine.Screen::get_height
 UnityEngine.Screen::get_width
 UnityEngine.Screen::get_dpi
+UnityEngine.Screen::RequestOrientation
 UnityEngine.Screen::SetMSAASamples
+UnityEngine.Screen::SetOrientationEnabled
 UnityEngine.Screen::GetScreenOrientation
 UnityEngine.ScriptableObject::CreateScriptableObjectInstanceFromType_Injected
 UnityEngine.ScriptableObject::CreateScriptableObject
