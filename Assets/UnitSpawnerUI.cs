@@ -25,9 +25,16 @@ public class UnitSpawnerUI : MonoBehaviour
     private Material previewMat;
 
     // UI State
-    private bool isPanelOpen = true;
+    private bool isPanelOpen = false; // Fermé par défaut pour libérer l'écran
     private string statusMessage = "";
     private float statusMessageTimer = 0f;
+    private float ignorePlacementTime = 0f;
+    public static float lastUIClickTime = 0f;
+
+    public bool IsPanelOpen()
+    {
+        return isPanelOpen;
+    }
 
     void Awake()
     {
@@ -42,10 +49,7 @@ public class UnitSpawnerUI : MonoBehaviour
         Destroy(previewRing.GetComponent<Collider>());
         previewRing.transform.localScale = new Vector3(2.0f, 0.02f, 2.0f);
 
-        Shader unlit = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Transparent");
-        previewMat = new Material(unlit);
-        previewMat.SetColor("_BaseColor", new Color(0f, 1f, 0.4f, 0.6f));
-        if (previewMat.HasProperty("_Color")) previewMat.SetColor("_Color", new Color(0f, 1f, 0.4f, 0.6f));
+        previewMat = SafeMaterialFactory.CreateUnlit(new Color(0f, 1f, 0.4f, 0.6f));
         previewRing.GetComponent<MeshRenderer>().sharedMaterial = previewMat;
         previewRing.SetActive(false);
 
@@ -83,71 +87,171 @@ public class UnitSpawnerUI : MonoBehaviour
         }
     }
 
+    private Vector2 placementDownPos;
+    private bool isPlacementPointerDown = false;
+
     private void HandlePlacementPreview()
     {
-        Vector2 pointerPos = Vector2.zero;
-        bool hasPointer = false;
-
-        if (Pointer.current != null)
+        try
         {
-            pointerPos = Pointer.current.position.ReadValue();
-            hasPointer = true;
-        }
-        else if (Input.touchCount > 0)
-        {
-            pointerPos = Input.GetTouch(0).position;
-            hasPointer = true;
-        }
-        else if (Input.mousePresent)
-        {
-            pointerPos = Input.mousePosition;
-            hasPointer = true;
-        }
+            Vector2 pointerPos = Vector2.zero;
+            bool hasPointer = false;
+            bool wasPressed = false;
+            bool wasReleased = false;
 
-        if (!hasPointer) return;
-
-        Ray ray = Camera.main.ScreenPointToRay(pointerPos);
-        if (Physics.Raycast(ray, out RaycastHit hit, 500f))
-        {
-            // Vérifier si le point est sur le NavMesh avec rayon élargi (8.0m)
-            bool isValid = NavMesh.SamplePosition(hit.point, out NavMeshHit navHit, 8.0f, NavMesh.AllAreas);
-
-            if (previewRing != null)
+            if (Touchscreen.current != null && Touchscreen.current.touches.Count > 0)
             {
-                previewRing.SetActive(true);
-                Vector3 ringPos = isValid ? navHit.position : hit.point;
-                ringPos.y += 0.05f;
-                previewRing.transform.position = ringPos;
-
-                // Cyan si joueur, Rouge/Orange si ennemi, Rouge foncé si invalide
-                Color ringCol = isValid ? (selectedTeam == 1 ? new Color(0f, 0.9f, 1f, 0.8f) : new Color(1f, 0.35f, 0.2f, 0.8f)) : new Color(1f, 0f, 0f, 0.6f);
-                if (previewMat.HasProperty("_BaseColor")) previewMat.SetColor("_BaseColor", ringCol);
-                if (previewMat.HasProperty("_Color")) previewMat.SetColor("_Color", ringCol);
+                var touch = Touchscreen.current.touches[0];
+                pointerPos = touch.position.ReadValue();
+                hasPointer = true;
+                wasPressed = touch.press.wasPressedThisFrame;
+                wasReleased = touch.press.wasReleasedThisFrame;
+            }
+            else if (Input.touchCount > 0)
+            {
+                Touch t = Input.GetTouch(0);
+                pointerPos = t.position;
+                hasPointer = true;
+                wasPressed = (t.phase == UnityEngine.TouchPhase.Began);
+                wasReleased = (t.phase == UnityEngine.TouchPhase.Ended);
+            }
+            else if (Pointer.current != null)
+            {
+                pointerPos = Pointer.current.position.ReadValue();
+                hasPointer = true;
+                wasPressed = Pointer.current.press.wasPressedThisFrame;
+                wasReleased = Pointer.current.press.wasReleasedThisFrame;
+            }
+            else if (Input.mousePresent)
+            {
+                pointerPos = Input.mousePosition;
+                hasPointer = true;
+                wasPressed = Input.GetMouseButtonDown(0);
+                wasReleased = Input.GetMouseButtonUp(0);
             }
 
-            // Détection du Clic ou Touch Tap pour déposer l'unité (PC & Mobile)
-            bool isActionPressed = false;
-            if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame) isActionPressed = true;
-            if (Touchscreen.current != null && Touchscreen.current.primaryTouch.press.wasPressedThisFrame) isActionPressed = true;
-            if (Input.GetMouseButtonDown(0)) isActionPressed = true;
-            if (Input.touchCount > 0 && Input.GetTouch(0).phase == UnityEngine.TouchPhase.Began) isActionPressed = true;
+            if (!hasPointer) return;
 
-            if (isActionPressed)
+            Camera cam = Camera.main ?? FindAnyObjectByType<Camera>();
+            if (cam == null) return;
+
+            // Calcul du point d'impact 3D (Raycast ou Plan de sol de secours)
+            Ray ray = cam.ScreenPointToRay(pointerPos);
+            Vector3 targetWorldPos = Vector3.zero;
+            bool hasGroundPos = false;
+
+            if (Physics.Raycast(ray, out RaycastHit hit, 500f))
             {
-                // Ignorer si on a cliqué sur un bouton d'interface
-                if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return;
-
-                if (isValid)
+                targetWorldPos = hit.point;
+                hasGroundPos = true;
+            }
+            else
+            {
+                Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
+                if (groundPlane.Raycast(ray, out float enter))
                 {
-                    SpawnUnitAt(activePlacingType.Value, navHit.position, selectedTeam);
-                    CancelPlacement();
-                    if (Application.isMobilePlatform) Handheld.Vibrate();
+                    targetWorldPos = ray.GetPoint(enter);
+                    hasGroundPos = true;
+                }
+            }
+
+            if (hasGroundPos)
+            {
+                // Détecter si on clique sur un bâtiment ou un toit
+                bool isBuildingOrRoof = false;
+                if (Physics.Raycast(ray, out RaycastHit hitInfo, 500f))
+                {
+                    if (hitInfo.collider != null)
+                    {
+                        if (hitInfo.collider.GetComponentInParent<BuildingStructure>() != null ||
+                            hitInfo.collider.name.ToLower().Contains("building") ||
+                            hitInfo.collider.name.ToLower().Contains("roof") ||
+                            hitInfo.point.y > 1.8f)
+                        {
+                            isBuildingOrRoof = true;
+                        }
+                    }
+                }
+
+                bool isHeavyUnit = (activePlacingType == UnitType.CharLeopard ||
+                                    activePlacingType == UnitType.VehiculeCanon ||
+                                    activePlacingType == UnitType.Mortier ||
+                                    activePlacingType == UnitType.BarricadeRoutiere);
+
+                bool isValid = false;
+                NavMeshHit navHit = default;
+
+                if (isHeavyUnit && isBuildingOrRoof)
+                {
+                    isValid = false; // Les véhicules/chars sont formellement interdits sur les toits !
                 }
                 else
                 {
-                    ShowMessage("Emplacement invalide ! Touchez une rue ou un carrefour pour déposer l'unité.", 2.5f);
+                    // Vérifier si le point est sur ou proche d'une rue NavMesh (rayon de 8m au sol, hauteur cohérente)
+                    isValid = NavMesh.SamplePosition(targetWorldPos, out navHit, 8.0f, NavMesh.AllAreas) &&
+                              Mathf.Abs(targetWorldPos.y - navHit.position.y) < 2.5f;
+                }
+
+                if (previewRing != null)
+                {
+                    previewRing.SetActive(true);
+                    Vector3 ringPos = isValid ? navHit.position : targetWorldPos;
+                    ringPos.y += 0.05f;
+                    previewRing.transform.position = ringPos;
+
+                    if (previewMat != null)
+                    {
+                        Color ringCol = isValid ? (selectedTeam == 1 ? new Color(0f, 0.9f, 1f, 0.8f) : new Color(1f, 0.35f, 0.2f, 0.8f)) : new Color(1f, 0f, 0f, 0.6f);
+                        if (previewMat.HasProperty("_BaseColor")) previewMat.SetColor("_BaseColor", ringCol);
+                        else if (previewMat.HasProperty("_Color")) previewMat.color = ringCol;
+                    }
+                }
+
+                // Détection du Tap propre (relâchement après clic au sol)
+                if (wasPressed)
+                {
+                    isPlacementPointerDown = true;
+                    placementDownPos = pointerPos;
+                    Debug.Log($"<color=cyan>[UnitSpawnerUI] 🎯 Doigt posé à {pointerPos}</color>");
+                }
+                else if (wasReleased && isPlacementPointerDown)
+                {
+                    isPlacementPointerDown = false;
+                    float dragDist = Vector2.Distance(placementDownPos, pointerPos);
+                    Debug.Log($"<color=yellow>[UnitSpawnerUI] 👆 Doigt relâché (déplacement: {dragDist:F1}px, valide={isValid})</color>");
+
+                    // Ignorer si on a glissé pour bouger la caméra (plus de 45 pixels)
+                    if (dragDist < 45f)
+                    {
+                        // Ignorer les clics sur le bouton d'annulation en haut à gauche
+                        Vector2 guiPos = new Vector2(pointerPos.x, Screen.height - pointerPos.y);
+                        float uiScale = Mathf.Clamp(Screen.width / 480f, 1.35f, 2.2f);
+                        Rect cancelBtnRect = new Rect(15 * uiScale, 15 * uiScale, 230 * uiScale, 44 * uiScale);
+                        
+                        if (!cancelBtnRect.Contains(guiPos))
+                        {
+                            if (isValid && activePlacingType.HasValue)
+                            {
+                                Debug.Log($"<color=lime>[UnitSpawnerUI] 🚀 DÉPLOIEMENT : {activePlacingType.Value} en position {navHit.position} pour équipe {selectedTeam} !</color>");
+                                SpawnUnitAt(activePlacingType.Value, navHit.position, selectedTeam);
+                                CancelPlacement();
+                                if (Application.isMobilePlatform) Handheld.Vibrate();
+                            }
+                            else
+                            {
+                                string errMsg = (isHeavyUnit && isBuildingOrRoof)
+                                    ? "⚠️ Les véhicules et canons doivent être placés sur la rue, pas sur les toits !"
+                                    : "Emplacement hors-carte ! Touchez une rue pour déployer l'unité.";
+                                ShowMessage(errMsg, 2.5f);
+                            }
+                        }
+                    }
                 }
             }
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError($"[UnitSpawnerUI Placement Error] {ex.Message}\n{ex.StackTrace}");
         }
     }
 
@@ -163,6 +267,12 @@ public class UnitSpawnerUI : MonoBehaviour
 
         activePlacingType = type;
         IsPlacingUnit = true;
+        isPanelOpen = false; // Ferme le dock pour libérer tout l'écran tactile
+        ignorePlacementTime = Time.time + 0.35f; // Délai anti-misfire
+        isPlacementPointerDown = false;
+        
+        string unitName = (type == UnitType.CharLeopard) ? "Char Leopard 2" : (type == UnitType.VehiculeCanon ? "Véhicule Canon" : (type == UnitType.Mortier ? "Mortier" : "Fantassin"));
+        ShowMessage($"📍 Touchez une rue pour déployer : {unitName}", 4.0f);
         AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateHoverSound(), Camera.main.transform.position);
     }
 
@@ -209,12 +319,8 @@ public class UnitSpawnerUI : MonoBehaviour
         }
         else if (type == UnitType.CharLeopard)
         {
-            // 1. Charger en priorité absolue le prefab d'origine tout neuf
-            GameObject prefab = null;
-#if UNITY_EDITOR
-            prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Kucher/Tank Leopard2/Prefabs/Leopard2.prefab");
-#endif
-            if (prefab == null) prefab = Resources.Load<GameObject>("Kucher/Tank Leopard2/Prefabs/Leopard2");
+            // 1. Charger en priorité absolue le prefab d'origine tout neuf depuis les Ressources
+            GameObject prefab = Resources.Load<GameObject>("Kucher/Tank Leopard2/Prefabs/Leopard2");
 
             if (prefab != null)
             {
@@ -247,27 +353,15 @@ public class UnitSpawnerUI : MonoBehaviour
         }
         else if (type == UnitType.VehiculeCanon)
         {
-            GameObject canonTemplate = null;
-            foreach (var u in FindObjectsByType<UnitAI>(FindObjectsInactive.Include))
+            GameObject prefab = Resources.Load<GameObject>("engins/canon-vehicle");
+            if (prefab != null)
             {
-                if (u.gameObject.name.ToLower().Contains("canon") && !u.isDead)
-                {
-                    canonTemplate = u.gameObject;
-                    break;
-                }
-            }
-
-            if (canonTemplate != null)
-            {
-                newUnitObj = Instantiate(canonTemplate, position, Quaternion.identity);
+                newUnitObj = Instantiate(prefab, position, Quaternion.identity);
             }
             else
             {
-                GameObject prefab = null;
-#if UNITY_EDITOR
-                prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Kucher/Tank Leopard2/Prefabs/Leopard2.prefab");
-#endif
-                if (prefab != null) newUnitObj = Instantiate(prefab, position, Quaternion.identity);
+                GameObject tankPrefab = Resources.Load<GameObject>("Kucher/Tank Leopard2/Prefabs/Leopard2");
+                if (tankPrefab != null) newUnitObj = Instantiate(tankPrefab, position, Quaternion.identity);
                 else
                 {
                     newUnitObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -537,11 +631,13 @@ public class UnitSpawnerUI : MonoBehaviour
 
     void OnGUI()
     {
+        // Masquer en vue 3D Action pour libérer totalement le champ de vision
+        if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action) return;
+
         // Ne pas afficher pendant l'exécution du tour
         TacticalPathManager pathManager = FindAnyObjectByType<TacticalPathManager>();
         if (pathManager != null && pathManager.phaseActuelle == TacticalPathManager.GamePhase.Execution) return;
 
-        // Mise à l'échelle automatique +50% pour écrans mobiles (Portrait & Paysage)
         Matrix4x4 origMat = GUI.matrix;
         float uiScale = Mathf.Clamp(Screen.width / 480f, 1.35f, 2.2f);
         GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
@@ -549,11 +645,25 @@ public class UnitSpawnerUI : MonoBehaviour
         int playerUnits = GetTeamLivingUnitsCount(1);
         int enemyUnits = GetTeamLivingUnitsCount(2);
 
-        // 1. Bouton d'ouverture/fermeture du Dock de déploiement (Gros bouton tactile)
-        string tabText = isPanelOpen ? "▼ Masquer Déploiement" : $"🎖️ Déployer Unités ({playerUnits} vs {enemyUnits})";
-        if (GUI.Button(new Rect(15, 15, 230, 44), tabText))
+        // 1. Bouton compact d'ouverture/fermeture du Déploiement
+        GUIStyle tabBtnStyle = new GUIStyle(GUI.skin.button);
+        tabBtnStyle.fontSize = 11;
+        tabBtnStyle.fontStyle = FontStyle.Bold;
+        tabBtnStyle.normal.textColor = isPanelOpen ? new Color(1f, 0.4f, 0.4f) : Color.white;
+
+        string tabText = IsPlacingUnit ? "❌ Annuler Placement" : (isPanelOpen ? "▲ Fermer Menu" : $"🎖️ Déploiement ({playerUnits} vs {enemyUnits})");
+        if (GUI.Button(new Rect(14, 12, 185, 36), tabText, tabBtnStyle))
         {
-            isPanelOpen = !isPanelOpen;
+            lastUIClickTime = Time.time;
+            if (IsPlacingUnit)
+            {
+                CancelPlacement();
+                ShowMessage("Placement annulé.", 1.5f);
+            }
+            else
+            {
+                isPanelOpen = !isPanelOpen;
+            }
             AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
         }
 
@@ -561,10 +671,11 @@ public class UnitSpawnerUI : MonoBehaviour
         if (isPanelOpen)
         {
             GUIStyle panelStyle = new GUIStyle(GUI.skin.box);
-            panelStyle.fontSize = 13;
+            panelStyle.fontSize = 12;
+            panelStyle.fontStyle = FontStyle.Bold;
             panelStyle.normal.textColor = Color.white;
 
-            GUI.Box(new Rect(15, 65, 250, 430), "QG TACTIQUE : DÉPLOIEMENT", panelStyle);
+            GUI.Box(new Rect(14, 52, 230, 410), "QG : RENFORTS & UNITÉS", panelStyle);
 
             // Compteur par équipe
             GUIStyle counterStyle = new GUIStyle(GUI.skin.label);
@@ -580,11 +691,13 @@ public class UnitSpawnerUI : MonoBehaviour
 
             if (GUI.Button(new Rect(25, 116, 110, 32), team1Label))
             {
+                lastUIClickTime = Time.time;
                 selectedTeam = 1;
                 AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
             }
             if (GUI.Button(new Rect(140, 116, 110, 32), team2Label))
             {
+                lastUIClickTime = Time.time;
                 selectedTeam = 2;
                 AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
             }
@@ -592,26 +705,31 @@ public class UnitSpawnerUI : MonoBehaviour
             // Boutons de Sélection d'Unités (+50% de hauteur pour le tactile)
             if (GUI.Button(new Rect(25, 154, 225, 32), "🎖️ Fantassin (Fusil)"))
             {
+                lastUIClickTime = Time.time;
                 StartPlacingUnit(UnitType.Fantassin);
             }
 
             if (GUI.Button(new Rect(25, 190, 225, 32), "🛡️ Char Leopard 2 (Obus)"))
             {
+                lastUIClickTime = Time.time;
                 StartPlacingUnit(UnitType.CharLeopard);
             }
 
             if (GUI.Button(new Rect(25, 226, 225, 32), "💥 Véhicule Canon"))
             {
+                lastUIClickTime = Time.time;
                 StartPlacingUnit(UnitType.VehiculeCanon);
             }
 
             if (GUI.Button(new Rect(25, 262, 225, 32), "🎯 Mortier Lourd (120m)"))
             {
+                lastUIClickTime = Time.time;
                 StartPlacingUnit(UnitType.Mortier);
             }
 
             if (GUI.Button(new Rect(25, 298, 225, 32), "🚧 Barricade Routière"))
             {
+                lastUIClickTime = Time.time;
                 StartPlacingUnit(UnitType.BarricadeRoutiere);
             }
 
@@ -623,6 +741,7 @@ public class UnitSpawnerUI : MonoBehaviour
 
             if (GUI.Button(new Rect(25, 336, 225, 34), "🤖 ESCOUADE IA (Rouge)", aiBtnStyle))
             {
+                lastUIClickTime = Time.time;
                 SpawnEnemyWave();
             }
 
@@ -633,12 +752,14 @@ public class UnitSpawnerUI : MonoBehaviour
 
             if (GUI.Button(new Rect(25, 374, 225, 34), "⚡ DÉPLOIEMENT AUTO", autoBtnStyle))
             {
+                lastUIClickTime = Time.time;
                 AutoDeployBattlefield();
             }
 
             // Bouton Nettoyer
             if (GUI.Button(new Rect(25, 412, 225, 28), "🧹 Nettoyer le Terrain"))
             {
+                lastUIClickTime = Time.time;
                 ClearAllUnits();
             }
         }
@@ -666,5 +787,28 @@ public class UnitSpawnerUI : MonoBehaviour
         }
 
         GUI.matrix = origMat;
+    }
+
+    public bool IsPointerOverOnGUI(Vector2 screenPos)
+    {
+        // 1. Vérification par le timer de bouton (le plus fiable pour les clics directs sur les boutons)
+        if (Time.time - lastUIClickTime < 0.4f) return true;
+
+        Vector2 guiPos = new Vector2(screenPos.x, Screen.height - screenPos.y);
+        float uiScale = Mathf.Clamp(Screen.width / 480f, 1.35f, 2.2f);
+        
+        // Marge de sécurité de 5 pixels (virtuels)
+        float margin = 5f * uiScale;
+
+        Rect mainBtn = new Rect((15 * uiScale) - margin, (15 * uiScale) - margin, (230 * uiScale) + margin*2, (44 * uiScale) + margin*2);
+        if (mainBtn.Contains(guiPos)) return true;
+        
+        if (isPanelOpen) 
+        {
+            Rect panelArea = new Rect((15 * uiScale) - margin, (65 * uiScale) - margin, (250 * uiScale) + margin*2, (430 * uiScale) + margin*2);
+            if (panelArea.Contains(guiPos)) return true;
+        }
+        
+        return false;
     }
 }

@@ -1,10 +1,19 @@
 # ninja log v5
 69	4646	8084143132774075	GameActivity/CMakeFiles/game.dir/UGAEntry.cpp.o	ca3a32bf58149acc
+112	5182	8084143139315198	GameActivity/CMakeFiles/game.dir/UGASoftKeyboard.cpp.o	c800ed686755ac62
 18	4667	8084143133337375	GameActivity/CMakeFiles/game.dir/UGAConfiguration.cpp.o	f06f201f95f940aa
+5513	5713	8084143144721033	E:/streetact/My project/Library/Bee/Android/Prj/IL2CPP/Gradle/unityLibrary/build/intermediates/cxx/RelWithDebInfo/2n3wr581/obj/arm64-v8a/libgame.so	fe1c8fc21195629b
+1	4962	8084143136935304	GameActivity/CMakeFiles/game.dir/UGADebug.cpp.o	568a336d2e083bb4
 129	4670	8084143133813728	GameActivity/CMakeFiles/game.dir/UGAInputMotionEvent.cpp.o	5926df6bdf729dff
 52	4731	8084143134582858	GameActivity/CMakeFiles/game.dir/UGAInputKeyEvent.cpp.o	c4490fc577f8f0a2
-1	4962	8084143136935304	GameActivity/CMakeFiles/game.dir/UGADebug.cpp.o	568a336d2e083bb4
-112	5182	8084143139315198	GameActivity/CMakeFiles/game.dir/UGASoftKeyboard.cpp.o	c800ed686755ac62
 92	5224	8084143139730693	GameActivity/CMakeFiles/game.dir/UGAInput.cpp.o	a57eb78ec460644d
 34	5513	8084143142657548	GameActivity/CMakeFiles/game.dir/UGAApplication.cpp.o	b8cd899f119d3511
-5513	5713	8084143144721033	E:/streetact/My project/Library/Bee/Android/Prj/IL2CPP/Gradle/unityLibrary/build/intermediates/cxx/RelWithDebInfo/2n3wr581/obj/arm64-v8a/libgame.so	fe1c8fc21195629b
+62	2695	8085886817090909	GameActivity/CMakeFiles/game.dir/UGAInputKeyEvent.cpp.o	c4490fc577f8f0a2
+17	2698	8085886817182641	GameActivity/CMakeFiles/game.dir/UGAEntry.cpp.o	ca3a32bf58149acc
+42	2750	8085886817781306	GameActivity/CMakeFiles/game.dir/UGAConfiguration.cpp.o	f06f201f95f940aa
+86	2782	8085886818102886	GameActivity/CMakeFiles/game.dir/UGAInputMotionEvent.cpp.o	5926df6bdf729dff
+25	2882	8085886819092117	GameActivity/CMakeFiles/game.dir/UGADebug.cpp.o	568a336d2e083bb4
+52	3106	8085886821400153	GameActivity/CMakeFiles/game.dir/UGASoftKeyboard.cpp.o	c800ed686755ac62
+74	3186	8085886822209640	GameActivity/CMakeFiles/game.dir/UGAInput.cpp.o	a57eb78ec460644d
+8	3305	8085886823402463	GameActivity/CMakeFiles/game.dir/UGAApplication.cpp.o	b8cd899f119d3511
+3306	3490	8085886825293564	E:/streetact/My project/Library/Bee/Android/Prj/IL2CPP/Gradle/unityLibrary/build/intermediates/cxx/RelWithDebInfo/2n3wr581/obj/arm64-v8a/libgame.so	fe1c8fc21195629b

@@ -81,3 +81,75 @@ Trois éléments critiques ont été corrigés pour assurer que le NavMesh conto
 1. **La hauteur du Plancher (Floor) pour le Voxelizer** : Le NavMesh d'Unity "scanne" la scène en voxels (souvent 0.2m de haut). Si le sol interne d'un bâtiment est trop proche du sol de la carte (`Sol`), le Voxelizer les fusionne et rend le bâtiment franchissable. Le sol interne a été remonté à `Y = 1.0m` pour garantir qu'Unity détecte la coupure, tout en empêchant les agents de passer en dessous (hauteur de 1.1m < agent de 2.0m).
 2. **Le Static Batching** : Lors de la génération procédurale, assigner `isStatic = true` aux bâtiments verrouille l'accès en lecture à leurs meshes (Combined Mesh) au lancement du mode Play. Le `NavMeshSurface` ne pouvant pas les lire, il les ignorait. Les bâtiments ne doivent **pas** être marqués comme statiques via script.
 3. **Synchronisation (Race Condition)** : Si l'agent IA cherche un chemin avant que les bâtiments (qui se téléchargent depuis internet) n'apparaissent et que le NavMesh ne soit mis à jour, l'agent marchera à travers eux. Le flux a été repensé pour que `CityGenerator` lance le téléchargement, attende le `Sol`, cuise (bake) le NavMesh *complet*, puis seulement déclenche un événement `OnNavMeshReady()` autorisant les unités à se déplacer.
+
+---
+
+## 5. Système de Caméra & Gamification à 2 Niveaux Stricts
+
+Pour garantir une lisibilité absolue et des performances mobiles optimales (60 FPS constants sans surchauffe), le jeu applique une séparation radicale en **2 états de vue stricts**, sans zoom fluide intermédiaire :
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 VUE COMMANDEMENT (2D GLOBALE)               │
+│  - Projection : Orthographique stricte (Size = 38)          │
+│  - Angle : 90° Top-Down vertical                            │
+│  - Rendu : Carte Sol OSM + Polygones 2D Bâtiments           │
+│  - Unités : Remplacées par Icônes Tactiques Militaires HD   │
+│  - But : Macro-tactique, déplacement d'armée, vision globale│
+└──────────────────────────────┬──────────────────────────────┘
+                               │ Clic sur Unité + Bouton "ACTION 3D"
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   VUE ACTION (3D MICRO-GESTION)             │
+│  - Projection : Perspective isométrique (Dist = 25, Pitch = 45°) │
+│  - Cadrage : Centré sur l'unité sélectionnée                │
+│  - Rendu 3D : Bâtiments complets (murs, toits, ouvertures)  │
+│  - Bulle de vision : Brouillard sombre limitant à ~25-35m   │
+│  - Unités : Modèles 3D complets animés                      │
+│  - But : Infiltration de précision (portes, fenêtres, toits)│
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 6. Gamification de la Micro et Macro-Gestion
+
+### A. Phase Macro-Tactique (Vue 2D)
+- Le joueur analyse l'ensemble du champ de bataille sur la carte 2D.
+- Les unités sont représentées par des **insignes tactiques militaires procéduraux** (`UnitTacticalMarker.cs`) indiquant leur type (Fantassin, Char, Véhicule Canon, Mortier), leur camp (**Bleu** Joueur, **Rouge** Ennemi) et leur flèche d'orientation directionnelle.
+- Le joueur trace les trajectoires et sélectionne les escouades.
+
+### B. Phase Micro-Tactique & Gestes de Précision (Vue 3D)
+- Lorsqu'une escouade atteint une zone chaude, le joueur appuie sur le bouton **"🔍 ACTION 3D"**.
+- La caméra plonge à 25m avec un angle isométrique immersif de 45°.
+- Le joueur peut alors ordonner des gestes de haute précision :
+  - **Infiltration de porte** : Entrer dans un bâtiment pour s'abriter.
+  - **Occupation de fenêtre** : Positionner un tireur d'élite en meurtrière pour couvrir une intersection.
+  - **Accès toiture (Échelle)** : Grimper sur le toit pour établir un poste de guet avec un champ de tir à 360°.
+- Le bouton **"🗺️ RETOUR 2D"** en haut à droite permet de remonter instantanément en vue d'ensemble.
+
+---
+
+## 7. Architecture de Rendu & Streaming 3D (`TacticalStreamingManager`)
+
+1. **Polygones 2D au Sol (`Footprint_2D`)** :
+   - `CityGenerator.cs` génère pour chaque bâtiment un polygone plat au sol (`y = 0.08m`) avec un matériau ardoise tactique haute lisibilité (`SafeMaterialFactory.CreateUnlit`).
+   - Ces polygones restent **toujours actifs** pour dessiner les silhouettes précises de la ville en 2D sans charger la carte graphique.
+
+2. **Streaming Dynamique Localisé** :
+   - Les toits 3D, murs 3D, fenêtres et portes ont leur `MeshRenderer.enabled = false` au démarrage.
+   - En vue 3D, `TacticalStreamingManager.cs` allume uniquement les éléments 3D des bâtiments situés dans un rayon de **35 mètres** autour de l'unité active.
+   - Dès qu'un bâtiment sort du rayon de 35m (ou lors du retour en 2D), ses composants 3D sont instantanément éteints.
+
+---
+
+## 8. Optimisations Mobiles Critiques (Zéro-Lag)
+
+| Composant | Optimisation Appliquée | Bénéfice Performance |
+| :--- | :--- | :--- |
+| **Culling Masks** | Bascule binaire `mainCamera.cullingMask` entre `Units_3D` et `Units_UI_Markers` | Évite des centaines de `GameObject.SetActive()` et le recalcul de la hiérarchie. |
+| **Animator Culling** | `AnimatorCullingMode.CullUpdateTransforms` sur toutes les unités | Le CPU ne calcule plus l'animation des os et le skinning quand les modèles 3D sont masqués en 2D. |
+| **TacticalVisibility** | Suppression du polling lourd sur 500 bâtiments et blocage de l'activation des toits en 2D | Élimine ~40 000 tests géométriques inutiles par seconde et empêche l'activation intempestive des 500 toits 3D. |
+| **SafeMaterialFactory** | Centralisation de la création de matériaux Unlit / Lit avec fallbacks | Résolution définitive des exceptions `ArgumentNullException` à l'exécution. |
+| **TacticalRadarUI** | Rendu mathématique matriciel local `GUI.matrix` | Centrage exact du faisceau sonar sans dérive de pivot sur toutes les résolutions d'écran. |
+

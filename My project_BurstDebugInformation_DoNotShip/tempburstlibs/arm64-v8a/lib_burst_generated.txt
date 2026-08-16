@@ -10,6 +10,7 @@ Library: E:\streetact\My project\Temp\BurstOutput\tempburstlibs\arm64-v8a\lib_bu
 --target-framework=NetFramework
 --generate-link-xml=Temp\burst.link.xml
 --temp-folder=E:\streetact\My project\Temp\Burst
+--debug=Full
 --key-folder=C:/Program Files/Unity/Hub/Editor/6000.5.8f1/Editor/Data/PlaybackEngines/AndroidPlayer
 --decode-folder=E:\streetact\My project\Library\Burst
 --output=E:\streetact\My project\Temp\BurstOutput\tempburstlibs\arm64-v8a\lib_burst_generated
@@ -120,6 +121,7 @@ Library: E:\streetact\My project\Temp\BurstOutput\tempburstlibs\arm64-v8a\lib_bu
 --float-mode=Fast
 --generate-link-xml=Temp\burst.link.xml
 --temp-folder=E:\streetact\My project\Temp\Burst
+--debug=Full
 --key-folder=C:/Program Files/Unity/Hub/Editor/6000.5.8f1/Editor/Data/PlaybackEngines/AndroidPlayer
 --decode-folder=E:\streetact\My project\Library\Burst
 --output=E:\streetact\My project\Temp\BurstOutput\tempburstlibs\arm64-v8a\lib_burst_generated

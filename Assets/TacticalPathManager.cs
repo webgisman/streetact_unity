@@ -25,8 +25,9 @@ public class TacticalPathManager : MonoBehaviour
     public GameObject uniteSelectionnee;
     private Vector3 positionClicTemporaire;
     private StreetAct.Interaction.DoorInteraction selectedDoor = null;
-    private StreetAct.Interaction.DoorInteraction lastHoveredDoor = null;
     private StreetAct.Interaction.WindowInteraction selectedWindow = null;
+    private BuildingStructure selectedBuilding = null;
+    private bool isBuildingSelected = false;
     private bool isDoorSelected = false;
     private bool isWindowSelected = false;
     private bool isExitDoorAction = false;
@@ -41,6 +42,15 @@ public class TacticalPathManager : MonoBehaviour
     private readonly List<Vector3> cachedLinePoints = new List<Vector3>();
     private UnityEngine.AI.NavMeshPath cachedNavPath;
     private Gradient cachedPathGradient;
+    private static Gradient selectedGradient;
+    private static Gradient normalGradient;
+    private static bool isPathsDirty = true;
+
+    public static void SetPathsDirty() { isPathsDirty = true; }
+
+    // Tracking for Tap vs Drag
+    private Vector2 pointerDownPos;
+    private bool isPointerDown = false;
 
     public static TacticalPathManager Instance { get; private set; }
 
@@ -102,23 +112,63 @@ public class TacticalPathManager : MonoBehaviour
         // Bloquer l'assignation de nouveaux ordres pendant l'exécution ou pendant le placement d'unités
         if (phaseActuelle == GamePhase.Execution || UnitSpawnerUI.IsPlacingUnit) return;
 
-        // Gestion de l'affichage simultané des trajectoires de toutes les unités
-        DessinerTousLesChemins();
+        // Tracé fluide et ultra-léger (recalculé uniquement si dirty ou en phase dynamique)
+        if (isPathsDirty || phaseActuelle == GamePhase.CreationPath)
+        {
+            DessinerTousLesChemins();
+        }
 
-        // 1. Si le menu est ouvert ou qu'on interagit avec l'UI, on bloque le reste
-        if (menuPanel != null && menuPanel.activeSelf || EventSystem.current.IsPointerOverGameObject()) return;
+        // 1. Si le panneau d'action (porte/fenêtre/bâtiment) est ouvert, on attend l'interaction du joueur
+        if (menuPanel != null && menuPanel.activeSelf) return;
 
-        Vector2 pointerPosition = (Pointer.current != null) ? Pointer.current.position.ReadValue() : Vector2.zero;
+        // Lecture universelle du pointeur (Tactile Mobile & Souris PC)
+        Vector2 pointerPosition = Vector2.zero;
+        bool isPointerActive = false;
+        bool wasPressed = false;
+        bool wasReleased = false;
+
+        if (Touchscreen.current != null && Touchscreen.current.touches.Count > 0)
+        {
+            var touch = Touchscreen.current.touches[0];
+            pointerPosition = touch.position.ReadValue();
+            isPointerActive = true;
+            wasPressed = touch.press.wasPressedThisFrame;
+            wasReleased = touch.press.wasReleasedThisFrame;
+        }
+        else if (Input.touchCount > 0)
+        {
+            Touch t = Input.GetTouch(0);
+            pointerPosition = t.position;
+            isPointerActive = true;
+            wasPressed = (t.phase == UnityEngine.TouchPhase.Began);
+            wasReleased = (t.phase == UnityEngine.TouchPhase.Ended);
+        }
+        else if (Pointer.current != null)
+        {
+            pointerPosition = Pointer.current.position.ReadValue();
+            isPointerActive = true;
+            wasPressed = Pointer.current.press.wasPressedThisFrame;
+            wasReleased = Pointer.current.press.wasReleasedThisFrame;
+        }
+        else if (Input.mousePresent)
+        {
+            pointerPosition = Input.mousePosition;
+            isPointerActive = true;
+            wasPressed = Input.GetMouseButtonDown(0);
+            wasReleased = Input.GetMouseButtonUp(0);
+        }
+
         Vector2 guiMousePos = new Vector2(pointerPosition.x, Screen.height - pointerPosition.y);
         Rect endTurnRect = new Rect(Screen.width - 220, Screen.height - 80, 200, 60);
 
         // Clic Droit : Annulation rapide du menu ou du dernier checkpoint
         if (Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame)
         {
-            if (isDoorSelected || isWindowSelected || isGroundCheckpointSelected)
+            if (isDoorSelected || isWindowSelected || isBuildingSelected || isGroundCheckpointSelected)
             {
                 isDoorSelected = false;
                 isWindowSelected = false;
+                isBuildingSelected = false;
                 isGroundCheckpointSelected = false;
                 activeMenuRect = Rect.zero;
                 return;
@@ -138,311 +188,269 @@ public class TacticalPathManager : MonoBehaviour
 
         bool isActionClick = false;
 
-        // --- SURVOL TACTIQUE DES PORTES ET FENÊTRES (HOVER HIGHLIGHT) ---
-        if (phaseActuelle == GamePhase.Planification && uniteSelectionnee != null && !EventSystem.current.IsPointerOverGameObject())
+        // --- Clic Gauche ou Touch : Sélection ou Action (TAP ou CLIC DIRECT) ---
+        if (isPointerActive)
         {
-            Ray hoverRay = Camera.main.ScreenPointToRay(pointerPosition);
-            if (Physics.Raycast(hoverRay, out RaycastHit hoverHit, 500f))
+            if (wasPressed)
             {
-                StreetAct.Interaction.DoorInteraction hoveredDoor = hoverHit.collider.GetComponent<StreetAct.Interaction.DoorInteraction>()
-                                                                  ?? hoverHit.collider.GetComponentInParent<StreetAct.Interaction.DoorInteraction>();
-                
-                if (hoveredDoor == null)
+                isPointerDown = true;
+                pointerDownPos = pointerPosition;
+                // Sur PC (souris), le clic est immédiat à l'appui
+                if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
                 {
-                    BuildingStructure bStruct = hoverHit.collider.GetComponentInParent<BuildingStructure>();
-                    if (bStruct != null && hoverHit.point.y < 3.2f)
-                    {
-                        hoveredDoor = bStruct.GetClosestDoorInteraction(hoverHit.point, 3.5f);
-                    }
+                    isActionClick = true;
                 }
-
-                if (lastHoveredDoor != hoveredDoor)
+                else if (Input.GetMouseButtonDown(0))
                 {
-                    if (lastHoveredDoor != null) lastHoveredDoor.SetHighlight(false);
-                    if (hoveredDoor != null) hoveredDoor.SetHighlight(true);
-                    lastHoveredDoor = hoveredDoor;
+                    isActionClick = true;
                 }
             }
-            else if (lastHoveredDoor != null)
+            else if (wasReleased && isPointerDown)
             {
-                lastHoveredDoor.SetHighlight(false);
-                lastHoveredDoor = null;
+                isPointerDown = false;
+                // Sur Mobile (Touch), déclenchement au relâchement si peu de déplacement
+                if (Vector2.Distance(pointerDownPos, pointerPosition) < 45f)
+                {
+                    isActionClick = true;
+                }
             }
-        }
-
-        // --- Clic Gauche ou Touch : Sélection ou Action ---
-        if (Pointer.current != null && Pointer.current.press.wasPressedThisFrame)
-        {
-            if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame) isActionClick = true;
-            else if (Touchscreen.current != null && Touchscreen.current.primaryTouch.press.wasPressedThisFrame) isActionClick = true;
-            else if (Mouse.current == null && Touchscreen.current == null) isActionClick = true;
         }
 
         if (isActionClick)
         {
-            // Vérifier si la souris est sur l'UI (Menu actif ou bouton Fin de Tour) -> bloquer le raycast !
-            if (EventSystem.current.IsPointerOverGameObject()) return;
+            // Bloquer si le joueur est en train de déployer une nouvelle unité depuis le QG
+            if (UnitSpawnerUI.IsPlacingUnit) return;
+
+            // Vérifier si le clic est sur un bouton spécifique de l'interface
             if (activeMenuRect != Rect.zero && activeMenuRect.Contains(guiMousePos)) return;
             if (endTurnRect.Contains(guiMousePos)) return;
+            if (UnitSpawnerUI.Instance != null && UnitSpawnerUI.Instance.IsPointerOverOnGUI(pointerPosition)) return;
+
+            // 1. Détection ultra-tolérante des unités en espace écran (Mobile Forgiving Touch)
+            UnitAI closestUnit = null;
+            float maxTouchRadiusPx = 80f * (Screen.dpi > 0 ? Screen.dpi / 160f : 1.5f);
+            float closestScreenDist = maxTouchRadiusPx;
+
+            for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
+            {
+                UnitAI unit = UnitAI.AllLivingUnits[i];
+                if (unit != null && unit.isPlayerControlled && !unit.isDead)
+                {
+                    Vector3 screenPoint = Camera.main.WorldToScreenPoint(unit.transform.position + Vector3.up * 1.0f);
+                    if (screenPoint.z > 0) // Devant la caméra
+                    {
+                        float dist = Vector2.Distance(pointerPosition, new Vector2(screenPoint.x, screenPoint.y));
+                        if (dist < closestScreenDist)
+                        {
+                            closestScreenDist = dist;
+                            closestUnit = unit;
+                        }
+                    }
+                }
+            }
+
+            if (closestUnit != null)
+            {
+                if (menuPanel != null) menuPanel.SetActive(false);
+                isDoorSelected = false;
+                isWindowSelected = false;
+                isBuildingSelected = false;
+                isGroundCheckpointSelected = false;
+                activeMenuRect = Rect.zero;
+                phaseActuelle = GamePhase.Planification;
+                SelectionnerUnite(closestUnit.gameObject);
+                return;
+            }
 
             Ray ray = Camera.main.ScreenPointToRay(pointerPosition);
             RaycastHit hit;
+            Vector3 hitPoint = Vector3.zero;
+            bool hasHit = false;
 
             if (Physics.Raycast(ray, out hit))
             {
-                // 1. Détection 3D précise des unités (résolution de conflit Toit vs Intérieur)
-                UnitAI closestUnit = null;
-                float closestProj = float.MaxValue;
-
-                // Test direct sur le Collider de l'unité
-                UnitAI hitUnit = hit.collider.GetComponentInParent<UnitAI>();
-                if (hitUnit != null && hitUnit.isPlayerControlled && !hitUnit.isDead)
+                hitPoint = hit.point;
+                hasHit = true;
+            }
+            else
+            {
+                Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
+                if (groundPlane.Raycast(ray, out float enter))
                 {
-                    closestUnit = hitUnit;
+                    hitPoint = ray.GetPoint(enter);
+                    hasHit = true;
                 }
-                else
-                {
-                    for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
-                    {
-                        UnitAI unit = UnitAI.AllLivingUnits[i];
-                        if (unit != null && unit.isPlayerControlled && !unit.isDead)
-                        {
-                            Vector3 unitCenter = unit.transform.position + Vector3.up * 1.0f;
-                            Vector3 toUnit = unitCenter - ray.origin;
-                            float proj = Vector3.Dot(toUnit, ray.direction);
-                            
-                            if (proj > 0)
-                            {
-                                Vector3 pointOnRay = ray.origin + ray.direction * proj;
-                                float distToRay = Vector3.Distance(pointOnRay, unitCenter);
-                                if (distToRay < 1.8f)
-                                {
-                                    // Donne la priorité absolue à l'unité la plus proche de la caméra (au premier plan / sur le toit)
-                                    if (proj < closestProj)
-                                    {
-                                        closestProj = proj;
-                                        closestUnit = unit;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            }
 
-                if (closestUnit != null)
+            if (hasHit && phaseActuelle == GamePhase.Planification && uniteSelectionnee != null)
+            {
+                UnitAI unitAI = uniteSelectionnee.GetComponent<UnitAI>();
+
+                // 0. Mortier / Artillerie : tout clic est une cible de tir direct
+                if (unitAI != null && unitAI.isMortar)
                 {
-                    if (menuPanel != null) menuPanel.SetActive(false);
+                    positionClicTemporaire = hitPoint;
+                    isBuildingSelected = false;
                     isDoorSelected = false;
                     isWindowSelected = false;
-                    isGroundCheckpointSelected = false;
-                    activeMenuRect = Rect.zero;
-                    phaseActuelle = GamePhase.Planification;
-                    SelectionnerUnite(closestUnit.gameObject);
+                    isGroundCheckpointSelected = true;
+
+                    AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+                    if (menuPanel != null) menuPanel.SetActive(false);
+                    return;
                 }
-                else if (phaseActuelle == GamePhase.Planification && uniteSelectionnee != null)
+
+                // 1. Détection clic sur porte
+                StreetAct.Interaction.DoorInteraction clickedDoor = null;
+                if (hit.collider != null)
                 {
-                    UnitAI unitAI = uniteSelectionnee.GetComponent<UnitAI>();
+                    clickedDoor = hit.collider.GetComponent<StreetAct.Interaction.DoorInteraction>() 
+                               ?? hit.collider.GetComponentInParent<StreetAct.Interaction.DoorInteraction>();
+                }
 
-                    // 0. Si l'unité est une unité de Mortier / Artillerie, tout clic (bâtiment, toit, sol) est une coordonnée de bombardement ciblable
-                    if (unitAI != null && unitAI.isMortar)
+                if (clickedDoor != null)
+                {
+                    if (unitAI != null && unitAI.isTank)
                     {
-                        positionClicTemporaire = hit.point;
-                        isDoorSelected = false;
-                        isWindowSelected = false;
-                        isGroundCheckpointSelected = true;
-
-                        AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-                        if (menuPanel != null) menuPanel.SetActive(false);
-                        return;
-                    }
-                    
-                    // 2. Détection du clic sur une porte d'entrée / sortie
-                    StreetAct.Interaction.DoorInteraction clickedDoor = hit.collider.GetComponent<StreetAct.Interaction.DoorInteraction>() 
-                                                                      ?? hit.collider.GetComponentInParent<StreetAct.Interaction.DoorInteraction>();
-
-                    if (clickedDoor == null)
-                    {
-                        BuildingStructure bStruct = hit.collider.GetComponentInParent<BuildingStructure>();
-                        if (bStruct != null && hit.point.y < 3.2f)
-                        {
-                            clickedDoor = bStruct.GetClosestDoorInteraction(hit.point, 3.5f);
-                        }
-                    }
-
-                    if (clickedDoor != null)
-                    {
-                        if (unitAI != null && unitAI.isTank)
-                        {
-                            Debug.LogWarning("[TacticalPathManager] Les véhicules blindés ne peuvent pas entrer dans les bâtiments !");
-                            AudioClip errClip = ProceduralAudioBuilder.CreateErrorSound();
-                            if (errClip != null) AudioSource.PlayClipAtPoint(errClip, Camera.main.transform.position);
-                            return;
-                        }
-
-                        selectedDoor = clickedDoor;
-                        selectedWindow = null;
-                        isDoorSelected = true;
-                        isWindowSelected = false;
-                        clickedDoor.SetHighlight(true);
-
-                        // Ouvrir immédiatement le toit pour visualiser l'intérieur
-                        if (clickedDoor.building != null && clickedDoor.building.tacticalVisibility != null)
-                        {
-                            clickedDoor.building.tacticalVisibility.SetPlanificationPreview(true);
-                        }
-
-                        // Si le soldat est déjà à l'intérieur, options Sortir / Guetter / Checkpoint
-                        if (unitAI != null && unitAI.currentBuilding == clickedDoor.building)
-                        {
-                            isExitDoorAction = true;
-                            positionClicTemporaire = clickedDoor.GetOutsidePosition();
-                            Debug.Log($"<color=cyan>[TacticalPathManager] Porte ciblée depuis l'intérieur : {clickedDoor.building.gameObject.name} !</color>");
-                        }
-                        else
-                        {
-                            isExitDoorAction = false;
-                            positionClicTemporaire = clickedDoor.doorData.position;
-                            Debug.Log($"<color=cyan>[TacticalPathManager] Porte ciblée depuis la rue : {clickedDoor.building.gameObject.name} !</color>");
-                        }
-
-                        AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-
-                        if (menuPanel != null) menuPanel.SetActive(false);
-                        return;
-                    }
-
-                    // 3. Détection du clic sur une fenêtre (depuis l'intérieur ou l'extérieur)
-                    StreetAct.Interaction.WindowInteraction clickedWindow = hit.collider.GetComponent<StreetAct.Interaction.WindowInteraction>() 
-                                                                          ?? hit.collider.GetComponentInParent<StreetAct.Interaction.WindowInteraction>();
-
-                    if (clickedWindow != null)
-                    {
-                        if (unitAI != null && unitAI.isTank)
-                        {
-                            Debug.LogWarning("[TacticalPathManager] Les chars et véhicules ne peuvent pas utiliser les fenêtres !");
-                            AudioClip errClip = ProceduralAudioBuilder.CreateErrorSound();
-                            if (errClip != null) AudioSource.PlayClipAtPoint(errClip, Camera.main.transform.position);
-                            return;
-                        }
-
-                        selectedWindow = clickedWindow;
-                        selectedDoor = null;
-                        isWindowSelected = true;
-                        isDoorSelected = false;
-                        positionClicTemporaire = clickedWindow.GetInteriorStancePosition();
-
-                        AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-                        Debug.Log($"<color=orange>[TacticalPathManager] Fenêtre ciblée : Prêt pour le tir et couverture dans {clickedWindow.building.gameObject.name} !</color>");
-
-                        if (menuPanel != null) menuPanel.SetActive(false);
-                        return;
-                    }
-
-                    BuildingStructure structure = hit.collider.GetComponentInParent<BuildingStructure>();
-
-                    // Si on a cliqué sur un bâtiment
-                    if (structure != null)
-                    {
-                        if (unitAI != null && unitAI.isTank)
-                        {
-                            Debug.LogWarning("[TacticalPathManager] Les chars et véhicules ne peuvent pas entrer dans les bâtiments !");
-                            AudioClip errClip = ProceduralAudioBuilder.CreateErrorSound();
-                            if (errClip != null) AudioSource.PlayClipAtPoint(errClip, Camera.main.transform.position);
-                            return;
-                        }
-
-                        // Clic sur une fenêtre ou façade (entre 0.5m et la hauteur max)
-                        if (hit.point.y > 0.5f && hit.point.y < hit.collider.bounds.max.y - 0.5f)
-                        {
-                            BuildingStructure.BuildingWindow bestWin = structure.GetClosestWindow(hit.point);
-                            if (bestWin != null)
-                            {
-                                positionClicTemporaire = bestWin.position;
-                                isDoorSelected = false;
-                                isWindowSelected = false;
-                                if (menuPanel != null)
-                                {
-                                    StopAllCoroutines();
-                                    StartCoroutine(AnimateMenuBounce());
-                                }
-                                return;
-                            }
-                        }
-                    }
-
-                    bool isUnitPlanningInside = (unitAI != null && (unitAI.currentBuilding != null || (unitAI.tacticalPath.Count > 0 && unitAI.tacticalPath[unitAI.tacticalPath.Count - 1].action == NodeAction.EntrerBatiment)));
-                    bool isSelectedOnRoof = (unitAI != null && (unitAI.isRooftopSniper || unitAI.transform.position.y > 2.2f));
-
-                    bool isClickOnRoof = hit.point.y > 1.8f;
-                    if (isUnitPlanningInside && !isSelectedOnRoof)
-                    {
-                        isClickOnRoof = false; // Clic au sol à l'intérieur du bâtiment
-                    }
-
-                    // Si le soldat est déjà sur le toit et clique sur un bâtiment dont le toit est transparent
-                    if (isSelectedOnRoof && !isClickOnRoof)
-                    {
-                        BuildingStructure hitBldg = hit.collider.GetComponentInParent<BuildingStructure>();
-                        if (hitBldg != null)
-                        {
-                            Collider bCol = hitBldg.GetComponent<Collider>();
-                            if (bCol != null && bCol.bounds.size.y > 3.5f)
-                            {
-                                isClickOnRoof = true;
-                                hit.point = new Vector3(hit.point.x, bCol.bounds.max.y, hit.point.z);
-                            }
-                        }
-                    }
-
-                    bool isRubblePoint = DestructibleEnvironment.IsPositionInRubble(hit.point);
-                    if (isRubblePoint) isClickOnRoof = false; // Les ruines sont au ras du sol
-
-                    // Restriction : Les véhicules blindés ne peuvent pas monter sur les toits intacts
-                    if (isClickOnRoof && !isRubblePoint && unitAI != null && unitAI.isTank)
-                    {
-                        Debug.LogWarning("[TacticalPathManager] Les chars et véhicules ne peuvent pas monter sur les toits !");
+                        Debug.LogWarning("[TacticalPathManager] Les blindés ne peuvent pas entrer dans les bâtiments !");
                         AudioClip errClip = ProceduralAudioBuilder.CreateErrorSound();
                         if (errClip != null) AudioSource.PlayClipAtPoint(errClip, Camera.main.transform.position);
                         return;
                     }
 
-                    // Accepter le point s'il est sur le NavMesh, sur un toit, à l'intérieur ou sur des ruines
-                    UnityEngine.AI.NavMeshHit navHit;
-                    bool hasNavMesh = UnityEngine.AI.NavMesh.SamplePosition(hit.point, out navHit, 4.5f, UnityEngine.AI.NavMesh.AllAreas);
+                    selectedDoor = clickedDoor;
+                    selectedWindow = null;
+                    selectedBuilding = null;
+                    isBuildingSelected = false;
+                    isDoorSelected = true;
+                    isWindowSelected = false;
+                    isGroundCheckpointSelected = false;
+                    clickedDoor.SetHighlight(true);
 
-                    if (hasNavMesh || isClickOnRoof || isUnitPlanningInside || isRubblePoint)
+                    if (clickedDoor.building != null && clickedDoor.building.tacticalVisibility != null)
                     {
-                        if (isClickOnRoof && !isRubblePoint) positionClicTemporaire = hit.point;
-                        else if (isUnitPlanningInside || isRubblePoint) positionClicTemporaire = new Vector3(hit.point.x, 0.05f, hit.point.z);
-                        else positionClicTemporaire = navHit.position;
+                        clickedDoor.building.tacticalVisibility.SetPlanificationPreview(true);
+                    }
 
-                        isDoorSelected = false;
-                        isWindowSelected = false;
-                        isGroundCheckpointSelected = true;
+                    if (unitAI != null && unitAI.currentBuilding == clickedDoor.building)
+                    {
+                        isExitDoorAction = true;
+                        positionClicTemporaire = clickedDoor.GetOutsidePosition();
+                    }
+                    else
+                    {
+                        isExitDoorAction = false;
+                        positionClicTemporaire = clickedDoor.doorData.position;
+                    }
 
-                        // Vérification si le soldat est collé à un mur (< 2.2m d'un bâtiment)
-                        isNearBuildingWall = false;
-                        if (!isClickOnRoof && !isUnitPlanningInside)
+                    AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+                    if (menuPanel != null) menuPanel.SetActive(false);
+                    return;
+                }
+
+                // 2. Détection clic sur fenêtre
+                StreetAct.Interaction.WindowInteraction clickedWindow = null;
+                if (hit.collider != null)
+                {
+                    clickedWindow = hit.collider.GetComponent<StreetAct.Interaction.WindowInteraction>() 
+                                 ?? hit.collider.GetComponentInParent<StreetAct.Interaction.WindowInteraction>();
+                }
+
+                if (clickedWindow != null)
+                {
+                    if (unitAI != null && unitAI.isTank)
+                    {
+                        Debug.LogWarning("[TacticalPathManager] Les blindés ne peuvent pas utiliser les fenêtres !");
+                        AudioClip errClip = ProceduralAudioBuilder.CreateErrorSound();
+                        if (errClip != null) AudioSource.PlayClipAtPoint(errClip, Camera.main.transform.position);
+                        return;
+                    }
+
+                    selectedWindow = clickedWindow;
+                    selectedDoor = null;
+                    selectedBuilding = null;
+                    isBuildingSelected = false;
+                    isWindowSelected = true;
+                    isDoorSelected = false;
+                    isGroundCheckpointSelected = false;
+                    positionClicTemporaire = clickedWindow.GetInteriorStancePosition();
+
+                    AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+                    if (menuPanel != null) menuPanel.SetActive(false);
+                    return;
+                }
+
+                // 3. Détection Polygone de Bâtiment 2D/3D (Intact vs Ruines)
+                BuildingStructure structure = BuildingStructure.FindBuildingAt(hitPoint);
+                if (structure == null && hit.collider != null)
+                {
+                    structure = hit.collider.GetComponentInParent<BuildingStructure>();
+                }
+
+                bool isRubblePoint = DestructibleEnvironment.IsPositionInRubble(hitPoint) ||
+                                     (structure != null && structure.GetComponent<DestructibleEnvironment>() != null && structure.GetComponent<DestructibleEnvironment>().isDestroyed);
+
+                // CAS BÂTIMENT INTACT : L'infanterie tape dans le polygone
+                if (structure != null && !isRubblePoint)
+                {
+                    if (unitAI != null && unitAI.isTank)
+                    {
+                        Debug.LogWarning("[TacticalPathManager] Les chars ne peuvent pas entrer dans les bâtiments intacts !");
+                        AudioClip errClip = ProceduralAudioBuilder.CreateErrorSound();
+                        if (errClip != null) AudioSource.PlayClipAtPoint(errClip, Camera.main.transform.position);
+                        return;
+                    }
+
+                    selectedBuilding = structure;
+                    selectedDoor = null;
+                    selectedWindow = null;
+                    isBuildingSelected = true;
+                    isDoorSelected = false;
+                    isWindowSelected = false;
+                    isGroundCheckpointSelected = false;
+                    positionClicTemporaire = hitPoint;
+
+                    AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+                    if (menuPanel != null) menuPanel.SetActive(false);
+                    return;
+                }
+
+                // CAS SOL NORMAL / RUINES / TOIT EXISTANT
+                bool isUnitPlanningInside = (unitAI != null && (unitAI.currentBuilding != null || (unitAI.tacticalPath.Count > 0 && unitAI.tacticalPath[unitAI.tacticalPath.Count - 1].action == NodeAction.EntrerBatiment)));
+                bool isSelectedOnRoof = (unitAI != null && (unitAI.isRooftopSniper || unitAI.transform.position.y > 2.2f));
+
+                UnityEngine.AI.NavMeshHit navHit;
+                bool hasNavMesh = UnityEngine.AI.NavMesh.SamplePosition(hitPoint, out navHit, 4.5f, UnityEngine.AI.NavMesh.AllAreas);
+
+                if (hasNavMesh || isUnitPlanningInside || isRubblePoint || isSelectedOnRoof)
+                {
+                    if (isRubblePoint || isUnitPlanningInside) positionClicTemporaire = new Vector3(hitPoint.x, 0.05f, hitPoint.z);
+                    else if (isSelectedOnRoof) positionClicTemporaire = hitPoint;
+                    else positionClicTemporaire = navHit.position;
+
+                    isBuildingSelected = false;
+                    selectedBuilding = null;
+                    isDoorSelected = false;
+                    isWindowSelected = false;
+                    isGroundCheckpointSelected = true;
+
+                    isNearBuildingWall = false;
+                    if (!isSelectedOnRoof && !isUnitPlanningInside)
+                    {
+                        Collider[] nearby = Physics.OverlapSphere(positionClicTemporaire, 2.2f);
+                        foreach (var c in nearby)
                         {
-                            Collider[] nearby = Physics.OverlapSphere(positionClicTemporaire, 2.2f);
-                            foreach (var c in nearby)
+                            if (c.GetComponentInParent<BuildingStructure>() != null || c.gameObject.name.Contains("Building") || c.gameObject.name.Contains("Mur") || c.gameObject.name.Contains("Wall") || c.gameObject.name.Contains("Polygone"))
                             {
-                                if (c.GetComponentInParent<BuildingStructure>() != null || c.gameObject.name.Contains("Building") || c.gameObject.name.Contains("Mur") || c.gameObject.name.Contains("Wall") || c.gameObject.name.Contains("Polygone"))
-                                {
-                                    isNearBuildingWall = true;
-                                    break;
-                                }
+                                isNearBuildingWall = true;
+                                break;
                             }
                         }
-
-                        AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-                        if (menuPanel != null) menuPanel.SetActive(false);
                     }
+
+                    AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+                    if (menuPanel != null) menuPanel.SetActive(false);
                 }
-            }
-            else
-            {
-                Debug.Log("[TacticalPathManager] Le Raycast n'a touché aucun collider (le sol manque-t-il d'un MeshCollider ?).");
             }
         }
     }
@@ -455,6 +463,13 @@ public class TacticalPathManager : MonoBehaviour
             UnitAI ancienneUnitAI = uniteSelectionnee.GetComponent<UnitAI>();
             if (ancienneUnitAI != null) ancienneUnitAI.SetSelected(false);
         }
+
+        isBuildingSelected = false;
+        selectedBuilding = null;
+        isDoorSelected = false;
+        isWindowSelected = false;
+        isGroundCheckpointSelected = false;
+        activeMenuRect = Rect.zero;
 
         uniteSelectionnee = unite;
 
@@ -479,6 +494,7 @@ public class TacticalPathManager : MonoBehaviour
                 // Son de sélection
                 AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateHoverSound(), Camera.main.transform.position);
                 Debug.Log("Unité sélectionnée : " + unite.name);
+                isPathsDirty = true;
             }
         }
         else
@@ -489,6 +505,7 @@ public class TacticalPathManager : MonoBehaviour
                 if (ancienneUnitAI != null) ancienneUnitAI.SetSelected(false);
             }
             uniteSelectionnee = null;
+            isPathsDirty = true;
 
             // Réinitialiser les previews de bâtiments non occupés
             foreach (var b in BuildingStructure.AllBuildings)
@@ -504,7 +521,7 @@ public class TacticalPathManager : MonoBehaviour
 
     private void DessinerTousLesChemins()
     {
-        if (phaseActuelle != GamePhase.Planification && phaseActuelle != GamePhase.CreationPath)
+        if (phaseActuelle != GamePhase.Planification && phaseActuelle != GamePhase.CreationPath && phaseActuelle != GamePhase.Execution)
         {
             for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
             {
@@ -513,6 +530,21 @@ public class TacticalPathManager : MonoBehaviour
             }
             if (lineRenderer != null) lineRenderer.positionCount = 0;
             return;
+        }
+
+        if (selectedGradient == null)
+        {
+            selectedGradient = new Gradient();
+            selectedGradient.SetKeys(
+                new GradientColorKey[] { new GradientColorKey(new Color(0f, 0.95f, 1f), 0.0f), new GradientColorKey(new Color(0f, 0.45f, 1f), 1.0f) },
+                new GradientAlphaKey[] { new GradientAlphaKey(1.0f, 0.0f), new GradientAlphaKey(0.85f, 1.0f) }
+            );
+
+            normalGradient = new Gradient();
+            normalGradient.SetKeys(
+                new GradientColorKey[] { new GradientColorKey(new Color(0.2f, 0.7f, 1f), 0.0f), new GradientColorKey(new Color(0.1f, 0.35f, 0.8f), 1.0f) },
+                new GradientAlphaKey[] { new GradientAlphaKey(0.65f, 0.0f), new GradientAlphaKey(0.40f, 1.0f) }
+            );
         }
 
         for (int uIdx = 0; uIdx < UnitAI.AllLivingUnits.Count; uIdx++)
@@ -537,94 +569,86 @@ public class TacticalPathManager : MonoBehaviour
             {
                 GameObject lineGo = new GameObject("TacticalLine_" + unitAI.name);
                 lineGo.transform.SetParent(unitAI.transform, false);
+                lineGo.layer = 0; // Layer par défaut (toujours visible pour Camera 2D et 3D)
                 unitAI.tacticalLineRenderer = lineGo.AddComponent<LineRenderer>();
                 
-                Shader sh = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Sprites/Default");
-                unitAI.tacticalLineRenderer.material = new Material(sh);
-                unitAI.tacticalLineRenderer.material.enableInstancing = true;
+                Material lineMat = SafeMaterialFactory.CreateUnlit(Color.white);
+                lineMat.enableInstancing = true;
+                unitAI.tacticalLineRenderer.sharedMaterial = lineMat;
             }
 
             LineRenderer lr = unitAI.tacticalLineRenderer;
-            lr.startWidth = isSelected ? 0.18f : 0.11f;
-            lr.endWidth = isSelected ? 0.08f : 0.04f;
+            lr.startWidth = isSelected ? 0.22f : 0.12f;
+            lr.endWidth = isSelected ? 0.10f : 0.05f;
+            lr.colorGradient = isSelected ? selectedGradient : normalGradient;
 
-            Gradient grad = new Gradient();
-            if (isSelected)
+            // Recalculer le chemin uniquement s'il est marqué 'dirty'
+            if (unitAI.isPathDirty || isPathsDirty || unitAI.cachedDrawPoints.Count == 0 || (isSelected && positionClicTemporaire != Vector3.zero))
             {
-                grad.SetKeys(
-                    new GradientColorKey[] { new GradientColorKey(new Color(0f, 0.95f, 1f), 0.0f), new GradientColorKey(new Color(0f, 0.45f, 1f), 1.0f) },
-                    new GradientAlphaKey[] { new GradientAlphaKey(1.0f, 0.0f), new GradientAlphaKey(0.85f, 1.0f) }
-                );
-            }
-            else
-            {
-                grad.SetKeys(
-                    new GradientColorKey[] { new GradientColorKey(new Color(0.2f, 0.7f, 1f), 0.0f), new GradientColorKey(new Color(0.1f, 0.35f, 0.8f), 1.0f) },
-                    new GradientAlphaKey[] { new GradientAlphaKey(0.65f, 0.0f), new GradientAlphaKey(0.40f, 1.0f) }
-                );
-            }
-            lr.colorGradient = grad;
+                unitAI.cachedDrawPoints.Clear();
+                Vector3 positionCourante = unitAI.transform.position;
+                unitAI.cachedDrawPoints.Add(positionCourante + Vector3.up * 0.2f);
 
-            cachedLinePoints.Clear();
-            Vector3 positionCourante = unitAI.transform.position;
-            cachedLinePoints.Add(positionCourante + Vector3.up * 0.2f);
+                if (cachedNavPath == null) cachedNavPath = new UnityEngine.AI.NavMeshPath();
+                UnityEngine.AI.NavMeshAgent agent = unitAI.GetComponent<UnityEngine.AI.NavMeshAgent>();
+                int areaMask = (agent != null) ? agent.areaMask : UnityEngine.AI.NavMesh.AllAreas;
 
-            if (cachedNavPath == null) cachedNavPath = new UnityEngine.AI.NavMeshPath();
-            UnityEngine.AI.NavMeshAgent agent = unitAI.GetComponent<UnityEngine.AI.NavMeshAgent>();
-            int areaMask = (agent != null) ? agent.areaMask : UnityEngine.AI.NavMesh.AllAreas;
-
-            for (int i = unitAI.GetCurrentNodeIndex(); i < unitAI.tacticalPath.Count; i++)
-            {
-                Vector3 targetPos = unitAI.tacticalPath[i].position;
-                bool isNodeOnRoof = targetPos.y > 1.8f;
-
-                if (!isNodeOnRoof && UnityEngine.AI.NavMesh.SamplePosition(targetPos, out UnityEngine.AI.NavMeshHit hitTarget, 10f, areaMask))
+                for (int i = unitAI.GetCurrentNodeIndex(); i < unitAI.tacticalPath.Count; i++)
                 {
-                    targetPos = hitTarget.position;
-                }
+                    Vector3 targetPos = unitAI.tacticalPath[i].position;
+                    bool isNodeOnRoof = targetPos.y > 1.8f;
 
-                if (isNodeOnRoof || positionCourante.y > 1.8f || DestructibleEnvironment.IsPositionInRubble(targetPos))
-                {
-                    cachedLinePoints.Add(targetPos + Vector3.up * 0.2f);
-                    positionCourante = targetPos;
-                }
-                else if (UnityEngine.AI.NavMesh.CalculatePath(positionCourante, targetPos, areaMask, cachedNavPath) && cachedNavPath.corners.Length > 1)
-                {
-                    for (int j = 1; j < cachedNavPath.corners.Length; j++)
+                    if (!isNodeOnRoof && UnityEngine.AI.NavMesh.SamplePosition(targetPos, out UnityEngine.AI.NavMeshHit hitTarget, 10f, areaMask))
                     {
-                        cachedLinePoints.Add(cachedNavPath.corners[j] + Vector3.up * 0.2f);
+                        targetPos = hitTarget.position;
                     }
-                    positionCourante = cachedNavPath.corners[cachedNavPath.corners.Length - 1];
-                }
-                else
-                {
-                    cachedLinePoints.Add(targetPos + Vector3.up * 0.2f);
-                    positionCourante = targetPos;
-                }
-            }
 
-            // Prévisualisation pour l'unité sélectionnée vers la position du curseur
-            if (isSelected && phaseActuelle == GamePhase.CreationPath && positionClicTemporaire != Vector3.zero)
-            {
-                if (UnityEngine.AI.NavMesh.CalculatePath(positionCourante, positionClicTemporaire, areaMask, cachedNavPath) && cachedNavPath.corners.Length > 1)
-                {
-                    for (int j = 1; j < cachedNavPath.corners.Length; j++)
+                    if (isNodeOnRoof || positionCourante.y > 1.8f || DestructibleEnvironment.IsPositionInRubble(targetPos))
                     {
-                        cachedLinePoints.Add(cachedNavPath.corners[j] + Vector3.up * 0.2f);
+                        unitAI.cachedDrawPoints.Add(targetPos + Vector3.up * 0.2f);
+                        positionCourante = targetPos;
+                    }
+                    else if (UnityEngine.AI.NavMesh.CalculatePath(positionCourante, targetPos, areaMask, cachedNavPath) && cachedNavPath.corners.Length > 1)
+                    {
+                        for (int j = 1; j < cachedNavPath.corners.Length; j++)
+                        {
+                            unitAI.cachedDrawPoints.Add(cachedNavPath.corners[j] + Vector3.up * 0.2f);
+                        }
+                        positionCourante = cachedNavPath.corners[cachedNavPath.corners.Length - 1];
+                    }
+                    else
+                    {
+                        unitAI.cachedDrawPoints.Add(targetPos + Vector3.up * 0.2f);
+                        positionCourante = targetPos;
                     }
                 }
-                else
+
+                // Prévisualisation pour l'unité sélectionnée vers la position du clic temporaire
+                if (isSelected && (phaseActuelle == GamePhase.Planification || phaseActuelle == GamePhase.CreationPath) && positionClicTemporaire != Vector3.zero)
                 {
-                    cachedLinePoints.Add(positionClicTemporaire + Vector3.up * 0.2f);
+                    if (UnityEngine.AI.NavMesh.CalculatePath(positionCourante, positionClicTemporaire, areaMask, cachedNavPath) && cachedNavPath.corners.Length > 1)
+                    {
+                        for (int j = 1; j < cachedNavPath.corners.Length; j++)
+                        {
+                            unitAI.cachedDrawPoints.Add(cachedNavPath.corners[j] + Vector3.up * 0.2f);
+                        }
+                    }
+                    else
+                    {
+                        unitAI.cachedDrawPoints.Add(positionClicTemporaire + Vector3.up * 0.2f);
+                    }
                 }
+
+                unitAI.isPathDirty = false;
             }
 
-            lr.positionCount = cachedLinePoints.Count;
-            for (int p = 0; p < cachedLinePoints.Count; p++)
+            lr.positionCount = unitAI.cachedDrawPoints.Count;
+            for (int p = 0; p < unitAI.cachedDrawPoints.Count; p++)
             {
-                lr.SetPosition(p, cachedLinePoints[p]);
+                lr.SetPosition(p, unitAI.cachedDrawPoints[p]);
             }
         }
+        isPathsDirty = false;
     }
 
     private Vector3 GetMousePositionOnNavMesh()
@@ -694,10 +718,75 @@ public class TacticalPathManager : MonoBehaviour
 
         isDoorSelected = false;
         isWindowSelected = false;
+        isBuildingSelected = false;
+        selectedBuilding = null;
         isGroundCheckpointSelected = false;
         activeMenuRect = Rect.zero;
 
         if (menuPanel != null) menuPanel.SetActive(false);
+    }
+
+    public void ConfirmerBuildingAction(int choice)
+    {
+        AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+#if UNITY_ANDROID || UNITY_IOS
+        Handheld.Vibrate();
+#endif
+        if (selectedBuilding == null || uniteSelectionnee == null) return;
+        UnitAI unitAI = uniteSelectionnee.GetComponent<UnitAI>();
+        if (unitAI == null) return;
+
+        if (choice == 1) // Infiltration / Intérieur
+        {
+            if (selectedBuilding.tacticalVisibility != null)
+            {
+                selectedBuilding.tacticalVisibility.SetPlanificationPreview(true);
+            }
+
+            var door = selectedBuilding.GetClosestDoor(unitAI.transform.position);
+            if (door != null && unitAI.currentBuilding != selectedBuilding)
+            {
+                unitAI.AddTacticalNode(new TacticalNode { position = door.position, action = NodeAction.EntrerBatiment });
+            }
+            unitAI.currentBuilding = selectedBuilding;
+
+            Vector3 insidePos = new Vector3(positionClicTemporaire.x, 0.05f, positionClicTemporaire.z);
+            unitAI.AddTacticalNode(new TacticalNode { position = insidePos, action = NodeAction.Continuer });
+
+            GameObject marker = new GameObject("WaypointMarker");
+            marker.transform.position = insidePos;
+            marker.AddComponent<WaypointMarker>();
+        }
+        else if (choice == 2) // Escalade / Toit
+        {
+            float roofHeight = (selectedBuilding.height > 0) ? selectedBuilding.height : 6.0f;
+            Vector3 roofPos = new Vector3(positionClicTemporaire.x, roofHeight, positionClicTemporaire.z);
+            unitAI.AddTacticalNode(new TacticalNode { position = roofPos, action = NodeAction.Escalade });
+
+            GameObject marker = new GameObject("WaypointMarker");
+            marker.transform.position = roofPos;
+            marker.AddComponent<WaypointMarker>();
+        }
+        else if (choice == 3) // Porte la plus proche
+        {
+            var door = selectedBuilding.GetClosestDoor(unitAI.transform.position);
+            Vector3 doorPos = (door != null) ? door.position : positionClicTemporaire;
+            unitAI.AddTacticalNode(new TacticalNode { position = doorPos, action = NodeAction.Continuer });
+
+            GameObject marker = new GameObject("WaypointMarker");
+            marker.transform.position = doorPos;
+            marker.AddComponent<WaypointMarker>();
+        }
+
+        isBuildingSelected = false;
+        selectedBuilding = null;
+        isDoorSelected = false;
+        isWindowSelected = false;
+        isGroundCheckpointSelected = false;
+        activeMenuRect = Rect.zero;
+
+        if (menuPanel != null) menuPanel.SetActive(false);
+        DessinerTousLesChemins();
     }
 
     [Header("Paramètres de Tour")]
@@ -721,6 +810,13 @@ public class TacticalPathManager : MonoBehaviour
         
         SelectionnerUnite(null); // On désélectionne tout
         if (menuPanel != null) menuPanel.SetActive(false);
+
+        // Nettoyer les anciens marqueurs de waypoints holographiques au début de l'exécution
+        WaypointMarker[] existingMarkers = FindObjectsByType<WaypointMarker>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        foreach (var wm in existingMarkers)
+        {
+            if (wm != null) Destroy(wm.gameObject);
+        }
 
         UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude);
         List<UnitAI> livingUnits = new List<UnitAI>();
@@ -866,21 +962,21 @@ public class TacticalPathManager : MonoBehaviour
             endTurnBtnStyle.normal.textColor = Color.white;
 
             // Bouton Fin de Tour (Bas Droite)
-            if (GUI.Button(new Rect(virtualW - 155, virtualH - 62, 145, 52), "▶️ FIN TOUR\n(Lancer)", endTurnBtnStyle))
+            if (GUI.Button(new Rect(virtualW - 145, virtualH - 58, 135, 46), "▶️ FIN TOUR", endTurnBtnStyle))
             {
                 LancerExecutionTour();
             }
 
-            // Boutons tactiles contextuels quand une unité est sélectionnée (Bas Gauche)
+            // Barre contextuelle épurée lorsqu'une unité est sélectionnée (Bas Gauche)
             if (uniteSelectionnee != null)
             {
                 GUIStyle touchBtnStyle = new GUIStyle(GUI.skin.button);
                 touchBtnStyle.fontSize = 11;
                 touchBtnStyle.fontStyle = FontStyle.Bold;
 
-                // 1. Bouton tactile pour désélectionner (Touch Mobile / Tablette)
+                // 1. Désélectionner (Croix rouge compacte)
                 touchBtnStyle.normal.textColor = new Color(1f, 0.45f, 0.45f);
-                if (GUI.Button(new Rect(12, virtualH - 62, 105, 52), "❌ DÉSÉLECT.\n(Retour)", touchBtnStyle))
+                if (GUI.Button(new Rect(14, virtualH - 58, 50, 46), "❌", touchBtnStyle))
                 {
                     SelectionnerUnite(null);
                     isDoorSelected = false;
@@ -889,9 +985,9 @@ public class TacticalPathManager : MonoBehaviour
                     activeMenuRect = Rect.zero;
                 }
 
-                // 2. Bouton tactile pour annuler le dernier point
+                // 2. Annuler dernier point
                 touchBtnStyle.normal.textColor = new Color(1f, 0.85f, 0.2f);
-                if (GUI.Button(new Rect(122, virtualH - 62, 105, 52), "↩️ ANNULER\n(Point)", touchBtnStyle))
+                if (GUI.Button(new Rect(70, virtualH - 58, 95, 46), "↩️ Annuler", touchBtnStyle))
                 {
                     UnitAI uAI = uniteSelectionnee.GetComponent<UnitAI>();
                     if (uAI != null && uAI.tacticalPath.Count > 0)
@@ -900,34 +996,83 @@ public class TacticalPathManager : MonoBehaviour
                         DessinerTousLesChemins();
                         AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
                     }
-                    isDoorSelected = false;
-                    isWindowSelected = false;
                     isGroundCheckpointSelected = false;
                     activeMenuRect = Rect.zero;
                 }
 
-                // 3. Bouton tactile pour effacer toute la trajectoire
-                touchBtnStyle.normal.textColor = new Color(1f, 0.4f, 0.3f);
-                if (GUI.Button(new Rect(232, virtualH - 62, 105, 52), "🔄 EFFACER\n(Trajet)", touchBtnStyle))
+                // 3. Bouton Vue Action 3D (Seulement en vue 2D)
+                bool is2DMode = CameraStateManager.Instance == null || CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Command;
+                if (is2DMode)
                 {
-                    UnitAI uAI = uniteSelectionnee.GetComponent<UnitAI>();
-                    if (uAI != null)
+                    touchBtnStyle.normal.textColor = new Color(0.2f, 0.95f, 1f);
+                    if (GUI.Button(new Rect(172, virtualH - 58, 125, 46), "🔍 VUE 3D", touchBtnStyle))
                     {
-                        uAI.ClearTacticalPath();
-                        DessinerTousLesChemins();
-                        AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateErrorSound(), Camera.main.transform.position);
+                        if (CameraStateManager.Instance != null)
+                        {
+                            CameraStateManager.Instance.Enter3DView(uniteSelectionnee.transform);
+                            isDoorSelected = false;
+                            isWindowSelected = false;
+                            if (menuPanel != null) menuPanel.SetActive(false);
+                        }
                     }
-                    isDoorSelected = false;
-                    isWindowSelected = false;
-                    isGroundCheckpointSelected = false;
-                    activeMenuRect = Rect.zero;
                 }
             }
 
             bool isAnyMenuDrawn = false;
 
+            // MENU CONTEXTUEL DE BÂTIMENT (POLYGON 2D / 3D)
+            if (uniteSelectionnee != null && isBuildingSelected && selectedBuilding != null)
+            {
+                isAnyMenuDrawn = true;
+                GUIStyle titleStyle = new GUIStyle(GUI.skin.box);
+                titleStyle.fontSize = 13;
+                titleStyle.fontStyle = FontStyle.Bold;
+                titleStyle.normal.textColor = Color.white;
+
+                GUIStyle btnStyle = new GUIStyle(GUI.skin.button);
+                btnStyle.fontSize = 12;
+                btnStyle.fontStyle = FontStyle.Bold;
+
+                float menuWidth = 310;
+                float menuHeight = 185;
+                float startX = (virtualW - menuWidth) * 0.5f;
+                float startY = virtualH - menuHeight - 70;
+                activeMenuRect = new Rect(startX, startY, menuWidth, menuHeight);
+
+                GUI.Box(activeMenuRect, $"🏢 BÂTIMENT : {selectedBuilding.gameObject.name}", titleStyle);
+
+                // Option 1 : Infiltration / Intérieur
+                btnStyle.normal.textColor = new Color(0.3f, 1f, 0.5f);
+                if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 34), "1. 🏢 INFILTRATION / INTÉRIEUR (RDC)", btnStyle))
+                {
+                    ConfirmerBuildingAction(1);
+                }
+
+                // Option 2 : Monter sur le toit
+                btnStyle.normal.textColor = new Color(0.2f, 0.9f, 1f);
+                if (GUI.Button(new Rect(startX + 10, startY + 66, menuWidth - 20, 34), "2. 🧗 MONTER SUR LE TOIT (Sniper / Guet)", btnStyle))
+                {
+                    ConfirmerBuildingAction(2);
+                }
+
+                // Option 3 : Porte la plus proche
+                btnStyle.normal.textColor = Color.yellow;
+                if (GUI.Button(new Rect(startX + 10, startY + 104, menuWidth - 20, 34), "3. 🚪 PORTE LA PLUS PROCHE", btnStyle))
+                {
+                    ConfirmerBuildingAction(3);
+                }
+
+                // Annuler
+                btnStyle.normal.textColor = Color.gray;
+                if (GUI.Button(new Rect(startX + 10, startY + 142, menuWidth - 20, 28), "Annuler", btnStyle))
+                {
+                    isBuildingSelected = false;
+                    selectedBuilding = null;
+                    activeMenuRect = Rect.zero;
+                }
+            }
             // MENU CONTEXTUEL DE PORTE
-            if (uniteSelectionnee != null && isDoorSelected && selectedDoor != null)
+            else if (uniteSelectionnee != null && isDoorSelected && selectedDoor != null)
             {
                 isAnyMenuDrawn = true;
                 GUIStyle titleStyle = new GUIStyle(GUI.skin.box);

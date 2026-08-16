@@ -204,6 +204,29 @@ public class GameManagerUI : MonoBehaviour
 
             GUI.matrix = origMat;
         }
+        else
+        {
+            if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action) return;
+
+            Matrix4x4 origMat = GUI.matrix;
+            float uiScale = Mathf.Clamp(Screen.width / 450f, 1.35f, 2.2f);
+            GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
+
+            float virtualW = Screen.width / uiScale;
+            
+            GUIStyle restartStyle = new GUIStyle(GUI.skin.button);
+            restartStyle.fontSize = 10;
+            restartStyle.fontStyle = FontStyle.Bold;
+            restartStyle.normal.textColor = new Color(0.85f, 0.85f, 0.85f, 0.85f);
+
+            // Bouton discret et épuré
+            if (GUI.Button(new Rect(virtualW * 0.5f - 55, 10, 110, 30), "🔄 Recommencer", restartStyle))
+            {
+                UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
+            }
+
+            GUI.matrix = origMat;
+        }
     }
 
     private IEnumerator StartDeviceGPS()

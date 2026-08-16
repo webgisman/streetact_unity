@@ -55,6 +55,46 @@ Ce document sert de référence technique absolue pour éviter toute régression
 
 ---
 
+### Piège 5 : Les bâtiments transparents au NavMesh lors du Streaming 3D
+* **Symptôme :** Les unités et véhicules traversaient les polygones des bâtiments au sol comme si les murs n'existaient pas.
+* **Causes :**
+  1. Lors du streaming 3D haute performance, les `MeshRenderer` des murs et toits sont masqués par défaut (`wallsRenderer.enabled = false`).
+  2. `NavMeshSurface` configuré en `surface.useGeometry = NavMeshCollectGeometry.RenderMeshes` ignore systématiquement tous les GameObjects dont le renderer est inactif !
+  3. Le NavMesh était alors cuit sur une carte plate sans aucun obstacle.
+* **Solution :**
+  1. Utiliser impérativement `surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;` car les `MeshCollider` des murs restent actifs et hermétiques.
+  2. Configurer `TacticalStreamingManager.Instance.RegisterAllBuildings()` immédiatement après le bake du NavMesh.
+
+---
+
+### Piège 6 : Les micro-saccades de recalcul de tracé par frame (`NavMesh.CalculatePath`)
+* **Symptôme :** Caméra qui saccade lors des déplacements ou en phase de planification, chute de framerate constante.
+* **Cause :** `TacticalPathManager.DessinerTousLesChemins()` exécutait `NavMesh.CalculatePath()` à chaque frame dans `Update()` pour chaque soldat sélectionné ou en mouvement.
+* **Solution :**
+  1. Mise en cache des points dans `unitAI.cachedDrawPoints`.
+  2. Utilisation d'un flag d'invalidation `unitAI.isPathDirty` et `TacticalPathManager.isPathsDirty`. Le recalcul n'est exécuté que lorsqu'un ordre est ajouté, modifié ou supprimé.
+
+---
+
+### Piège 7 : Disparition des bâtiments 3D lors du Streaming
+* **Symptôme :** En mode Action 3D, les bâtiments disparaissaient dès que la caméra ou le soldat s'éloignait du centre de la carte.
+* **Cause :** Les GameObjects racines des bâtiments générés par `CityGenerator` étaient instanciés à la position `(0,0,0)`. `TacticalStreamingManager` mesurait la distance entre l'origine `(0,0,0)` et la caméra, masquant tous les renderers au-delà de 48m.
+* **Solution :**
+  1. Calcul et stockage du **centroïde géométrique réel** dans `BuildingStructure.centroid`.
+  2. Le chunk de streaming utilise désormais `building.centroid` avec un rayon étendu à **260m**.
+
+---
+
+### Piège 8 : Calculs 3D superflus en vue 2D Commandement
+* **Symptôme :** Lenteurs et difficultés à cibler les bâtiments en vue zénithale 2D.
+* **Cause :** Utilisation de raycasts PhysX 3D volumiques coûteux alors que la vue est purement plane.
+* **Solution :**
+  1. Enregistrement du polygone 2D XZ `polygonFootprint` sur `BuildingStructure`.
+  2. Détection instantanée Point-in-Polygon via `BuildingStructure.FindBuildingAt(worldPos)` sans aucun coût PhysX.
+  3. Menu modal direct pour l'infanterie (Infiltration/RDC, Toit/Sniper, Porte) et passage direct sur les polygones cassés/ruines.
+
+---
+
 ## 2. Ordre d'Initialisation Obligatoire du Jeu
 
 ```

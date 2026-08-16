@@ -107,10 +107,19 @@ public class TacticalVisibility : MonoBehaviour
 
     void Update()
     {
+        // En vue 2D Commandement, aucun calcul de toiture n'est nécessaire
+        if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState != CameraStateManager.CameraState.Action)
+        {
+            return;
+        }
+
+        // Si le toit n'est pas activé par le streaming 3D local, ne rien calculer
+        if (roofRenderer == null || !roofRenderer.enabled) return;
+
         checkTimer -= Time.deltaTime;
         if (checkTimer <= 0f)
         {
-            checkTimer = 0.25f; // Scan 4 fois par seconde
+            checkTimer = 0.5f; // Scan allégé 2 fois par seconde uniquement sur les bâtiments 3D proches
             UpdateVisibility();
         }
     }
@@ -122,30 +131,12 @@ public class TacticalVisibility : MonoBehaviour
 
         if (structure != null && structure.windows != null)
         {
-            foreach (var win in structure.windows)
+            for (int i = 0; i < structure.windows.Count; i++)
             {
+                var win = structure.windows[i];
                 if (win.isOccupied && win.occupant != null && !win.occupant.isDead)
                 {
                     return true;
-                }
-            }
-        }
-
-        // Test géométrique rapide : y < 1.8m dans le rectangle du bâtiment
-        Collider col = GetComponent<Collider>();
-        if (col != null)
-        {
-            Bounds b = col.bounds;
-            for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
-            {
-                UnitAI u = UnitAI.AllLivingUnits[i];
-                if (u != null && !u.isDead && !u.isTank && !u.isRooftopSniper)
-                {
-                    Vector3 p = u.transform.position;
-                    if (p.y < b.max.y - 1.0f && p.x >= b.min.x - 0.2f && p.x <= b.max.x + 0.2f && p.z >= b.min.z - 0.2f && p.z <= b.max.z + 0.2f)
-                    {
-                        return true;
-                    }
                 }
             }
         }
@@ -155,8 +146,14 @@ public class TacticalVisibility : MonoBehaviour
 
     public void UpdateVisibility()
     {
+        // En vue 2D, ne jamais forcer l'affichage du toit 3D
+        if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState != CameraStateManager.CameraState.Action)
+        {
+            return;
+        }
+
         EnsureComponents();
-        if (roofRenderer == null) return;
+        if (roofRenderer == null || !roofRenderer.enabled) return;
 
         bool hasInteriorUnits = HasUnitsInsideBuilding();
 
@@ -164,10 +161,9 @@ public class TacticalVisibility : MonoBehaviour
         {
             if (currentState != RoofRenderState.CutawaySemiTransparent)
             {
-                roofRenderer.enabled = true;
                 if (cutawayMaterial == null) CreateCutawayMaterial();
                 if (cutawayMaterial != null) roofRenderer.sharedMaterial = cutawayMaterial;
-                if (roofCollider != null) roofCollider.enabled = true; // Plancher physique solide pour gérer le fantassin sur le toit
+                if (roofCollider != null) roofCollider.enabled = true;
                 currentState = RoofRenderState.CutawaySemiTransparent;
             }
         }
@@ -175,7 +171,6 @@ public class TacticalVisibility : MonoBehaviour
         {
             if (currentState != RoofRenderState.Opaque)
             {
-                roofRenderer.enabled = true;
                 if (originalOpaqueMaterial != null) roofRenderer.sharedMaterial = originalOpaqueMaterial;
                 if (roofCollider != null) roofCollider.enabled = true;
                 currentState = RoofRenderState.Opaque;

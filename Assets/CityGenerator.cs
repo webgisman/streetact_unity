@@ -167,10 +167,16 @@ public class CityGenerator : MonoBehaviour
                 // Vider les anciennes données pour forcer un rebake propre
                 surface.RemoveData();
                 surface.collectObjects = CollectObjects.All;
-                surface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
+                surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
                 surface.defaultArea = 0; // Walkable
                 surface.BuildNavMesh();
-                Debug.Log("NavMesh automatically baked and perfectly fitted around buildings!");
+                Debug.Log("NavMesh automatically baked and perfectly fitted around building colliders!");
+
+                // Enregistrer immédiatement les bâtiments pour le streaming 3D
+                if (TacticalStreamingManager.Instance != null)
+                {
+                    TacticalStreamingManager.Instance.RegisterAllBuildings();
+                }
 
                 // 4. LÂCHER LES CHIENS ! On notifie les unités qu'elles peuvent enfin bouger.
                 foreach(var unit in allUnits) { unit.gameObject.SetActive(true); }
@@ -249,10 +255,15 @@ public class CityGenerator : MonoBehaviour
         
         surface.RemoveData();
         surface.collectObjects = CollectObjects.All;
-        surface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
+        surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
         surface.defaultArea = 0;
         surface.BuildNavMesh();
         Debug.Log("NavMesh automatiquement généré pour le mode Hors-Ligne !");
+
+        if (TacticalStreamingManager.Instance != null)
+        {
+            TacticalStreamingManager.Instance.RegisterAllBuildings();
+        }
 
         foreach(var unit in allUnits) { unit.gameObject.SetActive(true); }
         yield return null;
@@ -382,6 +393,7 @@ public class CityGenerator : MonoBehaviour
             buildingGo.transform.parent = parent;
 
             BuildingStructure structure = buildingGo.AddComponent<BuildingStructure>();
+            structure.InitPolygon(lotFootprint, lotHeight);
             buildingGo.AddComponent<DestructibleEnvironment>();
             
             // Pre-calculate doors so we can make gaps in the walls
@@ -394,15 +406,19 @@ public class CityGenerator : MonoBehaviour
             GameObject roofGo = new GameObject("Roof");
             roofGo.transform.parent = buildingGo.transform;
             roofGo.AddComponent<MeshFilter>().sharedMesh = roofMesh;
-            roofGo.AddComponent<MeshRenderer>().sharedMaterial = GetRandomBuildingMaterial();
+            var roofRenderer = roofGo.AddComponent<MeshRenderer>();
+            roofRenderer.sharedMaterial = GetRandomBuildingMaterial();
+            roofRenderer.enabled = false; // Désactivé par défaut pour le Streaming
             roofGo.AddComponent<MeshCollider>().sharedMesh = roofMesh;
 
-            // 2. FLOOR
-            Mesh floorMesh = CreateFloorMesh(lotFootprint, roofIndices, 0.05f);
-            GameObject floorGo = new GameObject("Interior_Floor");
+            // 2. POLYGONE 2D AU SOL (TOUJOURS VISIBLE POUR LA VUE CARTE 2D)
+            Mesh floorMesh = CreateFloorMesh(lotFootprint, roofIndices, 0.08f);
+            GameObject floorGo = new GameObject("Footprint_2D");
             floorGo.transform.parent = buildingGo.transform;
             floorGo.AddComponent<MeshFilter>().sharedMesh = floorMesh;
-            floorGo.AddComponent<MeshRenderer>().sharedMaterial = GetRandomBuildingMaterial();
+            var floorRenderer = floorGo.AddComponent<MeshRenderer>();
+            floorRenderer.sharedMaterial = Get2DBuildingMaterial();
+            floorRenderer.enabled = true; // Actif pour la construction 2D des polygones
             floorGo.AddComponent<MeshCollider>().sharedMesh = floorMesh;
 
             // 3. WALLS
@@ -410,7 +426,9 @@ public class CityGenerator : MonoBehaviour
             GameObject wallsGo = new GameObject("Walls");
             wallsGo.transform.parent = buildingGo.transform;
             wallsGo.AddComponent<MeshFilter>().sharedMesh = wallsMesh;
-            wallsGo.AddComponent<MeshRenderer>().sharedMaterial = GetRandomBuildingMaterial();
+            var wallsRenderer = wallsGo.AddComponent<MeshRenderer>();
+            wallsRenderer.sharedMaterial = GetRandomBuildingMaterial();
+            wallsRenderer.enabled = false; // Désactivé par défaut pour le Streaming
             wallsGo.AddComponent<MeshCollider>().sharedMesh = wallsMesh;
 
             // Visual Openings
@@ -460,13 +478,23 @@ public class CityGenerator : MonoBehaviour
         return insetPoly;
     }
 
+    private static Material shared2DBuildingMaterial;
+
+    private Material Get2DBuildingMaterial()
+    {
+        if (shared2DBuildingMaterial == null)
+        {
+            // Matériau 2D haute lisibilité pour le plan tactique (Ardoise tactique contrastée)
+            shared2DBuildingMaterial = SafeMaterialFactory.CreateUnlit(new Color(0.24f, 0.30f, 0.38f, 0.95f));
+        }
+        return shared2DBuildingMaterial;
+    }
+
     private Material GetRandomBuildingMaterial()
     {
         if (buildingMaterial != null) return buildingMaterial;
-        Shader defaultShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-        Material mat = new Material(defaultShader);
-        mat.color = UnityEngine.Random.ColorHSV(0f, 1f, 0.1f, 0.3f, 0.4f, 0.8f);
-        return mat;
+        Color randomCol = UnityEngine.Random.ColorHSV(0f, 1f, 0.1f, 0.3f, 0.4f, 0.8f);
+        return SafeMaterialFactory.CreateLit(randomCol);
     }
 
     private void CreateRoofAccess(GameObject building, List<Vector2> footprint, float height)
@@ -695,25 +723,16 @@ public class CityGenerator : MonoBehaviour
 
     private void EnsureOpeningsMaterials()
     {
-        Shader litShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-
         if (sharedDoorMaterial == null)
         {
-            sharedDoorMaterial = new Material(litShader);
             Color doorCol = new Color(0.18f, 0.12f, 0.08f, 1f); 
-            if (sharedDoorMaterial.HasProperty("_BaseColor")) sharedDoorMaterial.SetColor("_BaseColor", doorCol);
-            else sharedDoorMaterial.color = doorCol;
-            sharedDoorMaterial.SetFloat("_Smoothness", 0.3f);
+            sharedDoorMaterial = SafeMaterialFactory.CreateLit(doorCol);
         }
 
         if (sharedWindowMaterial == null)
         {
-            sharedWindowMaterial = new Material(litShader);
             Color winCol = new Color(0.08f, 0.16f, 0.25f, 1f); 
-            if (sharedWindowMaterial.HasProperty("_BaseColor")) sharedWindowMaterial.SetColor("_BaseColor", winCol);
-            else sharedWindowMaterial.color = winCol;
-            sharedWindowMaterial.SetFloat("_Metallic", 0.7f);
-            sharedWindowMaterial.SetFloat("_Smoothness", 0.9f);
+            sharedWindowMaterial = SafeMaterialFactory.CreateLit(winCol);
         }
     }
 

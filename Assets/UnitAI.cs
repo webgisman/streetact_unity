@@ -74,6 +74,8 @@ public partial class UnitAI : MonoBehaviour
     // Tactical Path
     public List<TacticalPathManager.TacticalNode> tacticalPath = new List<TacticalPathManager.TacticalNode>();
     [HideInInspector] public int currentNodeIndex = 0;
+    [HideInInspector] public bool isPathDirty = true;
+    [HideInInspector] public List<Vector3> cachedDrawPoints = new List<Vector3>();
     private bool isExecuting = false;
 
     [Header("Tactique & Furtivité")]
@@ -111,6 +113,36 @@ public partial class UnitAI : MonoBehaviour
     void Start()
     {
         if (!AllLivingUnits.Contains(this)) AllLivingUnits.Add(this);
+        
+        // --- INTEGRATION AUTOMATIQUE DU MARQUEUR TACTIQUE ---
+        if (GetComponent<UnitTacticalMarker>() == null)
+        {
+            var marker = gameObject.AddComponent<UnitTacticalMarker>();
+            marker.markerColor = isPlayerControlled ? Color.blue : Color.red;
+        }
+
+        // Assignation des composants 3D au layer 'Units_3D' pour masquage en vue 2D
+        int units3DLayer = LayerMask.NameToLayer("Units_3D");
+        if (units3DLayer != -1)
+        {
+            Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
+            foreach (var r in renderers)
+            {
+                if (!r.name.Contains("TacticalMarker"))
+                {
+                    r.gameObject.layer = units3DLayer;
+                }
+            }
+        }
+
+        // Optimisation CPU : Ne pas calculer l'animation des os quand le modèle 3D est masqué
+        Animator anim = GetComponentInChildren<Animator>();
+        if (anim != null)
+        {
+            anim.cullingMode = AnimatorCullingMode.CullUpdateTransforms;
+        }
+        // ----------------------------------------------------
+
         agent = GetComponent<NavMeshAgent>();
 
         if (GetComponent<FogOfWarEntity>() == null)
@@ -215,12 +247,7 @@ public partial class UnitAI : MonoBehaviour
         selectionRing.transform.localPosition = new Vector3(0, 0.05f, 0); // Au ras du sol
         selectionRing.transform.localScale = new Vector3(1.2f, 0.02f, 1.2f);
         
-        Shader unlitShader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Transparent");
-        Material ringMat = new Material(unlitShader);
-        ringMat.SetColor("_BaseColor", new Color(1f, 0.8f, 0f, 0.5f)); // Jaune/Or
-        if (ringMat.HasProperty("_Color")) ringMat.SetColor("_Color", new Color(1f, 0.8f, 0f, 0.5f));
-        ringMat.SetFloat("_Surface", 1);
-        ringMat.SetFloat("_Blend", 0);
+        Material ringMat = SafeMaterialFactory.CreateUnlit(new Color(1f, 0.8f, 0f, 0.65f)); // Jaune/Or
         selectionRing.GetComponent<MeshRenderer>().sharedMaterial = ringMat;
         selectionRing.SetActive(false); // Caché par défaut
 
@@ -321,71 +348,29 @@ public partial class UnitAI : MonoBehaviour
                 }
             }
 
-            // APPLICATION ROBUSTE DES TEXTURES DU CHAR LEOPARD 2 (URP / Standard)
+            // APPLICATION ROBUSTE DES MATÉRIAUX URP DU CHAR LEOPARD 2
             if (isLeopard)
             {
-                Texture2D bodyTex = null;
-                Texture2D trackTex = null;
-                Texture2D bumpTex = null;
+                Material bodyMat = Resources.Load<Material>("Kucher/Tank Leopard2/Materials/TankBodyMaterial");
+                Material leftTrackMat = Resources.Load<Material>("Kucher/Tank Leopard2/Materials/LeftTrackMaterial");
+                Material rightTrackMat = Resources.Load<Material>("Kucher/Tank Leopard2/Materials/RightTrackMaterial");
 
-#if UNITY_EDITOR
-                bodyTex = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Kucher/Tank Leopard2/Textures/Tank Body Textures/TankBodyDiffuseMap.png");
-                trackTex = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Kucher/Tank Leopard2/Textures/Tank Track Textures/TankTrackDiffuseMap.png");
-                bumpTex = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Kucher/Tank Leopard2/Textures/Tank Body Textures/TankBodyNormalMap.png");
-#endif
-                if (bodyTex == null)
+                if (bodyMat != null)
                 {
-                    string bPath = Application.dataPath + "/Kucher/Tank Leopard2/Textures/Tank Body Textures/TankBodyDiffuseMap.png";
-                    if (System.IO.File.Exists(bPath))
+                    foreach (Renderer r in GetComponentsInChildren<Renderer>())
                     {
-                        byte[] raw = System.IO.File.ReadAllBytes(bPath);
-                        bodyTex = new Texture2D(2, 2);
-                        bodyTex.LoadImage(raw);
+                        if (r.gameObject.name.Contains("Health") || r.gameObject.name.Contains("selectionRing")) continue;
+
+                        string rName = r.gameObject.name.ToLower();
+                        if (rName.Contains("track_l") || rName.Contains("lefttrack") || rName.Contains("trackl"))
+                            r.sharedMaterial = leftTrackMat ?? bodyMat;
+                        else if (rName.Contains("track_r") || rName.Contains("righttrack") || rName.Contains("trackr"))
+                            r.sharedMaterial = rightTrackMat ?? bodyMat;
+                        else if (rName.Contains("track"))
+                            r.sharedMaterial = leftTrackMat ?? bodyMat;
+                        else
+                            r.sharedMaterial = bodyMat;
                     }
-                }
-                if (trackTex == null)
-                {
-                    string tPath = Application.dataPath + "/Kucher/Tank Leopard2/Textures/Tank Track Textures/TankTrackDiffuseMap.png";
-                    if (System.IO.File.Exists(tPath))
-                    {
-                        byte[] raw = System.IO.File.ReadAllBytes(tPath);
-                        trackTex = new Texture2D(2, 2);
-                        trackTex.LoadImage(raw);
-                    }
-                }
-
-                Shader shaderToUse = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Unlit");
-
-                Material sharedBodyMat = new Material(shaderToUse);
-                if (bodyTex != null)
-                {
-                    sharedBodyMat.mainTexture = bodyTex;
-                    if (sharedBodyMat.HasProperty("_BaseMap")) sharedBodyMat.SetTexture("_BaseMap", bodyTex);
-                    if (sharedBodyMat.HasProperty("_MainTex")) sharedBodyMat.SetTexture("_MainTex", bodyTex);
-                }
-                if (bumpTex != null && sharedBodyMat.HasProperty("_BumpMap"))
-                {
-                    sharedBodyMat.SetTexture("_BumpMap", bumpTex);
-                }
-                if (sharedBodyMat.HasProperty("_BaseColor")) sharedBodyMat.SetColor("_BaseColor", Color.white);
-                if (sharedBodyMat.HasProperty("_Color")) sharedBodyMat.SetColor("_Color", Color.white);
-
-                Material sharedTrackMat = new Material(shaderToUse);
-                if (trackTex != null)
-                {
-                    sharedTrackMat.mainTexture = trackTex;
-                    if (sharedTrackMat.HasProperty("_BaseMap")) sharedTrackMat.SetTexture("_BaseMap", trackTex);
-                    if (sharedTrackMat.HasProperty("_MainTex")) sharedTrackMat.SetTexture("_MainTex", trackTex);
-                }
-                if (sharedTrackMat.HasProperty("_BaseColor")) sharedTrackMat.SetColor("_BaseColor", Color.white);
-                if (sharedTrackMat.HasProperty("_Color")) sharedTrackMat.SetColor("_Color", Color.white);
-
-                foreach (Renderer r in GetComponentsInChildren<Renderer>())
-                {
-                    if (r.gameObject.name.Contains("Health") || r.gameObject.name.Contains("selectionRing")) continue;
-
-                    string rName = r.gameObject.name.ToLower();
-                    r.sharedMaterial = rName.Contains("track") ? sharedTrackMat : sharedBodyMat;
                 }
             }
             else if (isMortar)
@@ -600,14 +585,11 @@ public partial class UnitAI : MonoBehaviour
         bg.transform.SetParent(this.transform);
         
         bool isHeavy = isTank || gameObject.name.ToLower().Contains("leopard") || gameObject.name.ToLower().Contains("canon");
-        float barHeight = isHeavy ? 4.8f : 2.5f;
+        float barHeight = isTank ? 2.8f : (gameObject.name.ToLower().Contains("mortier") ? 1.8f : 2.1f);
         bg.transform.localPosition = new Vector3(0, barHeight, 0); 
         bg.transform.localScale = isHeavy ? new Vector3(3.0f, 0.4f, 1f) : new Vector3(1.5f, 0.2f, 1f);
         
-        Shader unlitShader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color") ?? Shader.Find("Sprites/Default");
-        Material bgMat = new Material(unlitShader);
-        if (bgMat.HasProperty("_BaseColor")) bgMat.SetColor("_BaseColor", new Color(0.08f, 0.08f, 0.08f, 0.95f));
-        else bgMat.color = Color.black;
+        Material bgMat = SafeMaterialFactory.CreateUnlit(new Color(0.08f, 0.08f, 0.08f, 0.95f));
         bg.GetComponent<Renderer>().material = bgMat;
         healthBarBg = bg.transform;
 
@@ -618,10 +600,8 @@ public partial class UnitAI : MonoBehaviour
         fg.transform.localPosition = new Vector3(0, 0, -0.02f);
         fg.transform.localScale = new Vector3(1f, 1f, 1f);
         
-        Material fgMat = new Material(unlitShader);
         Color teamCol = (teamID == 2) ? new Color(1f, 0.15f, 0.15f, 1f) : new Color(0.15f, 0.6f, 1f, 1f);
-        if (fgMat.HasProperty("_BaseColor")) fgMat.SetColor("_BaseColor", teamCol);
-        else fgMat.color = teamCol;
+        Material fgMat = SafeMaterialFactory.CreateUnlit(teamCol);
         fg.GetComponent<Renderer>().material = fgMat;
         healthBarFill = fg.transform;
 
@@ -911,21 +891,24 @@ public partial class UnitAI : MonoBehaviour
     {
         tacticalPath.Clear();
         currentNodeIndex = 0;
+        isPathDirty = true;
+        cachedDrawPoints.Clear();
         if (tacticalLineRenderer != null) tacticalLineRenderer.positionCount = 0;
+        TacticalPathManager.SetPathsDirty();
     }
 
-    /// <summary>
-    /// Annule le dernier point/ordre ajouté à la trajectoire.
-    /// </summary>
     public void RemoveLastTacticalNode()
     {
         if (tacticalPath.Count > 0)
         {
             tacticalPath.RemoveAt(tacticalPath.Count - 1);
+            isPathDirty = true;
+            cachedDrawPoints.Clear();
             if (tacticalPath.Count == 0 && tacticalLineRenderer != null)
             {
                 tacticalLineRenderer.positionCount = 0;
             }
+            TacticalPathManager.SetPathsDirty();
         }
     }
 }

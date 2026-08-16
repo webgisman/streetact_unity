@@ -25,6 +25,12 @@ public class BuildingStructure : MonoBehaviour
         public UnitAI occupant;
     }
 
+    public List<Vector2> polygonFootprint = new List<Vector2>();
+    public Vector3 centroid = Vector3.zero;
+    public float height = 6.0f;
+    public Bounds bounds2D;
+    private bool boundsComputed = false;
+
     public List<BuildingDoor> doors = new List<BuildingDoor>();
     public List<BuildingWindow> windows = new List<BuildingWindow>();
     public List<StreetAct.Interaction.DoorInteraction> doorInteractions = new List<StreetAct.Interaction.DoorInteraction>();
@@ -34,6 +40,93 @@ public class BuildingStructure : MonoBehaviour
     public TacticalVisibility tacticalVisibility;
 
     public static readonly List<BuildingStructure> AllBuildings = new List<BuildingStructure>();
+
+    public void InitPolygon(List<Vector2> footprint, float buildingHeight)
+    {
+        polygonFootprint = new List<Vector2>(footprint);
+        height = buildingHeight;
+        ComputeCentroidAndBounds();
+    }
+
+    public void ComputeCentroidAndBounds()
+    {
+        if (polygonFootprint == null || polygonFootprint.Count == 0) return;
+
+        float minX = float.MaxValue, maxX = float.MinValue;
+        float minZ = float.MaxValue, maxZ = float.MinValue;
+        float sumX = 0f, sumZ = 0f;
+
+        for (int i = 0; i < polygonFootprint.Count; i++)
+        {
+            Vector2 p = polygonFootprint[i];
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minZ) minZ = p.y;
+            if (p.y > maxZ) maxZ = p.y;
+            sumX += p.x;
+            sumZ += p.y;
+        }
+
+        centroid = new Vector3(sumX / polygonFootprint.Count, 0f, sumZ / polygonFootprint.Count);
+        bounds2D = new Bounds(new Vector3((minX + maxX) * 0.5f, height * 0.5f, (minZ + maxZ) * 0.5f),
+                              new Vector3(Mathf.Max(1f, maxX - minX), height, Mathf.Max(1f, maxZ - minZ)));
+        boundsComputed = true;
+    }
+
+    /// <summary>
+    /// Test Point-dans-Polygone 2D ultra-rapide (Algorithme Ray-Casting XZ).
+    /// </summary>
+    public bool ContainsPoint2D(Vector3 worldPos)
+    {
+        return ContainsPoint2D(new Vector2(worldPos.x, worldPos.z));
+    }
+
+    public bool ContainsPoint2D(Vector2 pt)
+    {
+        if (!boundsComputed) ComputeCentroidAndBounds();
+        if (boundsComputed)
+        {
+            if (pt.x < bounds2D.min.x - 0.5f || pt.x > bounds2D.max.x + 0.5f ||
+                pt.y < bounds2D.min.z - 0.5f || pt.y > bounds2D.max.z + 0.5f)
+            {
+                return false;
+            }
+        }
+
+        if (polygonFootprint == null || polygonFootprint.Count < 3) return false;
+
+        bool inside = false;
+        int count = polygonFootprint.Count;
+        for (int i = 0, j = count - 1; i < count; j = i++)
+        {
+            Vector2 pi = polygonFootprint[i];
+            Vector2 pj = polygonFootprint[j];
+
+            if (((pi.y > pt.y) != (pj.y > pt.y)) &&
+                (pt.x < (pj.x - pi.x) * (pt.y - pi.y) / (pj.y - pi.y) + pi.x))
+            {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    /// <summary>
+    /// Recherche statique instantanée du bâtiment sous une coordonnée du monde XZ.
+    /// </summary>
+    public static BuildingStructure FindBuildingAt(Vector3 worldPos)
+    {
+        Vector2 pt2D = new Vector2(worldPos.x, worldPos.z);
+        for (int i = 0; i < AllBuildings.Count; i++)
+        {
+            BuildingStructure b = AllBuildings[i];
+            if (b != null && b.ContainsPoint2D(pt2D))
+            {
+                return b;
+            }
+        }
+        return null;
+    }
 
     void OnEnable()
     {

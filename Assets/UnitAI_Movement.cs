@@ -65,6 +65,8 @@ public partial class UnitAI
     public void AddTacticalNode(TacticalPathManager.TacticalNode node)
     {
         tacticalPath.Add(node);
+        isPathDirty = true;
+        TacticalPathManager.SetPathsDirty();
     }
 
     /// <summary>

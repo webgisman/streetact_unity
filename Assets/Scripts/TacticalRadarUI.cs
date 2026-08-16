@@ -248,6 +248,9 @@ public class TacticalRadarUI : MonoBehaviour
     void OnGUI()
     {
         if (GameManagerUI.Instance != null && GameManagerUI.Instance.IsStartupSelectionActive) return;
+        
+        // En vue 3D Action, masquer le radar pour garder un écran 100% épuré et immersif
+        if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action) return;
 
         GUI.depth = -100;
         if (radarBgTex == null) CreateRadarTextures();
@@ -348,7 +351,7 @@ public class TacticalRadarUI : MonoBehaviour
         for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
         {
             UnitAI unit = UnitAI.AllLivingUnits[i];
-            if (unit == null || unit.isDead) continue;
+            if (unit == null || !unit || unit.gameObject == null || unit.isDead) continue;
 
             if (unit.isPlayerControlled) allyCount++;
             else enemyDetectedCount++;
@@ -423,12 +426,13 @@ public class TacticalRadarUI : MonoBehaviour
 
     private void DrawLine(Vector2 pointA, Vector2 pointB, Texture2D lineTex, float width)
     {
-        Matrix4x4 matrix = GUI.matrix;
+        Matrix4x4 savedMatrix = GUI.matrix;
         float angle = Mathf.Atan2(pointB.y - pointA.y, pointB.x - pointA.x) * Mathf.Rad2Deg;
         float length = Vector2.Distance(pointA, pointB);
 
-        GUIUtility.RotateAroundPivot(angle, pointA);
-        GUI.DrawTexture(new Rect(pointA.x, pointA.y - width * 0.5f, length, width), lineTex);
-        GUI.matrix = matrix;
+        // Appliquer la translation et la rotation dans l'espace virtuel local pour conserver le scaling UI
+        GUI.matrix = savedMatrix * Matrix4x4.TRS(pointA, Quaternion.Euler(0, 0, angle), Vector3.one);
+        GUI.DrawTexture(new Rect(0, -width * 0.5f, length, width), lineTex);
+        GUI.matrix = savedMatrix;
     }
 }

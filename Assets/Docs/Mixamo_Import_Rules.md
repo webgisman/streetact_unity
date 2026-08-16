@@ -40,15 +40,13 @@ Le script `UnitAI.cs` embarque la fonction `SpawnBloodEffect` qui **génère un 
 
 ---
 
-## 4. Caméra Tactique (Orbitale)
+## 4. Caméra Tactique Hybride (2D / 3D)
 
-La caméra (`TacticalCamera.cs`) utilise le *New Input System* pour des contrôles modernes :
-- **Déplacement (Pan)** : Touches `Z/Q/S/D` (ou `W/A/S/D` ou Flèches).
-- **Zoom** : Molette de la souris.
-- **Rotation Orbitale (Premium)** : **Maintenez le Clic Droit** et bougez la souris.
-  - La caméra ne tourne pas bêtement sur elle-même : elle calcule le point d'impact au sol et orbite intelligemment autour, comme dans les meilleurs RTS !
-  - L'inclinaison verticale (Pitch) est bloquée par sécurité entre 15° et 85° pour empêcher la caméra de passer sous la carte.
-  - La sensibilité de rotation est modifiable en direct depuis l'Inspecteur (`Rotation Sensitivity`).
+La caméra (`TacticalCamera.cs` & `CameraStateManager.cs`) offre une expérience fluide, ultra-légère et sans saccade :
+- **Calcul en `LateUpdate()`** : Synchronisation parfaite post-animation pour éliminer tout micro-bégaiement (*stutter*).
+- **Mode 2D Commandement** : Vue zénithale à 90°, recul optimal (`orthoSize = 95f`), zoom fluide continu (40f à 180f) et sélection polygonale légère.
+- **Mode 3D Action** : Vue isométrique immersive, recul de `65m` (zoom 25m à 180m), rotation orbitale à 360° fluide par clic droit ou twist tactile, `farClip = 400m` et brume atmosphérique linéaire.
+- **Contrôles Universels** : Support complet du *New Input System* pour Mobile (Pinch-zoom, Pan tactile, Twist) et PC (Z/Q/S/D, Molette, Glisser-déplacer).
 
 ---
 

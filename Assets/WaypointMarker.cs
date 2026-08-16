@@ -16,33 +16,27 @@ public class WaypointMarker : MonoBehaviour
         float ringRadius = isArtilleryTarget ? 6.5f : 1.5f;
         baseColor = isArtilleryTarget ? new Color(1f, 0.35f, 0.05f, 0.75f) : new Color(0f, 0.8f, 1f, 0.6f);
 
-        // 1. Création d'un anneau visuel (Cylindre aplati)
+        // 1. Création d'un disque visuel holographique au sol
         GameObject ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        ring.transform.SetParent(this.transform);
-        ring.transform.localPosition = new Vector3(0, 0.1f, 0); // Légèrement au-dessus du sol
-        ring.transform.localScale = new Vector3(ringRadius, 0.05f, ringRadius);
+        ring.transform.SetParent(this.transform, false);
+        ring.transform.localPosition = new Vector3(0, 0.15f, 0); // Au ras du sol
+        ring.transform.localScale = new Vector3(ringRadius, 0.02f, ringRadius);
+        ring.layer = 0; // Layer Default visible dans toutes les caméras
         
         Destroy(ring.GetComponent<Collider>()); // Pas de physique
 
         // 2. Création d'un Material Additif (Hologramme)
-        Shader unlitShader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Transparent");
-        holoMat = new Material(unlitShader);
-        
-        holoMat.SetColor("_BaseColor", baseColor);
-        if (holoMat.HasProperty("_Color")) holoMat.SetColor("_Color", baseColor);
-        
-        holoMat.SetFloat("_Surface", 1); // Transparent in URP
-        holoMat.SetFloat("_Blend", 0); // Alpha
-        
+        holoMat = SafeMaterialFactory.CreateUnlit(baseColor);
         ring.GetComponent<MeshRenderer>().sharedMaterial = holoMat;
 
         // Son de confirmation d'objectif
         AudioSource audioSource = gameObject.AddComponent<AudioSource>();
-        audioSource.spatialBlend = 1f;
+        audioSource.spatialBlend = 0.5f;
         audioSource.clip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
         audioSource.Play();
         
-        Destroy(gameObject, 6f);
+        // Persister pendant la phase de planification (détruit au début de l'exécution ou après 60s)
+        Destroy(gameObject, 60f);
     }
 
     void Update()

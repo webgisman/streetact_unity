@@ -132,11 +132,14 @@ public partial class UnitAI
             }
         }
 
-        // Orientation de la barre de vie vers la caméra
-        if (healthBarBg != null && Camera.main != null)
+        // Orientation de la barre de vie vers la caméra (Billboard propre)
+        if (healthBarBg != null)
         {
-            healthBarBg.LookAt(healthBarBg.position + Camera.main.transform.rotation * Vector3.forward,
-                               Camera.main.transform.rotation * Vector3.up);
+            Camera cam = Camera.main ?? TacticalCamera.Instance?.GetComponent<Camera>();
+            if (cam != null)
+            {
+                healthBarBg.rotation = cam.transform.rotation;
+            }
         }
 
         // Animation douce du cercle de sélection

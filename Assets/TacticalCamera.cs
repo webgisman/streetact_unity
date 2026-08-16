@@ -1,73 +1,150 @@
 using UnityEngine;
-using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.EnhancedTouch;
+using Touch = UnityEngine.InputSystem.EnhancedTouch.Touch;
 
+/// <summary>
+/// Caméra Tactique Haute Performance (2D & 3D).
+/// - 2D : Vision panoramique haute définition, zoom orthographique fluide (40f à 180f), recul optimal.
+/// - 3D : Vue isométrique ample et immersive (recul 65m, rotation 360° fluide).
+/// - LateUpdate() : Élimine toute micro-saccade et conflit de frame rate.
+/// </summary>
 public class TacticalCamera : MonoBehaviour
 {
-    [Header("Mouvement & Vitesse")]
-    public float panSpeed = 28f;
-    public float touchPanSpeed = 0.04f;
-    
-    [Header("Zoom & Recul")]
-    public float zoomSpeed = 25f;
-    public float pinchZoomSensitivity = 0.065f;
-    public float minHeight = 8f;
-    public float maxHeight = 180f; // Recul majeur permettant de voir toute la ville
+    public static TacticalCamera Instance { get; private set; }
 
-    [Header("Rotation")]
-    public float rotationSensitivity = 0.2f;
+    [Header("Position & Cible")]
+    public Vector3 focusPosition;
+    public float minDistance = 25f;
+    public float maxDistance = 180f;
+    public float currentDistance = 65f;
+    private float targetDistance = 65f;
 
-    private Vector3 targetPosition;
-    private Vector3 currentVelocity;
-    
-    private float yaw;
-    private float pitch;
-    private Vector3 rotationPivot;
-    private float orbitDistance;
-    private bool isRotating = false;
+    [Header("Zoom 2D (Orthographique)")]
+    public float minOrthoSize = 40f;
+    public float maxOrthoSize = 180f;
+    public float currentOrthoSize = 95f;
+    private float targetOrthoSize = 95f;
 
+    [Header("Orientation (Angles)")]
+    public float minPitch = 25f;
+    public float maxPitch = 75f;
+    public float currentPitch = 50f;
+    private float targetPitch = 50f;
+    public float currentYaw = 45f;
+    private float smoothYaw = 45f;
+
+    [Header("Sensibilités")]
+    public float panSpeed = 45f;
+    public float touchPanSensitivity = 0.045f;
+    public float pinchZoomSensitivity = 0.08f;
+    public float twistRotationSensitivity = 1.0f;
+    public float pitchSensitivity = 0.08f;
+    public float panFriction = 7.0f;
+
+    private Vector3 panVelocity = Vector3.zero;
+    private bool isTouching = false;
     private float shakeDuration = 0f;
     private float shakeIntensity = 0f;
 
-    [Header("Juice & Feel")]
-    public float smoothTime = 0.12f; // Inertie fluide
+    private Camera camComponent;
+
+    void Awake()
+    {
+        Instance = this;
+        camComponent = GetComponent<Camera>() ?? Camera.main;
+        EnhancedTouchSupport.Enable();
+    }
+
+    void OnEnable()
+    {
+        EnhancedTouchSupport.Enable();
+    }
+
+    void OnDisable()
+    {
+        EnhancedTouchSupport.Disable();
+    }
 
     void Start()
     {
-        // 1. Forcer l'autorotation de l'écran sur mobile
         Screen.orientation = ScreenOrientation.AutoRotation;
         Screen.autorotateToPortrait = true;
         Screen.autorotateToPortraitUpsideDown = false;
         Screen.autorotateToLandscapeLeft = true;
         Screen.autorotateToLandscapeRight = true;
 
-        // 2. Bel angle isométrique de vue d'ensemble avec recul confortable (Y = 65m)
-        transform.rotation = Quaternion.Euler(52f, 45f, 0f);
-        pitch = 52f;
-        yaw = 45f;
-        
-        Vector3 pos = transform.position;
-        if (pos.y < 35f) pos.y = 65f; // Vue haute initiale sur toute la ville
-        pos.y = Mathf.Clamp(pos.y, minHeight, maxHeight);
-        transform.position = pos;
-        targetPosition = pos;
+        if (CameraStateManager.Instance != null)
+        {
+            currentOrthoSize = CameraStateManager.Instance.commandOrthographicSize;
+            targetOrthoSize = currentOrthoSize;
+            currentDistance = CameraStateManager.Instance.actionDistance;
+            targetDistance = currentDistance;
+        }
+
+        // Trouver le centre de la carte
+        Plane ground = new Plane(Vector3.up, Vector3.zero);
+        Ray ray = new Ray(transform.position, transform.forward);
+        if (ground.Raycast(ray, out float enter))
+        {
+            focusPosition = ray.GetPoint(enter);
+        }
+        else
+        {
+            focusPosition = Vector3.zero;
+        }
+
+        targetPitch = currentPitch;
+        smoothYaw = currentYaw;
+
+        if (gameObject.GetComponent<CameraStateManager>() == null)
+        {
+            gameObject.AddComponent<CameraStateManager>();
+        }
     }
 
     void Update()
     {
-        HandleTouchGestures();
-        HandleMouseAndKeyboard();
-        
-        // Mouvement fluide avec amortissement inertiel
-        Vector3 finalPos = Vector3.SmoothDamp(transform.position, targetPosition, ref currentVelocity, smoothTime);
-        
+        HandleTouchInput();
+        HandleKeyboardAndMouse();
+
+        // Application de l'inertie de glissement (Pan)
+        if (!isTouching && panVelocity.sqrMagnitude > 0.01f)
+        {
+            focusPosition += panVelocity * Time.unscaledDeltaTime;
+            panVelocity = Vector3.Lerp(panVelocity, Vector3.zero, Time.unscaledDeltaTime * panFriction);
+        }
+    }
+
+    /// <summary>
+    /// Positionnement dans LateUpdate pour garantir zéro saccade avec les animations et la physique.
+    /// </summary>
+    void LateUpdate()
+    {
+        float dt = Time.unscaledDeltaTime;
+        float lerpFactor = Mathf.Clamp01(dt * 14f);
+
+        currentDistance = Mathf.Lerp(currentDistance, targetDistance, lerpFactor);
+        currentPitch = Mathf.Lerp(currentPitch, targetPitch, lerpFactor);
+        smoothYaw = Mathf.LerpAngle(smoothYaw, currentYaw, lerpFactor);
+        currentOrthoSize = Mathf.Lerp(currentOrthoSize, targetOrthoSize, lerpFactor);
+
+        Quaternion targetRot = Quaternion.Euler(currentPitch, smoothYaw, 0f);
+        Vector3 camPos = focusPosition - (targetRot * Vector3.forward * currentDistance);
+
         if (shakeDuration > 0)
         {
-            finalPos += Random.insideUnitSphere * shakeIntensity;
-            shakeDuration -= Time.deltaTime;
+            camPos += Random.insideUnitSphere * shakeIntensity;
+            shakeDuration -= dt;
         }
-        
-        transform.position = finalPos;
+
+        transform.rotation = targetRot;
+        transform.position = camPos;
+
+        if (camComponent != null && camComponent.orthographic)
+        {
+            camComponent.orthographicSize = currentOrthoSize;
+        }
     }
 
     public void ShakeCamera(float intensity, float duration)
@@ -76,138 +153,183 @@ public class TacticalCamera : MonoBehaviour
         shakeDuration = duration;
     }
 
-    /// <summary>
-    /// Gestion tactile complète multi-touch pour téléphone Android :
-    /// - 1 doigt : Glisser pour déplacer la carte (Pan)
-    /// - 2 doigts : Pincer pour zoomer/dézoomer + Glisser pour Pan
-    /// </summary>
-    private void HandleTouchGestures()
+    public void ZoomIn(float amount = 15f)
     {
-        int touchCount = Input.touchCount;
-        
-        // Fallback InputSystem Touches
-        if (touchCount == 0 && Touchscreen.current != null)
+        if (camComponent != null && camComponent.orthographic)
         {
-            touchCount = Touchscreen.current.touches.Count;
+            targetOrthoSize = Mathf.Clamp(targetOrthoSize - amount, minOrthoSize, maxOrthoSize);
         }
-
-        // -------------------------------------------------------------
-        // CAS 1 : DEUX DOIGTS (PINCH TO ZOOM & DEZOOM AUX DOIGTS)
-        // -------------------------------------------------------------
-        if (touchCount >= 2)
+        else
         {
-            Vector2 t0Pos, t1Pos;
-            Vector2 t0Delta = Vector2.zero, t1Delta = Vector2.zero;
+            targetDistance = Mathf.Clamp(targetDistance - amount, minDistance, maxDistance);
+        }
+    }
 
-            if (Input.touchCount >= 2)
+    public void ZoomOut(float amount = 15f)
+    {
+        if (camComponent != null && camComponent.orthographic)
+        {
+            targetOrthoSize = Mathf.Clamp(targetOrthoSize + amount, minOrthoSize, maxOrthoSize);
+        }
+        else
+        {
+            targetDistance = Mathf.Clamp(targetDistance + amount, minDistance, maxDistance);
+        }
+    }
+
+    public void SetInstantView(float distance, float pitch)
+    {
+        targetDistance = Mathf.Clamp(distance, minDistance, maxDistance);
+        currentDistance = targetDistance;
+        targetPitch = Mathf.Clamp(pitch, minPitch, maxPitch);
+        currentPitch = targetPitch;
+
+        if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Command)
+        {
+            targetOrthoSize = CameraStateManager.Instance.commandOrthographicSize;
+            currentOrthoSize = targetOrthoSize;
+        }
+    }
+
+    public void Rotate45Deg()
+    {
+        currentYaw = (currentYaw + 45f) % 360f;
+    }
+
+    public void TogglePitchMode()
+    {
+        if (targetPitch > 50f) targetPitch = 30f;
+        else targetPitch = 65f;
+    }
+
+    public void CenterOnPlayerUnits()
+    {
+        Vector3 center = Vector3.zero;
+        int count = 0;
+        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
+        {
+            var u = UnitAI.AllLivingUnits[i];
+            if (u != null && u.isPlayerControlled && !u.isDead)
             {
-                Touch t0 = Input.GetTouch(0);
-                Touch t1 = Input.GetTouch(1);
-                t0Pos = t0.position;
-                t1Pos = t1.position;
-                t0Delta = t0.deltaPosition;
-                t1Delta = t1.deltaPosition;
+                center += u.transform.position;
+                count++;
             }
-            else
+        }
+        if (count > 0)
+        {
+            focusPosition = center / count;
+        }
+    }
+
+    private void HandleTouchInput()
+    {
+        var activeTouches = Touch.activeTouches;
+        int count = activeTouches.Count;
+
+        // CAS 1 : DEUX DOIGTS (PINCH ZOOM, ROTATION 360°, PAN)
+        if (count >= 2)
+        {
+            isTouching = true;
+            panVelocity = Vector3.zero;
+
+            var t0 = activeTouches[0];
+            var t1 = activeTouches[1];
+
+            Vector2 p0 = t0.screenPosition;
+            Vector2 p1 = t1.screenPosition;
+
+            Vector2 prev0 = p0 - t0.delta;
+            Vector2 prev1 = p1 - t1.delta;
+
+            // 1. PINCH ZOOM
+            float prevDist = Vector2.Distance(prev0, prev1);
+            float curDist = Vector2.Distance(p0, p1);
+            float pinchDelta = (curDist - prevDist);
+
+            if (Mathf.Abs(pinchDelta) > 1.2f)
             {
-                var t0 = Touchscreen.current.touches[0];
-                var t1 = Touchscreen.current.touches[1];
-                t0Pos = t0.position.ReadValue();
-                t1Pos = t1.position.ReadValue();
-                t0Delta = t0.delta.ReadValue();
-                t1Delta = t1.delta.ReadValue();
+                if (camComponent != null && camComponent.orthographic)
+                {
+                    targetOrthoSize = Mathf.Clamp(targetOrthoSize - pinchDelta * pinchZoomSensitivity, minOrthoSize, maxOrthoSize);
+                }
+                else
+                {
+                    targetDistance = Mathf.Clamp(targetDistance - pinchDelta * pinchZoomSensitivity, minDistance, maxDistance);
+                }
             }
 
-            // A. Calcul du Zoom (Distance entre les 2 doigts)
-            float currentDist = Vector2.Distance(t0Pos, t1Pos);
-            Vector2 prevT0 = t0Pos - t0Delta;
-            Vector2 prevT1 = t1Pos - t1Delta;
-            float prevDist = Vector2.Distance(prevT0, prevT1);
-            float distDelta = currentDist - prevDist;
-
-            if (Mathf.Abs(distDelta) > 0.5f)
+            // 2. ROTATION 360° INTUITIVE
+            Vector2 curVec = p1 - p0;
+            Vector2 prevVec = prev1 - prev0;
+            if (curVec.sqrMagnitude > 400f && prevVec.sqrMagnitude > 400f)
             {
-                float zoomAmount = distDelta * pinchZoomSensitivity * (targetPosition.y / 30f);
-                Vector3 zoomMove = transform.forward * zoomAmount;
-                targetPosition += zoomMove;
-                targetPosition.y = Mathf.Clamp(targetPosition.y, minHeight, maxHeight);
+                float angleDelta = Vector2.SignedAngle(prevVec, curVec);
+                if (Mathf.Abs(angleDelta) > 0.08f)
+                {
+                    currentYaw += angleDelta * twistRotationSensitivity;
+                }
             }
 
-            // B. Déplacement (Pan avec 2 doigts en parallèle)
-            Vector2 averageDelta = (t0Delta + t1Delta) * 0.5f;
-            if (averageDelta.sqrMagnitude > 1f)
+            // 3. PAN COMBINÉ
+            Vector2 avgDelta = (t0.delta + t1.delta) * 0.5f;
+            if (avgDelta.sqrMagnitude > 0.6f)
             {
                 Vector3 forward = transform.forward; forward.y = 0; forward.Normalize();
                 Vector3 right = transform.right; right.y = 0; right.Normalize();
-                Vector3 panMove = (-right * averageDelta.x - forward * averageDelta.y) * touchPanSpeed * (targetPosition.y / 25f);
-                targetPosition += panMove;
+                
+                float scale = (camComponent != null && camComponent.orthographic) ? (currentOrthoSize / 50f) : (targetDistance / 50f);
+                float moveScale = scale * touchPanSensitivity * 1.1f;
+                focusPosition += (-right * avgDelta.x - forward * avgDelta.y) * moveScale;
             }
 
             return;
         }
 
-        // -------------------------------------------------------------
-        // CAS 2 : UN SEUL DOIGT (PAN DU TERRAIN)
-        // -------------------------------------------------------------
-        if (touchCount == 1)
+        // CAS 2 : UN SEUL DOIGT (DÉPLACEMENT DE CARTE FLUIDE)
+        if (count == 1)
         {
-            // Vérifier que le doigt ne clique pas sur un bouton UI ou une unité en planification
-            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return;
+            var t0 = activeTouches[0];
+            Vector2 pos = t0.screenPosition;
+            Vector2 delta = t0.delta;
 
-            Vector2 delta = Vector2.zero;
-            bool isMoved = false;
-
-            if (Input.touchCount == 1)
+            if (UnitSpawnerUI.Instance != null && UnitSpawnerUI.Instance.IsPointerOverOnGUI(pos))
             {
-                Touch t = Input.GetTouch(0);
-                if (t.phase == UnityEngine.TouchPhase.Moved)
-                {
-                    delta = t.deltaPosition;
-                    isMoved = true;
-                }
-            }
-            else if (Touchscreen.current != null)
-            {
-                var t = Touchscreen.current.touches[0];
-                if (t.phase.ReadValue() == UnityEngine.InputSystem.TouchPhase.Moved)
-                {
-                    delta = t.delta.ReadValue();
-                    isMoved = true;
-                }
-            }
-
-            // Ne pas déplacer la caméra si le joueur trace un chemin avec une unité sélectionnée
-            TacticalPathManager pathMgr = TacticalPathManager.Instance;
-            if (pathMgr != null && pathMgr.uniteSelectionnee != null && pathMgr.phaseActuelle == TacticalPathManager.GamePhase.Planification)
-            {
-                // Si on a une unité active, le pan tactile se fait à 2 doigts pour ne pas gêner le tracé
+                isTouching = false;
                 return;
             }
 
-            if (isMoved && delta.sqrMagnitude > 0.5f)
+            isTouching = true;
+
+            if (delta.sqrMagnitude > 0.1f)
             {
                 Vector3 forward = transform.forward; forward.y = 0; forward.Normalize();
                 Vector3 right = transform.right; right.y = 0; right.Normalize();
-                
-                float dynamicSpeed = touchPanSpeed * (targetPosition.y / 25f);
-                Vector3 panMove = (-right * delta.x - forward * delta.y) * dynamicSpeed;
-                targetPosition += panMove;
+
+                float scale = (camComponent != null && camComponent.orthographic) ? (currentOrthoSize / 50f) : (targetDistance / 50f);
+                float moveScale = scale * touchPanSensitivity;
+                Vector3 move = (-right * delta.x - forward * delta.y) * moveScale;
+                focusPosition += move;
+
+                if (Time.unscaledDeltaTime > 0.0001f)
+                {
+                    panVelocity = move / Time.unscaledDeltaTime;
+                    panVelocity = Vector3.ClampMagnitude(panVelocity, 140f);
+                }
             }
+            return;
         }
+
+        isTouching = false;
     }
 
-    /// <summary>
-    /// Contrôles PC (Souris & Clavier)
-    /// </summary>
-    private void HandleMouseAndKeyboard()
+    private void HandleKeyboardAndMouse()
     {
-        // 1. Clavier Pan
         Vector3 move = Vector3.zero;
         if (Keyboard.current != null)
         {
-            if (Keyboard.current.wKey.isPressed || Keyboard.current.zKey.isPressed || Keyboard.current.upArrowKey.isPressed) move += Vector3.forward;
+            if (Keyboard.current.wKey.isPressed || Keyboard.current.upArrowKey.isPressed) move += Vector3.forward;
             if (Keyboard.current.sKey.isPressed || Keyboard.current.downArrowKey.isPressed) move += Vector3.back;
-            if (Keyboard.current.aKey.isPressed || Keyboard.current.qKey.isPressed || Keyboard.current.leftArrowKey.isPressed) move += Vector3.left;
+            if (Keyboard.current.aKey.isPressed || Keyboard.current.leftArrowKey.isPressed) move += Vector3.left;
             if (Keyboard.current.dKey.isPressed || Keyboard.current.rightArrowKey.isPressed) move += Vector3.right;
         }
 
@@ -222,64 +344,31 @@ public class TacticalCamera : MonoBehaviour
             move.Normalize();
             Vector3 forward = transform.forward; forward.y = 0; forward.Normalize();
             Vector3 right = transform.right; right.y = 0; right.Normalize();
-            targetPosition += (forward * move.z + right * move.x) * panSpeed * (targetPosition.y / 30f) * Time.deltaTime;
+            float scale = (camComponent != null && camComponent.orthographic) ? (currentOrthoSize / 50f) : (targetDistance / 50f);
+            focusPosition += (forward * move.z + right * move.x) * panSpeed * scale * Time.unscaledDeltaTime;
         }
 
-        // 2. Molette Zoom PC
-        float scrollDelta = 0f;
+        // Molette Zoom
         if (Mouse.current != null)
         {
             float scroll = Mouse.current.scroll.ReadValue().y;
-            if (scroll > 0) scrollDelta = 1f;
-            else if (scroll < 0) scrollDelta = -1f;
+            if (scroll > 0) ZoomIn(8f);
+            else if (scroll < 0) ZoomOut(8f);
         }
+
         if (Keyboard.current != null)
         {
-            if (Keyboard.current.rKey.isPressed) scrollDelta = 1f;
-            if (Keyboard.current.fKey.isPressed) scrollDelta = -1f;
+            if (Keyboard.current.rKey.isPressed) ZoomIn(40f * Time.unscaledDeltaTime);
+            if (Keyboard.current.fKey.isPressed) ZoomOut(40f * Time.unscaledDeltaTime);
+            if (Keyboard.current.qKey.isPressed) currentYaw -= 90f * Time.unscaledDeltaTime;
+            if (Keyboard.current.eKey.isPressed) currentYaw += 90f * Time.unscaledDeltaTime;
         }
 
-        if (scrollDelta != 0)
+        if (Mouse.current != null && Mouse.current.rightButton.isPressed)
         {
-            Vector3 zoomMove = transform.forward * scrollDelta * zoomSpeed * 0.25f;
-            targetPosition += zoomMove;
-            targetPosition.y = Mathf.Clamp(targetPosition.y, minHeight, maxHeight);
-        }
-
-        // 3. Clic Droit Rotation PC
-        if (Mouse.current != null)
-        {
-            if (Mouse.current.rightButton.wasPressedThisFrame)
-            {
-                isRotating = true;
-                Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
-                Ray ray = new Ray(transform.position, transform.forward);
-                if (groundPlane.Raycast(ray, out float enterDistance))
-                {
-                    rotationPivot = ray.GetPoint(enterDistance);
-                }
-                else
-                {
-                    rotationPivot = transform.position + transform.forward * 25f;
-                }
-                orbitDistance = Vector3.Distance(transform.position, rotationPivot);
-            }
-
-            if (Mouse.current.rightButton.isPressed && isRotating)
-            {
-                Vector2 delta = Mouse.current.delta.ReadValue();
-                yaw += delta.x * rotationSensitivity;
-                pitch -= delta.y * rotationSensitivity;
-                pitch = Mathf.Clamp(pitch, 15f, 85f);
-
-                Quaternion rotation = Quaternion.Euler(pitch, yaw, 0f);
-                transform.rotation = rotation;
-                targetPosition = rotationPivot - (rotation * Vector3.forward * orbitDistance);
-            }
-            else if (Mouse.current.rightButton.wasReleasedThisFrame)
-            {
-                isRotating = false;
-            }
+            Vector2 delta = Mouse.current.delta.ReadValue();
+            currentYaw -= delta.x * 0.25f;
+            targetPitch = Mathf.Clamp(targetPitch - delta.y * 0.2f, minPitch, maxPitch);
         }
     }
 }

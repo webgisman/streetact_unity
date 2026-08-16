@@ -201,13 +201,7 @@ public partial class UnitAI
             
             if (cachedAuraMat == null)
             {
-                Shader unlitShader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Transparent");
-                cachedAuraMat = new Material(unlitShader);
-                Color col = new Color(0f, 0.7f, 1f, 0.5f);
-                if (cachedAuraMat.HasProperty("_BaseColor")) cachedAuraMat.SetColor("_BaseColor", col);
-                if (cachedAuraMat.HasProperty("_Color")) cachedAuraMat.SetColor("_Color", col);
-                cachedAuraMat.SetFloat("_Surface", 1);
-                cachedAuraMat.SetFloat("_Blend", 0);
+                cachedAuraMat = SafeMaterialFactory.CreateUnlit(new Color(0f, 0.7f, 1f, 0.5f));
             }
             coverAura.GetComponent<MeshRenderer>().sharedMaterial = cachedAuraMat;
         }
