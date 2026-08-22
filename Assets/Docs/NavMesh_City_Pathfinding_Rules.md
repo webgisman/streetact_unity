@@ -1,10 +1,10 @@
 # Règles d'Architecture : NavMesh Procédural & Pathfinding Tactique
 
-Ce document sert de référence technique absolue pour éviter toute régression sur la génération procédurale de ville (OSM / Overpass), le bake dynamique du NavMesh (`NavMeshSurface`), et le système de déplacement tactique par tour (`TacticalPathManager`, `UnitAI`).
+Ce document sert de référence technique absolue pour éviter toute régression sur la génération procédurale de ville (OSM / Overpass), le bake dynamique du NavMesh (`NavMeshSurface`), la gestion des barricades, des destructions de bâtiments, et le système de déplacement tactique par tour (`TacticalPathManager`, `UnitAI`).
 
 ---
 
-## 1. Les Pièges Rencontrés (Historique des Problèmes)
+## 1. Les Pièges Rencontrés (Historique des Problèmes & Solutions Dérives)
 
 ### Piège 1 : Le faux départ du Bake NavMesh (Problème d'asynchronisme Sol vs Bâtiments)
 * **Symptôme :** Les unités et le tracé ignoraient totalement les bâtiments et traversaient toute la carte en ligne droite.
@@ -95,26 +95,50 @@ Ce document sert de référence technique absolue pour éviter toute régression
 
 ---
 
+### Piège 9 : Blocage Dynamique des Barricades Routières (`RoadBarrier`)
+* **Symptôme :** Les unités traversaient les barricades routières déployées en cours de partie car le NavMesh n'était pas rebaké.
+* **Solution :** Chaque barricade routière (`RoadBarrier.cs`) est équipée d'un `NavMeshObstacle` avec `carving = true`. Cela découpe dynamiquement le maillage de navigation en temps réel sans nécessiter de rebake global lourd.
+
+---
+
+### Piège 10 : Franchissement des Ruines et Bâtiments Détruits (`DestructibleEnvironment`)
+* **Symptôme :** Lorsqu'un bâtiment était détruit par un mortier ou un tir de char, les unités continuaient de le contourner comme s'il était encore debout.
+* **Solution :** 
+  1. À la destruction, tous les colliders bloquants de l'immeuble sont désactivés (`c.enabled = false`).
+  2. L'emprise est enregistrée dans la liste statique `DestructibleEnvironment.AllRubbleBounds`.
+  3. `BuildingStructure.ContainsPoint2D()` et `TacticalPathManager` vérifient `DestructibleEnvironment.IsPositionInRubble(pos)` pour autoriser immédiatement la traversée directe en ligne droite.
+
+---
+
 ## 2. Ordre d'Initialisation Obligatoire du Jeu
 
 ```
-1. MapTileLoader.Start() 
+1. GameManagerUI (Awake/Start)
+   └── QualitySettings.vSyncCount = 0; Application.targetFrameRate = 60;
+   └── OptimizeSceneMaterials() (Active le GPU Instancing)
+   └── Configure le brouillard militaire (RenderSettings.fog)
+
+2. MapTileLoader.Start() 
    └── Télécharge les tuiles OpenStreetMap
    └── Génère le Mesh customisé du Sol (Y = -0.1f)
    └── Met isMapLoaded = true
 
-2. CityGenerator.Start() (en parallèle)
-   └── Télécharge le JSON Overpass API
+3. CityGenerator.Start() (en parallèle)
+   └── Télécharge le JSON Overpass API (avec fallback miroir et cache local)
+   └── GeoProjection.SetCenter(latitude, longitude)
+   └── BuildingSubdivider.Subdivide() pour découper les grands blocs
    └── Génère les meshes des bâtiments (murs double-face, -2m, NavMeshModifier Not Walkable)
    └── Attend impérativement : while (!mapLoader.isMapLoaded) yield return null;
    └── Attend 2 frames de synchronisation physique
    └── surface.RemoveData();
    └── surface.BuildNavMesh();
+   └── TacticalStreamingManager.Instance.RegisterAllBuildings();
    └── Déclenche unit.OnNavMeshReady() sur toutes les unités actives
 
-3. UnitAI.OnNavMeshReady()
+4. UnitAI.OnNavMeshReady()
    └── agent.enabled = true;
    └── agent.areaMask = ~(1 << notWalkableArea);
+   └── agent.obstacleAvoidanceType = HighQualityObstacleAvoidance;
    └── agent.Warp(hit.position);
    └── Prêt pour la phase de planification tactique
 ```

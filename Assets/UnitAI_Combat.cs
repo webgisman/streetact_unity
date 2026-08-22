@@ -382,6 +382,12 @@ public partial class UnitAI
         }
 
         SpawnTracer(startPos, endPos, isTank);
+        SpawnMuzzleSmoke(startPos);
+        if (!isTank)
+        {
+            Vector3 casingEjectDir = (transform.right * 0.6f + Vector3.up * 0.9f + -transform.forward * 0.15f).normalized;
+            SpawnCasing(startPos, casingEjectDir);
+        }
 
         Vector3 hitDirection = (target.transform.position - transform.position).normalized;
         // Calcul des dégâts équilibrés

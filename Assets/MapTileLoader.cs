@@ -20,18 +20,35 @@ public class MapTileLoader : MonoBehaviour
     [Header("State")]
     public bool isMapLoaded = false;
 
+    // Suivi du téléchargement de tuiles en cours. Sans ça, un second appel à LoadMap() (ex : le joueur
+    // choisit le GPS ou une ville hors-ligne pendant que le chargement par défaut du Start() télécharge
+    // encore ses tuiles) laisse deux coroutines de téléchargement tourner en parallèle sur le même "Sol" :
+    // celle qui finit en dernier gagne, sans garantie que ce soit la bonne -> sol OSM décalé par rapport
+    // aux bâtiments générés pour la position réellement choisie.
+    private Coroutine activeMapLoad;
+
     [ContextMenu("Load Map")]
     public void LoadMap()
     {
         EnsureSolObject();
-        
+
         if (Application.isPlaying)
         {
-            StartCoroutine(DownloadAndApplyMap());
+            CancelActiveMapLoad();
+            activeMapLoad = StartCoroutine(DownloadAndApplyMap());
         }
         else
         {
             Debug.LogWarning("[MapTileLoader] Veuillez lancer le mode Play pour charger la carte.");
+        }
+    }
+
+    private void CancelActiveMapLoad()
+    {
+        if (activeMapLoad != null)
+        {
+            StopCoroutine(activeMapLoad);
+            activeMapLoad = null;
         }
     }
 
@@ -208,8 +225,9 @@ public class MapTileLoader : MonoBehaviour
 
     public void ApplyDefaultOfflineMap()
     {
+        CancelActiveMapLoad();
         EnsureSolObject();
-        
+
         Texture2D globalTexture = Resources.Load<Texture2D>("DefaultMapTexture");
         if (globalTexture == null)
         {
@@ -343,5 +361,8 @@ public class MapTileLoader : MonoBehaviour
 
         isMapLoaded = true;
         Debug.Log($"<color=green>[MapTileLoader] ✅ Maillage Quad généré ({width:F1}m x {height:F1}m) centré sur Sol !</color>");
+        // Diagnostic d'alignement : à comparer avec la ligne "[CityGenerator] Zone couverte" pour
+        // détecter un décalage entre le fond de carte (raster) et les bâtiments (vecteur OSM).
+        Debug.Log($"<color=yellow>[MapTileLoader] 📍 Coins du sol : X[{topLeftUnity.x:F1} , {bottomRightUnity.x:F1}] Z[{bottomRightUnity.z:F1} , {topLeftUnity.z:F1}]</color>");
     }
 }

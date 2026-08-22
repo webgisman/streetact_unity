@@ -2,6 +2,8 @@
 
 Ce document sert de référence pour toutes les IA et développeurs travaillant sur la partie 3D, Animation, et Mécaniques de ce projet. Il corrige d'anciennes erreurs de diagnostic et liste les outils d'automatisation disponibles.
 
+---
+
 ## 1. Importation Mixamo : Le Bug "Moitié Sous Terre" (La Vraie Solution)
 
 Historiquement, de faux diagnostics ont poussé à utiliser le type `Generic` pour importer les FBX Mixamo, par peur de "casser le mesh". **C'était une grave erreur.**
@@ -17,30 +19,44 @@ Pour tout nouveau fichier FBX importé depuis Mixamo (personnage OU animation) :
 2. **Animation Type** : `Humanoid` (**OBLIGATOIRE**).
 3. **Avatar Definition** : `Create From This Model`.
 
-> **Outil Automatique :** Pour gagner du temps, utilisez le script personnalisé via le menu **`Tools -> Corriger les Animations (Mettre en Humanoid)`**. Il analysera tout le dossier `Assets` et configurera correctement tous les FBX en Humanoid.
+> **Outils Automatiques disponibles :**
+> - **`StreetAct > 1. Réparer les Squelettes 3D (Humanoid)`** : Analyse tous les FBX du projet et les convertit en Humanoid avec Avatar.
+> - **`Tools > Corriger les Animations (Mettre en Humanoid + Bake Y)`** : Force le type Humanoid et verrouille l'axe vertical Y sur les animations de pose.
 
 ---
 
-## 2. Configuration de l'Animator
+## 2. Élimination des Saccades de Course (Bake Into Pose)
 
-Les unités utilisent des `Triggers` pour déclencher des états spécifiques (ex: `Hit` pour la douleur, `Die` pour la mort).
+Pour les animations de déplacement (ex: `Rifle Run.fbx`) :
+- Si l'animation n'est pas exportée "In Place", les hanches avancent et se téléportent en arrière à la fin du cycle.
+- **Règle absolue** : Cocher `Bake Into Pose` (Position XZ et Rotation).
+
+> **Outil Automatique :**
+> - **`StreetAct > 4. Activer le Loop et Fixer les Saccades d'Animation (Bake Into Pose)`** : Applique en un clic le bouclage continu et le verrouillage de position sans toucher au Root Motion de Unity.
+
+---
+
+## 3. Configuration Automatique de l'Animator
+
+Les unités utilisent des `Triggers` et `Booleans` pour déclencher des états spécifiques (`IsShooting`, `Hit`, `Die`, `Climb`).
 Au lieu de configurer manuellement le `UnitAnimator.controller` (création des transitions, décochage du "Has Exit Time", etc.) :
 
-> **Outil Automatique :** Cliquez sur le menu **`Tools -> Configurer Animator Unités (Hit et Death)`**. Ce script va récupérer les animations FBX, créer les états, et générer le graphe complet de l'Animator automatiquement !
+> **Outil Automatique :**
+> - **`Tools > Configurer Animator Unités (Hit, Death et Escalade)`** : Construit automatiquement tout l'arbre d'état de l'Animator Controller avec les bonnes transitions et paramètres.
 
 ---
 
-## 3. Système de Sang Procédural (Gratuit & Zéro Asset)
+## 4. Système de Sang Procédural (Gratuit & Zéro Asset)
 
 Inutile de chercher et télécharger des textures de sang sur l'Asset Store.
-Le script `UnitAI.cs` embarque la fonction `SpawnBloodEffect` qui **génère un système de particules Unity 100% par le code** à chaque fois qu'une balle touche l'unité.
+Le script `UnitAI_Visuals.cs` embarque la fonction `SpawnBloodEffect` qui **génère un système de particules Unity 100% par le code** à chaque fois qu'une balle touche l'unité :
 - Le sang (rouge sombre) gicle en forme de cône.
 - La direction des particules est calculée dynamiquement selon la trajectoire de la balle entrante.
 - L'effet est automatiquement détruit après 1.5 seconde pour optimiser les performances.
 
 ---
 
-## 4. Caméra Tactique Hybride (2D / 3D)
+## 5. Caméra Tactique Hybride (2D / 3D)
 
 La caméra (`TacticalCamera.cs` & `CameraStateManager.cs`) offre une expérience fluide, ultra-légère et sans saccade :
 - **Calcul en `LateUpdate()`** : Synchronisation parfaite post-animation pour éliminer tout micro-bégaiement (*stutter*).
@@ -50,10 +66,10 @@ La caméra (`TacticalCamera.cs` & `CameraStateManager.cs`) offre une expérience
 
 ---
 
-## 5. NavMesh et Initialisation
+## 6. NavMesh et Initialisation Sécurisée
 
 Le NavMesh étant généré dynamiquement au démarrage (`CityGenerator`) :
 - Le `NavMeshAgent` de l'unité lance des erreurs s'il s'active avant que le sol ne soit cuit.
 - L'agent est désactivé dans `Start()` : `agent.enabled = false;`.
-- Le `CityGenerator` appelle `OnNavMeshReady()` sur les unités.
-- Le script `UnitAI` exclut les zones "Not Walkable", réactive l'agent, et plaque le personnage au sol avec `agent.Warp()`.
+- Le `CityGenerator` appelle `OnNavMeshReady()` sur les unités une fois le bake terminé.
+- Le script `UnitAI_Movement.cs` exclut les zones "Not Walkable", configure l'évitement d'obstacles RVO (`HighQualityObstacleAvoidance`), réactive l'agent, et plaque le personnage au sol avec `agent.Warp()`.

@@ -67,7 +67,9 @@ public partial class UnitAI
         main.startLifetime = 0.4f;
         main.startSpeed = new ParticleSystem.MinMaxCurve(2f, 6f);
         main.startSize = new ParticleSystem.MinMaxCurve(0.05f, 0.15f);
-        main.startColor = new Color(0.6f, 0f, 0f, 1f);
+        // Léger jitter de teinte pour casser la répétitivité visuelle sur les tirs en rafale
+        float bloodShade = Random.Range(-0.08f, 0.08f);
+        main.startColor = new Color(Mathf.Clamp01(0.6f + bloodShade), 0f, 0f, 1f);
         main.maxParticles = 100;
         main.playOnAwake = true;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
@@ -113,7 +115,8 @@ public partial class UnitAI
         main.startLifetime = new ParticleSystem.MinMaxCurve(0.2f, 0.6f);
         main.startSpeed = new ParticleSystem.MinMaxCurve(5f, 15f);
         main.startSize = new ParticleSystem.MinMaxCurve(0.05f, 0.2f);
-        main.startColor = new Color(1f, 0.7f, 0.1f, 1f);
+        float sparkShade = Random.Range(-0.1f, 0.1f);
+        main.startColor = new Color(1f, Mathf.Clamp01(0.7f + sparkShade), 0.1f, 1f);
         main.maxParticles = 50;
         main.playOnAwake = true;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
@@ -140,6 +143,83 @@ public partial class UnitAI
 
         ps.Play();
         Destroy(sparksObj, 1.5f);
+    }
+
+    private static Material cachedMuzzleSmokeMat;
+    private static Material cachedCasingMat;
+
+    /// <summary>
+    /// Petit puff de fumée de tir qui se dissipe vite au niveau du canon (visuel manquant par rapport
+    /// à la documentation d'architecture : gunshot sonore existait déjà, pas la fumée).
+    /// </summary>
+    private void SpawnMuzzleSmoke(Vector3 position)
+    {
+        GameObject smokeObj = new GameObject("MuzzleSmoke");
+        smokeObj.transform.position = position;
+
+        ParticleSystem ps = smokeObj.AddComponent<ParticleSystem>();
+        ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
+        var main = ps.main;
+        main.duration = 0.3f;
+        main.startLifetime = new ParticleSystem.MinMaxCurve(0.25f, 0.45f);
+        main.startSpeed = new ParticleSystem.MinMaxCurve(0.4f, 1.1f);
+        main.startSize = new ParticleSystem.MinMaxCurve(0.15f, 0.35f);
+        main.startColor = new Color(0.75f, 0.75f, 0.75f, 0.5f);
+        main.maxParticles = 12;
+        main.playOnAwake = true;
+        main.simulationSpace = ParticleSystemSimulationSpace.World;
+
+        var emission = ps.emission;
+        emission.rateOverTime = 0f;
+        emission.SetBursts(new ParticleSystem.Burst[] { new ParticleSystem.Burst(0f, 4, 7) });
+
+        var shape = ps.shape;
+        shape.shapeType = ParticleSystemShapeType.Cone;
+        shape.angle = 12f;
+        shape.radius = 0.05f;
+
+        var colorOverLifetime = ps.colorOverLifetime;
+        colorOverLifetime.enabled = true;
+        Gradient grad = new Gradient();
+        grad.SetKeys(
+            new[] { new GradientColorKey(Color.white, 0f), new GradientColorKey(Color.gray, 1f) },
+            new[] { new GradientAlphaKey(0.55f, 0f), new GradientAlphaKey(0f, 1f) });
+        colorOverLifetime.color = grad;
+
+        ParticleSystemRenderer renderer = ps.GetComponent<ParticleSystemRenderer>();
+        if (cachedMuzzleSmokeMat == null) cachedMuzzleSmokeMat = SafeMaterialFactory.CreateUnlit(Color.white);
+        renderer.sharedMaterial = cachedMuzzleSmokeMat;
+
+        ps.Play();
+        Destroy(smokeObj, 0.6f);
+    }
+
+    /// <summary>
+    /// Éjecte une petite douille physique du côté de l'arme (visuel manquant par rapport à la
+    /// documentation d'architecture). Simple capsule primitive avec rotation aléatoire, pas de
+    /// dépendance à un asset externe.
+    /// </summary>
+    private void SpawnCasing(Vector3 position, Vector3 ejectDirection)
+    {
+        GameObject casing = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+        casing.name = "Casing";
+        casing.transform.position = position;
+        casing.transform.localScale = new Vector3(0.02f, 0.045f, 0.02f);
+        casing.transform.rotation = Random.rotation;
+
+        Collider col = casing.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+
+        if (cachedCasingMat == null) cachedCasingMat = SafeMaterialFactory.CreateLit(new Color(0.78f, 0.66f, 0.28f));
+        casing.GetComponent<MeshRenderer>().sharedMaterial = cachedCasingMat;
+
+        Rigidbody rb = casing.AddComponent<Rigidbody>();
+        rb.mass = 0.02f;
+        rb.linearVelocity = ejectDirection * Random.Range(1.5f, 3f);
+        rb.angularVelocity = Random.insideUnitSphere * 12f;
+
+        Destroy(casing, 2f);
     }
 
     /// <summary>

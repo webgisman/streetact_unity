@@ -12,6 +12,9 @@ public class BuildingStructure : MonoBehaviour
     {
         public Vector3 position;       // Position au sol de la porte
         public Vector3 entryDirection; // Normale orientée vers la rue
+        public int edgeIndex;          // Index de l'arête du polygone portant cette porte
+        public float edgeDistance;     // Distance le long de l'arête depuis son premier sommet
+        public float width = 1.4f;     // Largeur de l'ouverture à découper dans le mur
     }
 
     [System.Serializable]

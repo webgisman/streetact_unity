@@ -33,6 +33,7 @@ public class TacticalPathManager : MonoBehaviour
     private bool isExitDoorAction = false;
     private bool isGroundCheckpointSelected = false;
     private bool isNearBuildingWall = false;
+    private float contextMenuFade = 0f; // Anim. légère (pop + fondu) des menus contextuels
     private Rect activeMenuRect = Rect.zero;
 
     private Color couleurOriginale;
@@ -962,7 +963,7 @@ public class TacticalPathManager : MonoBehaviour
             endTurnBtnStyle.normal.textColor = Color.white;
 
             // Bouton Fin de Tour (Bas Droite)
-            if (GUI.Button(new Rect(virtualW - 145, virtualH - 58, 135, 46), "▶️ FIN TOUR", endTurnBtnStyle))
+            if (ProceduralIconFactory.IconButton(new Rect(virtualW - 145, virtualH - 58, 135, 46), ProceduralIconFactory.Check(), "▶️ FIN TOUR", endTurnBtnStyle))
             {
                 LancerExecutionTour();
             }
@@ -1005,7 +1006,7 @@ public class TacticalPathManager : MonoBehaviour
                 if (is2DMode)
                 {
                     touchBtnStyle.normal.textColor = new Color(0.2f, 0.95f, 1f);
-                    if (GUI.Button(new Rect(172, virtualH - 58, 125, 46), "🔍 VUE 3D", touchBtnStyle))
+                    if (ProceduralIconFactory.IconButton(new Rect(172, virtualH - 58, 125, 46), ProceduralIconFactory.Cube3D(), "🔍 VUE 3D", touchBtnStyle))
                     {
                         if (CameraStateManager.Instance != null)
                         {
@@ -1024,6 +1025,8 @@ public class TacticalPathManager : MonoBehaviour
             if (uniteSelectionnee != null && isBuildingSelected && selectedBuilding != null)
             {
                 isAnyMenuDrawn = true;
+                contextMenuFade = UIAnimator.Advance(contextMenuFade, true, 8f);
+                UIAnimator.ApplyFadeColor(contextMenuFade);
                 GUIStyle titleStyle = new GUIStyle(GUI.skin.box);
                 titleStyle.fontSize = 13;
                 titleStyle.fontStyle = FontStyle.Bold;
@@ -1043,21 +1046,21 @@ public class TacticalPathManager : MonoBehaviour
 
                 // Option 1 : Infiltration / Intérieur
                 btnStyle.normal.textColor = new Color(0.3f, 1f, 0.5f);
-                if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 34), "1. 🏢 INFILTRATION / INTÉRIEUR (RDC)", btnStyle))
+                if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 28, menuWidth - 20, 34), ProceduralIconFactory.House(), "1. 🏢 INFILTRATION / INTÉRIEUR (RDC)", btnStyle))
                 {
                     ConfirmerBuildingAction(1);
                 }
 
                 // Option 2 : Monter sur le toit
                 btnStyle.normal.textColor = new Color(0.2f, 0.9f, 1f);
-                if (GUI.Button(new Rect(startX + 10, startY + 66, menuWidth - 20, 34), "2. 🧗 MONTER SUR LE TOIT (Sniper / Guet)", btnStyle))
+                if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 66, menuWidth - 20, 34), ProceduralIconFactory.Ladder(), "2. 🧗 MONTER SUR LE TOIT (Sniper / Guet)", btnStyle))
                 {
                     ConfirmerBuildingAction(2);
                 }
 
                 // Option 3 : Porte la plus proche
                 btnStyle.normal.textColor = Color.yellow;
-                if (GUI.Button(new Rect(startX + 10, startY + 104, menuWidth - 20, 34), "3. 🚪 PORTE LA PLUS PROCHE", btnStyle))
+                if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 104, menuWidth - 20, 34), ProceduralIconFactory.Door(), "3. 🚪 PORTE LA PLUS PROCHE", btnStyle))
                 {
                     ConfirmerBuildingAction(3);
                 }
@@ -1075,6 +1078,8 @@ public class TacticalPathManager : MonoBehaviour
             else if (uniteSelectionnee != null && isDoorSelected && selectedDoor != null)
             {
                 isAnyMenuDrawn = true;
+                contextMenuFade = UIAnimator.Advance(contextMenuFade, true, 8f);
+                UIAnimator.ApplyFadeColor(contextMenuFade);
                 GUIStyle titleStyle = new GUIStyle(GUI.skin.box);
                 titleStyle.fontSize = 13;
                 titleStyle.fontStyle = FontStyle.Bold;
@@ -1147,6 +1152,8 @@ public class TacticalPathManager : MonoBehaviour
             else if (uniteSelectionnee != null && isWindowSelected && selectedWindow != null)
             {
                 isAnyMenuDrawn = true;
+                contextMenuFade = UIAnimator.Advance(contextMenuFade, true, 8f);
+                UIAnimator.ApplyFadeColor(contextMenuFade);
                 GUIStyle titleStyle = new GUIStyle(GUI.skin.box);
                 titleStyle.fontSize = 13;
                 titleStyle.fontStyle = FontStyle.Bold;
@@ -1165,7 +1172,7 @@ public class TacticalPathManager : MonoBehaviour
                 GUI.Box(activeMenuRect, $"🛡️ FENÊTRE : {selectedWindow.building.gameObject.name}", titleStyle);
 
                 btnStyle.normal.textColor = new Color(1f, 0.75f, 0.1f);
-                if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 34), "1. 🛡️ GUETTER (Couvert -75%)", btnStyle))
+                if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 28, menuWidth - 20, 34), ProceduralIconFactory.Shield(), "1. 🛡️ GUETTER (Couvert -75%)", btnStyle))
                 {
                     ConfirmerAction((int)NodeAction.GarnisonFenetre);
                 }
@@ -1187,6 +1194,8 @@ public class TacticalPathManager : MonoBehaviour
             else if (uniteSelectionnee != null && isGroundCheckpointSelected)
             {
                 isAnyMenuDrawn = true;
+                contextMenuFade = UIAnimator.Advance(contextMenuFade, true, 8f);
+                UIAnimator.ApplyFadeColor(contextMenuFade);
                 UnitAI selectedUnitAI = uniteSelectionnee.GetComponent<UnitAI>();
                 bool isMortarUnit = (selectedUnitAI != null && selectedUnitAI.isMortar);
 
@@ -1211,7 +1220,7 @@ public class TacticalPathManager : MonoBehaviour
 
                     // Option 1 : Tir de Mortier
                     btnStyle.normal.textColor = new Color(1f, 0.4f, 0.1f);
-                    if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), "1. 🎯 TIR DE MORTIER (Zone AoE)", btnStyle))
+                    if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), ProceduralIconFactory.Mortar(), "1. 🎯 TIR DE MORTIER (Zone AoE)", btnStyle))
                     {
                         ConfirmerAction((int)NodeAction.TirMortier);
                     }
@@ -1225,7 +1234,7 @@ public class TacticalPathManager : MonoBehaviour
 
                     // Option 3 : Attendre 30 secondes
                     btnStyle.normal.textColor = Color.yellow;
-                    if (GUI.Button(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
+                    if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
                     {
                         ConfirmerAction((int)NodeAction.Attendre30s);
                     }
@@ -1258,14 +1267,14 @@ public class TacticalPathManager : MonoBehaviour
 
                     // Option 2 : Guetter Tourelle
                     btnStyle.normal.textColor = Color.cyan;
-                    if (GUI.Button(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), "2. 🛡️ GUETTER (Surveillance)", btnStyle))
+                    if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER (Surveillance)", btnStyle))
                     {
                         ConfirmerAction((int)NodeAction.Guetter);
                     }
 
                     // Option 3 : Attendre 30 secondes
                     btnStyle.normal.textColor = Color.yellow;
-                    if (GUI.Button(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
+                    if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
                     {
                         ConfirmerAction((int)NodeAction.Attendre30s);
                     }
@@ -1321,13 +1330,13 @@ public class TacticalPathManager : MonoBehaviour
                             }
 
                             btnStyle.normal.textColor = Color.cyan;
-                            if (GUI.Button(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), "2. 🛡️ GUETTER SUR LE TOIT", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER SUR LE TOIT", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Guetter);
                             }
 
                             btnStyle.normal.textColor = Color.yellow;
-                            if (GUI.Button(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Attendre30s);
                             }
@@ -1344,19 +1353,19 @@ public class TacticalPathManager : MonoBehaviour
                             GUI.Box(activeMenuRect, "🧗 INFANTERIE : ESCALADE DE FAÇADE", titleStyle);
 
                             btnStyle.normal.textColor = new Color(0.2f, 0.9f, 0.4f);
-                            if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), "1. 🧗 ESCALADER SUR LE TOIT", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), ProceduralIconFactory.Ladder(), "1. 🧗 ESCALADER SUR LE TOIT", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Escalade);
                             }
 
                             btnStyle.normal.textColor = Color.cyan;
-                            if (GUI.Button(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), "2. 🛡️ GUETTER (+50% Défense)", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER (+50% Défense)", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Guetter);
                             }
 
                             btnStyle.normal.textColor = Color.yellow;
-                            if (GUI.Button(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Attendre30s);
                             }
@@ -1376,19 +1385,19 @@ public class TacticalPathManager : MonoBehaviour
                             GUI.Box(activeMenuRect, "🧗 INFANTERIE : DESCENTE VERS RUE", titleStyle);
 
                             btnStyle.normal.textColor = new Color(1f, 0.6f, 0.2f);
-                            if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), "1. 🧗 DESCENDRE DU TOIT", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), ProceduralIconFactory.Ladder(), "1. 🧗 DESCENDRE DU TOIT", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Escalade);
                             }
 
                             btnStyle.normal.textColor = Color.cyan;
-                            if (GUI.Button(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), "2. 🛡️ GUETTER (+50% Défense)", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER (+50% Défense)", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Guetter);
                             }
 
                             btnStyle.normal.textColor = Color.yellow;
-                            if (GUI.Button(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Attendre30s);
                             }
@@ -1411,13 +1420,13 @@ public class TacticalPathManager : MonoBehaviour
                             }
 
                             btnStyle.normal.textColor = Color.cyan;
-                            if (GUI.Button(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), "2. 🛡️ GUETTER INTÉRIEUR", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER INTÉRIEUR", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Guetter);
                             }
 
                             btnStyle.normal.textColor = Color.yellow;
-                            if (GUI.Button(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Attendre30s);
                             }
@@ -1440,13 +1449,13 @@ public class TacticalPathManager : MonoBehaviour
                             }
 
                             btnStyle.normal.textColor = Color.cyan;
-                            if (GUI.Button(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), "2. 🛡️ GUETTER (+50% Défense)", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER (+50% Défense)", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Guetter);
                             }
 
                             btnStyle.normal.textColor = Color.yellow;
-                            if (GUI.Button(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
+                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
                             {
                                 ConfirmerAction((int)NodeAction.Attendre30s);
                             }
@@ -1454,7 +1463,7 @@ public class TacticalPathManager : MonoBehaviour
                             if (isNearBuildingWall)
                             {
                                 btnStyle.normal.textColor = Color.green;
-                                if (GUI.Button(new Rect(startX + 10, startY + 136, menuWidth - 20, 32), "4. 🥷 SE CACHER (Contre mur)", btnStyle))
+                                if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 136, menuWidth - 20, 32), ProceduralIconFactory.Eye(), "4. 🥷 SE CACHER (Contre mur)", btnStyle))
                                 {
                                     ConfirmerAction((int)NodeAction.SeCacher);
                                 }
@@ -1472,9 +1481,12 @@ public class TacticalPathManager : MonoBehaviour
                 }
             }
 
+            GUI.color = Color.white; // Toujours restaurer après le fondu des menus contextuels ci-dessus
+
             if (!isAnyMenuDrawn)
             {
                 activeMenuRect = Rect.zero;
+                contextMenuFade = UIAnimator.Advance(contextMenuFade, false, 8f);
             }
         }
         else

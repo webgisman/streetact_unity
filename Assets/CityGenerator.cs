@@ -14,8 +14,16 @@ public class CityGenerator : MonoBehaviour
     public float latitude = 50.6927f;
     public float longitude = 3.1778f;
     public float radius = 250f;
-    public float buildingHeight = 5f;
+    public float buildingHeight = 6f; // Hauteur moyenne des bâtiments (variation aléatoire de ±1.5m par lot)
     public Material buildingMaterial;
+
+    // Référence de la génération actuellement en cours (réseau OU hors-ligne). Sans ce suivi, un appel
+    // à GenerateCity()/LoadDefaultOfflineCity() pendant que la génération par défaut du Start() est
+    // encore en vol (ex : le joueur choisit le GPS ou une ville hors-ligne dans le sélecteur de démarrage
+    // avant que la requête Overpass par défaut n'ait fini) laisse DEUX villes se construire en parallèle
+    // sur des coordonnées différentes -> bâtiments dupliqués/décalés par rapport au sol OSM téléchargé
+    // pour l'autre position. On annule systématiquement toute génération en cours avant d'en lancer une nouvelle.
+    private Coroutine activeGeneration;
 
     private void Start()
     {
@@ -23,34 +31,39 @@ public class CityGenerator : MonoBehaviour
         // une fois que le Sol est téléchargé par MapTileLoader.
         if (Application.isPlaying)
         {
-            // EXTRÊMEMENT IMPORTANT :
-            // Si une ancienne version de "City" est sauvegardée dans la scène avec les anciens paramètres,
-            // ses enfants ont toujours la case "Static" cochée. Cela provoque l'erreur "Combined Mesh".
-            // On la supprime donc automatiquement pour regénérer une ville propre.
-            GameObject oldCity = GameObject.Find("City");
-            if (oldCity != null)
-            {
-                Destroy(oldCity);
-            }
-
-            // On lance la génération de la ville au démarrage. 
+            // On lance la génération de la ville au démarrage.
             // La méthode s'occupera d'attendre le sol, de baker le NavMesh, puis de libérer les unités !
             GenerateCity();
         }
     }
 
-    [ContextMenu("Generate City")]
-    public void GenerateCity()
+    // Annule la génération en cours (s'il y en a une) et nettoie la ville précédente. À appeler avant
+    // de démarrer toute nouvelle génération, réseau ou hors-ligne.
+    private void CancelActiveGenerationAndClearCity()
     {
-        // Nettoyer l'ancienne ville si on regénère via le menu
+        if (activeGeneration != null)
+        {
+            StopCoroutine(activeGeneration);
+            activeGeneration = null;
+        }
+
+        // EXTRÊMEMENT IMPORTANT :
+        // Si une ancienne version de "City" est sauvegardée dans la scène avec les anciens paramètres,
+        // ses enfants ont toujours la case "Static" cochée. Cela provoque l'erreur "Combined Mesh".
+        // On la supprime donc automatiquement pour regénérer une ville propre.
         GameObject oldCity = GameObject.Find("City");
         if (oldCity != null)
         {
             if (Application.isPlaying) Destroy(oldCity);
             else DestroyImmediate(oldCity);
         }
-        
-        StartCoroutine(FetchCityData());
+    }
+
+    [ContextMenu("Generate City")]
+    public void GenerateCity()
+    {
+        CancelActiveGenerationAndClearCity();
+        activeGeneration = StartCoroutine(FetchCityData());
     }
 
     private IEnumerator FetchCityData()
@@ -86,7 +99,9 @@ public class CityGenerator : MonoBehaviour
             Debug.Log($"Trying Overpass API endpoint: {endpoint}");
             using (UnityWebRequest webRequest = UnityWebRequest.Post(endpoint, form))
             {
-                webRequest.timeout = 60; 
+                // Doit rester supérieur au [timeout:90] de la requête Overpass, sinon Unity abandonne
+                // côté client avant que le serveur ait fini de répondre sur les grosses zones.
+                webRequest.timeout = 100;
                 webRequest.SetRequestHeader("User-Agent", "UnityTacticalGame/1.0");
                 yield return webRequest.SendWebRequest();
 
@@ -126,7 +141,7 @@ public class CityGenerator : MonoBehaviour
                     Debug.LogWarning($"[CityGenerator] Erreur d'écriture du cache : {ex.Message}");
                 }
 
-                ProcessData(jsonText);
+                yield return ProcessDataCoroutine(jsonText);
 
                 // 1. On attend que la carte de base (Sol) soit VRAIMENT téléchargée et générée par MapTileLoader
                 MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
@@ -161,7 +176,7 @@ public class CityGenerator : MonoBehaviour
                 
                 // --- CRITIQUE --- Désactiver temporairement les unités pour NE PAS les "cuire" dans le NavMesh
                 UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Include);
-                foreach(var unit in allUnits) { unit.gameObject.SetActive(false); }
+                foreach(var unit in allUnits) { if (unit != null) unit.gameObject.SetActive(false); }
                 yield return null; // Laisser 1 frame à Unity pour désactiver les colliders
                 
                 // Vider les anciennes données pour forcer un rebake propre
@@ -179,13 +194,13 @@ public class CityGenerator : MonoBehaviour
                 }
 
                 // 4. LÂCHER LES CHIENS ! On notifie les unités qu'elles peuvent enfin bouger.
-                foreach(var unit in allUnits) { unit.gameObject.SetActive(true); }
+                foreach(var unit in allUnits) { if (unit != null) unit.gameObject.SetActive(true); }
                 yield return null; // Laisser 1 frame pour la réactivation
                 
                 Debug.Log($"[CityGenerator] Notifying {allUnits.Length} UnitAIs that NavMesh is ready.");
                 foreach (var unit in allUnits)
                 {
-                    unit.OnNavMeshReady();
+                    if (unit != null) unit.OnNavMeshReady();
                 }
                 
                 GameManagerUI.OptimizeSceneMaterials();
@@ -195,6 +210,11 @@ public class CityGenerator : MonoBehaviour
 
     public void LoadDefaultOfflineCity()
     {
+        // Peut être appelée en secours depuis FetchCityData (dont la coroutine se termine juste après)
+        // ou directement depuis l'UI (bouton "Combat Urbain Hors-Ligne") : dans les deux cas on s'assure
+        // qu'aucune autre génération ne continue en parallèle et ne vienne se superposer à celle-ci.
+        CancelActiveGenerationAndClearCity();
+
         // 1. Vérifier si un cache local persistant existe sur le disque
         string cacheFileName = string.Format(System.Globalization.CultureInfo.InvariantCulture, "CityCache_{0:F4}_{1:F4}_{2:F0}.json", latitude, longitude, radius);
         string cachePath = System.IO.Path.Combine(Application.persistentDataPath, cacheFileName);
@@ -207,7 +227,7 @@ public class CityGenerator : MonoBehaviour
                 if (!string.IsNullOrEmpty(cachedJson) && cachedJson.Length > 20)
                 {
                     Debug.Log($"<color=green>[CityGenerator] 📂 Ville restaurée avec succès depuis le cache disque local : {cacheFileName}</color>");
-                    StartCoroutine(ProcessOfflineData(cachedJson));
+                    activeGeneration = StartCoroutine(ProcessOfflineData(cachedJson));
                     return;
                 }
             }
@@ -222,7 +242,7 @@ public class CityGenerator : MonoBehaviour
         if (jsonAsset != null)
         {
             Debug.Log("[CityGenerator] Chargement de la ville de secours depuis le package Resources...");
-            StartCoroutine(ProcessOfflineData(jsonAsset.text));
+            activeGeneration = StartCoroutine(ProcessOfflineData(jsonAsset.text));
         }
         else
         {
@@ -234,7 +254,7 @@ public class CityGenerator : MonoBehaviour
     {
         
         GeoProjection.SetCenter(latitude, longitude);
-        ProcessData(json);
+        yield return ProcessDataCoroutine(json);
 
         
         MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
@@ -250,7 +270,7 @@ public class CityGenerator : MonoBehaviour
         if (surface == null) surface = gameObject.AddComponent<NavMeshSurface>();
         
         UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Include);
-        foreach(var unit in allUnits) { unit.gameObject.SetActive(false); }
+        foreach(var unit in allUnits) { if (unit != null) unit.gameObject.SetActive(false); }
         yield return null;
         
         surface.RemoveData();
@@ -265,24 +285,34 @@ public class CityGenerator : MonoBehaviour
             TacticalStreamingManager.Instance.RegisterAllBuildings();
         }
 
-        foreach(var unit in allUnits) { unit.gameObject.SetActive(true); }
+        foreach(var unit in allUnits) { if (unit != null) unit.gameObject.SetActive(true); }
         yield return null;
         
-        foreach (var unit in allUnits) unit.OnNavMeshReady();
+        foreach (var unit in allUnits) { if (unit != null) unit.OnNavMeshReady(); }
         
         if (GameManagerUI.Instance != null) GameManagerUI.Instance.HideLoading();
     }
 
-    private void ProcessData(string json)
+    // Nombre d'éléments OSM traités entre deux "yield return null". Étale le travail de génération
+    // (triangulation, meshes, colliders) sur plusieurs frames pour ne jamais geler l'écran de
+    // chargement, même sur une zone dense de plusieurs centaines de bâtiments.
+    private const int BUILDINGS_PER_FRAME = 8;
+
+    private IEnumerator ProcessDataCoroutine(string json)
     {
         OverpassResponse response = JsonUtility.FromJson<OverpassResponse>(json);
         if (response == null || response.elements == null)
         {
             Debug.LogError("Failed to parse Overpass JSON.");
-            return;
+            yield break;
         }
 
         GameObject cityRoot = new GameObject("City");
+
+        int elementsTotal = response.elements.Length;
+        int buildingsCreated = 0;
+        int elementsFailed = 0;
+        int processedSinceYield = 0;
 
         foreach (var element in response.elements)
         {
@@ -296,7 +326,7 @@ public class CityGenerator : MonoBehaviour
                         Vector3 pos = GeoProjection.CoordinateToWorldPoint(geo.lat, geo.lon);
                         footprint.Add(new Vector2(pos.x, pos.z));
                     }
-                    CreateBuildingObject(footprint, new List<List<Vector2>>(), "Building_" + element.id, cityRoot.transform);
+                    buildingsCreated += CreateBuildingObject(footprint, new List<List<Vector2>>(), "Building_" + element.id, cityRoot.transform);
                 }
                 else if (element.type == "relation" && element.members != null)
                 {
@@ -323,29 +353,61 @@ public class CityGenerator : MonoBehaviour
 
                     foreach (var outer in outers)
                     {
-                        CreateBuildingObject(outer, inners, "RelationBuilding_" + element.id, cityRoot.transform);
+                        buildingsCreated += CreateBuildingObject(outer, inners, "RelationBuilding_" + element.id, cityRoot.transform);
                     }
                 }
             }
             catch (Exception e)
             {
+                elementsFailed++;
                 Debug.LogWarning($"Failed to generate building {element.id}: {e.Message}");
             }
+
+            if (++processedSinceYield >= BUILDINGS_PER_FRAME)
+            {
+                processedSinceYield = 0;
+                yield return null;
+            }
         }
-        
-        Debug.Log("City generation completed!");
+
+        string summary = $"[CityGenerator] Génération terminée : {elementsTotal} éléments OSM reçus -> {buildingsCreated} bâtiments créés";
+        if (elementsFailed > 0) summary += $", {elementsFailed} en échec (voir warnings ci-dessus)";
+        Debug.Log($"<color=cyan>{summary}.</color>");
+
+        // Diagnostic d'alignement : à comparer avec la ligne "[MapTileLoader] 📍 Coins du sol" pour
+        // détecter un décalage entre le fond de carte (raster) et les bâtiments (vecteur OSM).
+        Bounds? cityBounds = null;
+        foreach (Transform lot in cityRoot.transform)
+        {
+            Transform footprint = lot.Find("Footprint_2D");
+            Renderer footprintRenderer = footprint != null ? footprint.GetComponent<Renderer>() : null;
+            if (footprintRenderer == null) continue;
+
+            if (cityBounds == null) cityBounds = footprintRenderer.bounds;
+            else { Bounds b = cityBounds.Value; b.Encapsulate(footprintRenderer.bounds); cityBounds = b; }
+        }
+        if (cityBounds.HasValue)
+        {
+            Bounds b = cityBounds.Value;
+            Debug.Log($"<color=yellow>[CityGenerator] 📍 Zone couverte par les bâtiments : X[{b.min.x:F1} , {b.max.x:F1}] Z[{b.min.z:F1} , {b.max.z:F1}]</color>");
+        }
     }
 
 
-    private void CreateBuildingObject(List<Vector2> outer, List<List<Vector2>> inners, string name, Transform parent)
+    /// <returns>Le nombre de lots effectivement instanciés en GameObjects (pour le diagnostic de couverture de la carte).</returns>
+    private int CreateBuildingObject(List<Vector2> outer, List<List<Vector2>> inners, string name, Transform parent)
     {
         // Clean footprint (remove duplicate last point)
         if (outer.Count > 0 && Vector2.Distance(outer[0], outer[outer.Count - 1]) < 0.1f)
         {
             outer.RemoveAt(outer.Count - 1);
         }
-        
-        if (outer.Count < 3) return;
+
+        if (outer.Count < 3)
+        {
+            Debug.LogWarning($"[CityGenerator] Bâtiment ignoré (empreinte OSM dégénérée, < 3 sommets) : {name}");
+            return 0;
+        }
 
         List<List<Vector2>> cleanInners = new List<List<Vector2>>();
         foreach (var inner in inners)
@@ -357,8 +419,7 @@ public class CityGenerator : MonoBehaviour
             if (inner.Count >= 3) cleanInners.Add(inner);
         }
 
-        // --- NEW: Inset and Random Height ---
-        float randomHeight = UnityEngine.Random.Range(4.5f, 7.5f); // 1 to 2 floors roughly
+        // --- NEW: Inset ---
         List<Vector2> insetOuter = InsetPolygon(outer, 0.15f);
         if (insetOuter.Count < 3) insetOuter = outer; // fallback if inset fails
 
@@ -369,21 +430,27 @@ public class CityGenerator : MonoBehaviour
         EnsureOrientation(mergedFootprint, false); 
 
         // --- NEW: Subdivide large blocks into individual row houses ---
-        // ONLY convex polygons will be split to prevent garbage geometry. 
+        // ONLY convex polygons will be split to prevent garbage geometry.
         // We also rely on 'building:part' from Overpass for complex buildings.
-        List<List<Vector2>> subLots = BuildingSubdivider.Subdivide(mergedFootprint);
+        List<List<Vector2>> subLots = BuildingSubdivider.Subdivide(mergedFootprint, out List<(Vector2, Vector2)> partyWallEdges);
 
         int lotIndex = 0;
+        int createdCount = 0;
         foreach (var lotFootprint in subLots)
         {
             EnsureOrientation(lotFootprint, false);
             
-            // Randomize height slightly per subdivided lot to break the block effect
-            float lotHeight = UnityEngine.Random.Range(4.5f, 7.5f);
+            // Randomize height slightly per subdivided lot (autour de buildingHeight) to break the block effect
+            float lotHeight = UnityEngine.Random.Range(buildingHeight - 1.5f, buildingHeight + 1.5f);
 
             // Triangulate
             List<int> roofIndices = Triangulate(lotFootprint);
-            if (roofIndices.Count == 0) continue;
+            if (roofIndices.Count == 0)
+            {
+                Debug.LogWarning($"[CityGenerator] Lot ignoré (triangulation impossible, géométrie dégénérée) : {name}_Lot{lotIndex}");
+                lotIndex++;
+                continue;
+            }
 
             // Instantiate Root
             string lotName = subLots.Count > 1 ? $"{name}_Lot{lotIndex}" : name;
@@ -397,7 +464,10 @@ public class CityGenerator : MonoBehaviour
             buildingGo.AddComponent<DestructibleEnvironment>();
             
             // Pre-calculate doors so we can make gaps in the walls
-            GenerateDoorsAndWindows(buildingGo, structure, lotFootprint, lotHeight);
+            GenerateDoorsAndWindows(buildingGo, structure, lotFootprint, lotHeight, partyWallEdges);
+
+            // Mobilier urbain (lampadaires, bancs, poubelles, arbres) le long des façades extérieures.
+            StreetPropsGenerator.PlaceStreetProps(buildingGo.transform, lotFootprint, structure.doors, partyWallEdges);
 
             // --- Create Sub-Meshes ---
             
@@ -443,8 +513,10 @@ public class CityGenerator : MonoBehaviour
             CreateRoofAccess(buildingGo, lotFootprint, lotHeight);
 
             lotIndex++;
+            createdCount++;
         }
-        
+
+        return createdCount;
     }
 
     private List<Vector2> InsetPolygon(List<Vector2> polygon, float insetAmount)
@@ -490,11 +562,30 @@ public class CityGenerator : MonoBehaviour
         return shared2DBuildingMaterial;
     }
 
+    // Pool partagé de matériaux de façade. Un Material tout neuf par bâtiment (ancien comportement)
+    // rend le GPU Instancing/batching inopérant : même avec enableInstancing=true, Unity ne regroupe
+    // en un seul draw call que les renderers qui pointent vers EXACTEMENT le même Material. Avec des
+    // centaines de bâtiments, on se retrouvait avec autant de draw calls. Ici, on réutilise un petit
+    // nombre de teintes pré-générées afin que la grande majorité des murs/toits partagent la même
+    // référence de matériau et soient réellement instanciés ensemble.
+    private const int BUILDING_MATERIAL_PALETTE_SIZE = 16;
+    private static Material[] sharedBuildingMaterialPalette;
+
     private Material GetRandomBuildingMaterial()
     {
         if (buildingMaterial != null) return buildingMaterial;
-        Color randomCol = UnityEngine.Random.ColorHSV(0f, 1f, 0.1f, 0.3f, 0.4f, 0.8f);
-        return SafeMaterialFactory.CreateLit(randomCol);
+
+        if (sharedBuildingMaterialPalette == null)
+        {
+            sharedBuildingMaterialPalette = new Material[BUILDING_MATERIAL_PALETTE_SIZE];
+            for (int i = 0; i < BUILDING_MATERIAL_PALETTE_SIZE; i++)
+            {
+                Color col = UnityEngine.Random.ColorHSV(0f, 1f, 0.1f, 0.3f, 0.4f, 0.8f);
+                sharedBuildingMaterialPalette[i] = SafeMaterialFactory.CreateLit(col);
+            }
+        }
+
+        return sharedBuildingMaterialPalette[UnityEngine.Random.Range(0, BUILDING_MATERIAL_PALETTE_SIZE)];
     }
 
     private void CreateRoofAccess(GameObject building, List<Vector2> footprint, float height)
@@ -585,6 +676,9 @@ public class CityGenerator : MonoBehaviour
         return mesh;
     }
 
+    // Hauteur du linteau : doit correspondre au sommet du quad visuel de porte (BuildVisualOpenings: centre 1.1m, demi-hauteur 1.1m).
+    private const float DOOR_OPENING_TOP = 2.2f;
+
     private Mesh CreateWallsMesh(List<Vector2> footprint, float height, List<BuildingStructure.BuildingDoor> doors)
     {
         List<Vector3> vertices = new List<Vector3>();
@@ -597,8 +691,46 @@ public class CityGenerator : MonoBehaviour
             int next = (i + 1) % numPoints;
             Vector2 p1 = footprint[i];
             Vector2 p2 = footprint[next];
-            
-            AddWallSegment(vertices, uvs, triangles, p1, p2, -2f, height);
+            float segLen = Vector2.Distance(p1, p2);
+
+            List<BuildingStructure.BuildingDoor> edgeDoors = null;
+            if (doors != null)
+            {
+                foreach (var d in doors)
+                {
+                    if (d.edgeIndex != i) continue;
+                    if (edgeDoors == null) edgeDoors = new List<BuildingStructure.BuildingDoor>();
+                    edgeDoors.Add(d);
+                }
+            }
+
+            if (edgeDoors == null)
+            {
+                AddWallSegment(vertices, uvs, triangles, p1, p2, -2f, height);
+                continue;
+            }
+
+            edgeDoors.Sort((a, b) => a.edgeDistance.CompareTo(b.edgeDistance));
+
+            float cursor = 0f;
+            foreach (var door in edgeDoors)
+            {
+                float doorHalf = door.width * 0.5f;
+                float doorStart = Mathf.Clamp(door.edgeDistance - doorHalf, 0f, segLen);
+                float doorEnd = Mathf.Clamp(door.edgeDistance + doorHalf, cursor, segLen);
+                if (doorEnd <= cursor) continue; // Portes trop proches / chevauchantes : on garde le mur plein ici
+
+                // Pan de mur plein avant l'ouverture
+                AddWallSubSegment(vertices, uvs, triangles, p1, p2, segLen, cursor, doorStart, -2f, height);
+                // Soubassement scellé sous le seuil (empêche tout cheminement sous le bâtiment)
+                AddWallSubSegment(vertices, uvs, triangles, p1, p2, segLen, doorStart, doorEnd, -2f, 0f);
+                // Linteau au-dessus de l'ouverture
+                AddWallSubSegment(vertices, uvs, triangles, p1, p2, segLen, doorStart, doorEnd, DOOR_OPENING_TOP, height);
+
+                cursor = doorEnd;
+            }
+            // Pan de mur plein après la dernière porte
+            AddWallSubSegment(vertices, uvs, triangles, p1, p2, segLen, cursor, segLen, -2f, height);
         }
 
         Mesh mesh = new Mesh();
@@ -608,7 +740,16 @@ public class CityGenerator : MonoBehaviour
         mesh.RecalculateNormals();
         return mesh;
     }
-    
+
+    private void AddWallSubSegment(List<Vector3> vertices, List<Vector2> uvs, List<int> tris, Vector2 p1, Vector2 p2, float segLen, float xStart, float xEnd, float yBottom, float yTop)
+    {
+        if (xEnd - xStart < 0.02f || yTop - yBottom < 0.02f || segLen < 0.0001f) return;
+        Vector2 dir = (p2 - p1) / segLen;
+        Vector2 a = p1 + dir * xStart;
+        Vector2 b = p1 + dir * xEnd;
+        AddWallSegment(vertices, uvs, tris, a, b, yBottom, yTop);
+    }
+
     private void AddWallSegment(List<Vector3> vertices, List<Vector2> uvs, List<int> tris, Vector2 p1, Vector2 p2, float yBottom, float yTop)
     {
         int vIndex = vertices.Count;
@@ -634,19 +775,53 @@ public class CityGenerator : MonoBehaviour
 
     /// <summary>
     /// Calcule et génère automatiquement les points de portes et fenêtres le long des façades du bâtiment.
+    /// Les murs mitoyens créés par la subdivision parcellaire (<paramref name="partyWallEdges"/>) ne
+    /// reçoivent jamais d'ouverture, comme dans une vraie maison de ville attenante à ses voisines.
     /// </summary>
-    private void GenerateDoorsAndWindows(GameObject buildingGo, BuildingStructure structure, List<Vector2> footprint, float height)
+    private void GenerateDoorsAndWindows(GameObject buildingGo, BuildingStructure structure, List<Vector2> footprint, float height, List<(Vector2, Vector2)> partyWallEdges)
     {
         if (footprint == null || footprint.Count < 3) return;
+
+        int n = footprint.Count;
 
         // Calcul du centre 2D du bâtiment pour orienter les normales vers l'extérieur
         Vector2 centroid = Vector2.zero;
         foreach (var p in footprint) centroid += p;
-        centroid /= footprint.Count;
+        centroid /= n;
 
-        for (int i = 0; i < footprint.Count; i++)
+        bool[] isPartyWall = new bool[n];
+        for (int i = 0; i < n; i++)
         {
-            int next = (i + 1) % footprint.Count;
+            isPartyWall[i] = IsPartyWallEdge(footprint[i], footprint[(i + 1) % n], partyWallEdges);
+        }
+
+        // Une seule façade principale par bâtiment reçoit la porte d'entrée (comportement réel d'une
+        // maison individuelle) : on choisit la plus longue arête réellement extérieure.
+        int frontEdge = -1;
+        float bestLen = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            if (isPartyWall[i]) continue;
+            float len = Vector2.Distance(footprint[i], footprint[(i + 1) % n]);
+            if (len >= 2.5f && len > bestLen) { bestLen = len; frontEdge = i; }
+        }
+        // Filet de sécurité : un lot très petit peut n'avoir aucune arête >= 2.5m ou être entouré de
+        // murs mitoyens des deux côtés (cas rare d'une subdivision agressive). On force alors une
+        // entrée sur l'arête la plus longue disponible pour garantir que le bâtiment reste franchissable.
+        if (frontEdge == -1)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                float len = Vector2.Distance(footprint[i], footprint[(i + 1) % n]);
+                if (len > bestLen) { bestLen = len; frontEdge = i; }
+            }
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            if (isPartyWall[i]) continue; // Mur mitoyen : aucune porte ni fenêtre, comme en réalité
+
+            int next = (i + 1) % n;
             Vector2 p1 = footprint[i];
             Vector2 p2 = footprint[next];
 
@@ -668,32 +843,38 @@ public class CityGenerator : MonoBehaviour
                 outwardNormal = -outwardNormal;
             }
 
-            // 1. GÉNÉRATION DE PORTES (Min 1, Max 3 portes par face au rez-de-chaussée)
-            int numDoors = Mathf.Clamp(Mathf.FloorToInt(segLen / 7.0f) + 1, 1, 3);
-            float doorSpacing = segLen / (numDoors + 1);
-            for (int d = 1; d <= numDoors; d++)
+            // 1. PORTE(S) — une entrée principale (deux si la façade dépasse 16m, cas d'un immeuble collectif)
+            if (i == frontEdge)
             {
-                Vector3 doorPos = startPos + tangent * (d * doorSpacing) + outwardNormal * 0.05f;
-                structure.doors.Add(new BuildingStructure.BuildingDoor
+                int numDoors = segLen > 16f ? 2 : 1;
+                float doorSpacing = segLen / (numDoors + 1);
+                for (int d = 1; d <= numDoors; d++)
                 {
-                    position = doorPos,
-                    entryDirection = outwardNormal
-                });
-                
-                // --- NEW: Add NavMeshLink for the door to allow passing through solid walls ---
-                // We link from outside to inside. 
-                GameObject doorLinkGo = new GameObject("Door_NavMeshLink");
-                doorLinkGo.transform.parent = buildingGo.transform;
-                doorLinkGo.transform.position = doorPos;
-                var navLink = doorLinkGo.AddComponent<Unity.AI.Navigation.NavMeshLink>();
-                navLink.startPoint = outwardNormal * 1.5f; // outside
-                navLink.endPoint = -outwardNormal * 1.5f; // inside
-                navLink.width = 1.5f;
-                navLink.bidirectional = true;
+                    float doorEdgeDistance = d * doorSpacing;
+                    Vector3 doorPos = startPos + tangent * doorEdgeDistance + outwardNormal * 0.05f;
+                    structure.doors.Add(new BuildingStructure.BuildingDoor
+                    {
+                        position = doorPos,
+                        entryDirection = outwardNormal,
+                        edgeIndex = i,
+                        edgeDistance = doorEdgeDistance
+                    });
+
+                    // --- NEW: Add NavMeshLink for the door to allow passing through solid walls ---
+                    // We link from outside to inside.
+                    GameObject doorLinkGo = new GameObject("Door_NavMeshLink");
+                    doorLinkGo.transform.parent = buildingGo.transform;
+                    doorLinkGo.transform.position = doorPos;
+                    var navLink = doorLinkGo.AddComponent<Unity.AI.Navigation.NavMeshLink>();
+                    navLink.startPoint = outwardNormal * 1.5f; // outside
+                    navLink.endPoint = -outwardNormal * 1.5f; // inside
+                    navLink.width = 1.5f;
+                    navLink.bidirectional = true;
+                }
             }
 
-            // 2. GÉNÉRATION DE FENÊTRES
-            int numWindowsH = Mathf.Clamp(Mathf.FloorToInt(segLen / 3.0f), 2, 5);
+            // 2. FENÊTRES — densité réaliste (une par ~4m de façade), uniquement sur les murs extérieurs
+            int numWindowsH = Mathf.Clamp(Mathf.FloorToInt(segLen / 4.0f), 1, 4);
             float winSpacing = segLen / (numWindowsH + 1);
             int floorCount = Mathf.Max(1, Mathf.FloorToInt(height / 3.2f));
             for (int f = 0; f < floorCount; f++)
@@ -716,6 +897,21 @@ public class CityGenerator : MonoBehaviour
                 }
             }
         }
+    }
+
+    internal static bool IsPartyWallEdge(Vector2 p1, Vector2 p2, List<(Vector2, Vector2)> partyWallEdges)
+    {
+        if (partyWallEdges == null) return false;
+        const float eps = 0.01f;
+        foreach (var (a, b) in partyWallEdges)
+        {
+            if ((Vector2.Distance(p1, a) < eps && Vector2.Distance(p2, b) < eps) ||
+                (Vector2.Distance(p1, b) < eps && Vector2.Distance(p2, a) < eps))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Material sharedDoorMaterial;

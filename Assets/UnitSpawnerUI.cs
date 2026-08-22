@@ -703,31 +703,31 @@ public class UnitSpawnerUI : MonoBehaviour
             }
 
             // Boutons de Sélection d'Unités (+50% de hauteur pour le tactile)
-            if (GUI.Button(new Rect(25, 154, 225, 32), "🎖️ Fantassin (Fusil)"))
+            if (ProceduralIconFactory.IconButton(new Rect(25, 154, 225, 32), ProceduralIconFactory.Soldier(), "🎖️ Fantassin (Fusil)"))
             {
                 lastUIClickTime = Time.time;
                 StartPlacingUnit(UnitType.Fantassin);
             }
 
-            if (GUI.Button(new Rect(25, 190, 225, 32), "🛡️ Char Leopard 2 (Obus)"))
+            if (ProceduralIconFactory.IconButton(new Rect(25, 190, 225, 32), ProceduralIconFactory.Tank(), "🛡️ Char Leopard 2 (Obus)"))
             {
                 lastUIClickTime = Time.time;
                 StartPlacingUnit(UnitType.CharLeopard);
             }
 
-            if (GUI.Button(new Rect(25, 226, 225, 32), "💥 Véhicule Canon"))
+            if (ProceduralIconFactory.IconButton(new Rect(25, 226, 225, 32), ProceduralIconFactory.GunVehicle(), "💥 Véhicule Canon"))
             {
                 lastUIClickTime = Time.time;
                 StartPlacingUnit(UnitType.VehiculeCanon);
             }
 
-            if (GUI.Button(new Rect(25, 262, 225, 32), "🎯 Mortier Lourd (120m)"))
+            if (ProceduralIconFactory.IconButton(new Rect(25, 262, 225, 32), ProceduralIconFactory.Mortar(), "🎯 Mortier Lourd (120m)"))
             {
                 lastUIClickTime = Time.time;
                 StartPlacingUnit(UnitType.Mortier);
             }
 
-            if (GUI.Button(new Rect(25, 298, 225, 32), "🚧 Barricade Routière"))
+            if (ProceduralIconFactory.IconButton(new Rect(25, 298, 225, 32), ProceduralIconFactory.Barrier(), "🚧 Barricade Routière"))
             {
                 lastUIClickTime = Time.time;
                 StartPlacingUnit(UnitType.BarricadeRoutiere);
@@ -739,7 +739,7 @@ public class UnitSpawnerUI : MonoBehaviour
             aiBtnStyle.fontSize = 12;
             aiBtnStyle.normal.textColor = new Color(1f, 0.35f, 0.25f);
 
-            if (GUI.Button(new Rect(25, 336, 225, 34), "🤖 ESCOUADE IA (Rouge)", aiBtnStyle))
+            if (ProceduralIconFactory.IconButton(new Rect(25, 336, 225, 34), ProceduralIconFactory.Squad(), "🤖 ESCOUADE IA (Rouge)", aiBtnStyle))
             {
                 lastUIClickTime = Time.time;
                 SpawnEnemyWave();
@@ -750,14 +750,14 @@ public class UnitSpawnerUI : MonoBehaviour
             autoBtnStyle.fontSize = 12;
             autoBtnStyle.normal.textColor = Color.yellow;
 
-            if (GUI.Button(new Rect(25, 374, 225, 34), "⚡ DÉPLOIEMENT AUTO", autoBtnStyle))
+            if (ProceduralIconFactory.IconButton(new Rect(25, 374, 225, 34), ProceduralIconFactory.Bolt(), "⚡ DÉPLOIEMENT AUTO", autoBtnStyle))
             {
                 lastUIClickTime = Time.time;
                 AutoDeployBattlefield();
             }
 
             // Bouton Nettoyer
-            if (GUI.Button(new Rect(25, 412, 225, 28), "🧹 Nettoyer le Terrain"))
+            if (ProceduralIconFactory.IconButton(new Rect(25, 412, 225, 28), ProceduralIconFactory.Reset(), "🧹 Nettoyer le Terrain"))
             {
                 lastUIClickTime = Time.time;
                 ClearAllUnits();

@@ -11,65 +11,91 @@ namespace StreetAct.Generation
         /// <summary>
         /// Découpe récursivement un grand bloc (polygone OSM) en parcelles plus petites.
         /// </summary>
-        public static List<List<Vector2>> Subdivide(List<Vector2> polygon)
+        /// <param name="cutEdges">
+        /// Segments internes créés par la découpe (murs mitoyens entre maisons attenantes).
+        /// Contrairement aux arêtes du polygone d'origine (façades réelles issues d'OSM), ces murs
+        /// ne doivent jamais recevoir de porte ou de fenêtre.
+        /// </param>
+        public static List<List<Vector2>> Subdivide(List<Vector2> polygon, out List<(Vector2, Vector2)> cutEdges)
         {
             List<List<Vector2>> result = new List<List<Vector2>>();
-            SubdivideRecursive(polygon, result);
+            cutEdges = new List<(Vector2, Vector2)>();
+            SubdivideRecursive(polygon, result, cutEdges);
             return result;
         }
 
-        private static void SubdivideRecursive(List<Vector2> poly, List<List<Vector2>> result)
+        // Sécurité anti-boucle infinie sur une géométrie OSM pathologique (auto-intersections, doublons...).
+        private const int MAX_RECURSION_DEPTH = 40;
+
+        private static void SubdivideRecursive(List<Vector2> poly, List<List<Vector2>> result, List<(Vector2, Vector2)> cutEdges, int depth = 0)
         {
             if (poly.Count < 3) return;
 
-            // 0. Only subdivide if polygon is convex to prevent self-intersecting garbage geometry
-            bool isConvex = true;
-            for (int i = 0; i < poly.Count; i++)
-            {
-                Vector2 cv1 = poly[i];
-                Vector2 cv2 = poly[(i + 1) % poly.Count];
-                Vector2 cv3 = poly[(i + 2) % poly.Count];
-                Vector2 dir1 = cv2 - cv1;
-                Vector2 dir2 = cv3 - cv2;
-                if ((dir1.x * dir2.y - dir1.y * dir2.x) > 0) // Assumes CW orientation, cross product should be <= 0 for convex
-                {
-                    isConvex = false;
-                    break;
-                }
-            }
-
             // 1. Trouver le segment le plus long
             float maxDist = 0;
-            int maxIdx = 0;
             for (int i = 0; i < poly.Count; i++)
             {
                 int next = (i + 1) % poly.Count;
                 float d = Vector2.Distance(poly[i], poly[next]);
-                if (d > maxDist)
-                {
-                    maxDist = d;
-                    maxIdx = i;
-                }
+                if (d > maxDist) maxDist = d;
             }
 
             // 2. Condition d'arrêt
             float area = CalculateArea(poly);
-            if (maxDist <= MAX_HOUSE_WIDTH || area < MIN_HOUSE_AREA * 2 || !isConvex)
+            if (maxDist <= MAX_HOUSE_WIDTH || area < MIN_HOUSE_AREA * 2 || depth >= MAX_RECURSION_DEPTH)
             {
                 result.Add(poly);
                 return;
             }
 
-            // 3. Calcul de la ligne de coupe (au milieu du plus long segment, perpendiculaire)
-            Vector2 p1 = poly[maxIdx];
-            Vector2 p2 = poly[(maxIdx + 1) % poly.Count];
+            // 3. Essaie une coupe perpendiculaire au milieu de chaque arête, de la plus longue à la plus
+            // courte, jusqu'à en trouver une valide. La plupart des îlots OSM réels (terrasses de maisons,
+            // pâtés de maisons irréguliers) ne sont PAS convexes : se limiter aux polygones convexes (comme
+            // avant) empêchait de les découper du tout, laissant un unique bâtiment géant recouvrir tout
+            // l'îlot. Une coupe reste valide tant qu'elle ne traverse le contour que deux fois (sinon, sur
+            // une forme concave, elle produirait une géométrie auto-intersectante).
+            List<int> edgeOrder = new List<int>(poly.Count);
+            for (int i = 0; i < poly.Count; i++) edgeOrder.Add(i);
+            edgeOrder.Sort((a, b) =>
+                Vector2.Distance(poly[b], poly[(b + 1) % poly.Count]).CompareTo(Vector2.Distance(poly[a], poly[(a + 1) % poly.Count])));
+
+            foreach (int edgeIdx in edgeOrder)
+            {
+                if (Vector2.Distance(poly[edgeIdx], poly[(edgeIdx + 1) % poly.Count]) <= MAX_HOUSE_WIDTH) break; // Arêtes déjà assez courtes
+
+                if (TryCutAtEdge(poly, edgeIdx, out List<Vector2> leftPoly, out List<Vector2> rightPoly, out Vector2 intersectA, out Vector2 intersectB))
+                {
+                    cutEdges.Add((intersectA, intersectB));
+                    SubdivideRecursive(leftPoly, result, cutEdges, depth + 1);
+                    SubdivideRecursive(rightPoly, result, cutEdges, depth + 1);
+                    return;
+                }
+            }
+
+            // Aucune coupe simple (2 intersections) trouvée : on garde l'îlot entier plutôt que de risquer
+            // une géométrie auto-intersectante.
+            result.Add(poly);
+        }
+
+        /// <summary>
+        /// Tente de couper le polygone avec la perpendiculaire au milieu de l'arête <paramref name="edgeIdx"/>.
+        /// Ne réussit que si cette ligne traverse le contour exactement deux fois (coupe géométriquement saine,
+        /// valable aussi bien pour un polygone convexe que pour la plupart des polygones concaves réels).
+        /// </summary>
+        private static bool TryCutAtEdge(List<Vector2> poly, int edgeIdx, out List<Vector2> leftPoly, out List<Vector2> rightPoly, out Vector2 intersectA, out Vector2 intersectB)
+        {
+            leftPoly = new List<Vector2>();
+            rightPoly = new List<Vector2>();
+            intersectA = Vector2.zero;
+            intersectB = Vector2.zero;
+
+            Vector2 p1 = poly[edgeIdx];
+            Vector2 p2 = poly[(edgeIdx + 1) % poly.Count];
             Vector2 midPoint = (p1 + p2) * 0.5f;
             Vector2 edgeDir = (p2 - p1).normalized;
-            Vector2 cutNormal = new Vector2(-edgeDir.y, edgeDir.x); // Perpendiculaire (INWARD pour un polygone CW)
+            Vector2 cutNormal = new Vector2(-edgeDir.y, edgeDir.x); // Perpendiculaire
 
-            // 4. Découper le polygone avec cette ligne (Sutherland-Hodgman modifié pour 1 ligne)
-            List<Vector2> leftPoly = new List<Vector2>();
-            List<Vector2> rightPoly = new List<Vector2>();
+            int crossings = 0;
 
             for (int i = 0; i < poly.Count; i++)
             {
@@ -84,23 +110,24 @@ namespace StreetAct.Generation
 
                 if (currIsLeft != nextIsLeft)
                 {
-                    // Intersection
                     Vector2 intersect = GetIntersection(curr, next, midPoint, cutNormal);
                     leftPoly.Add(intersect);
                     rightPoly.Add(intersect);
+
+                    crossings++;
+                    if (crossings == 1) intersectA = intersect;
+                    else if (crossings == 2) intersectB = intersect;
                 }
             }
 
-            // Pour éviter les boucles infinies sur des formes très étranges
-            if (leftPoly.Count < 3 || rightPoly.Count < 3 || leftPoly.Count == poly.Count || rightPoly.Count == poly.Count)
-            {
-                result.Add(poly);
-                return;
-            }
+            // Un polygone n'est proprement bissecté par une ligne que si elle en traverse le contour
+            // exactement deux fois. Plus de deux traversées (forme concave complexe) produirait des
+            // sous-polygones auto-intersectants : on rejette cette coupe et on essaiera une autre arête.
+            if (crossings != 2) return false;
+            if (leftPoly.Count < 3 || rightPoly.Count < 3) return false;
+            if (leftPoly.Count == poly.Count || rightPoly.Count == poly.Count) return false;
 
-            // Récursion
-            SubdivideRecursive(leftPoly, result);
-            SubdivideRecursive(rightPoly, result);
+            return true;
         }
 
         private static bool IsLeft(Vector2 linePoint, Vector2 lineDir, Vector2 pt)

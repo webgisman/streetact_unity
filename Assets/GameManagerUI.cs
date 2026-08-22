@@ -18,6 +18,7 @@ public class GameManagerUI : MonoBehaviour
     private bool isMapSelectorOpen = true; // S'ouvre automatiquement au lancement du jeu
     public bool IsStartupSelectionActive => isMapSelectorOpen;
     private string gpsStatus = "";
+    private float startupPanelFade = 0f; // Anim. d'apparition (pop + fondu) de l'écran de démarrage
 
     private Texture2D overlayDimTex;
 
@@ -41,8 +42,8 @@ public class GameManagerUI : MonoBehaviour
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 60;
 
-        if (errorPanel != null) errorPanel.SetActive(false);
-        if (loadingPanel != null) loadingPanel.SetActive(false);
+        CanvasGroupFader.SetVisible(errorPanel, false);
+        CanvasGroupFader.SetVisible(loadingPanel, false);
 
         // Ambiance visuelle militaire Brouillard de Guerre
         RenderSettings.fog = true;
@@ -89,10 +90,10 @@ public class GameManagerUI : MonoBehaviour
 
     public void ShowError(string message)
     {
-        if (loadingPanel != null) loadingPanel.SetActive(false);
+        CanvasGroupFader.SetVisible(loadingPanel, false);
         if (errorPanel != null)
         {
-            errorPanel.SetActive(true);
+            CanvasGroupFader.SetVisible(errorPanel, true);
             if (errorText != null) errorText.text = message;
         }
         else
@@ -103,8 +104,8 @@ public class GameManagerUI : MonoBehaviour
 
     public void OnClickLoadDefaultOfflineMap()
     {
-        if (errorPanel != null) errorPanel.SetActive(false);
-        if (loadingPanel != null) loadingPanel.SetActive(true);
+        CanvasGroupFader.SetVisible(errorPanel, false);
+        CanvasGroupFader.SetVisible(loadingPanel, true);
         StartCoroutine(LoadOfflineRoutine());
     }
     
@@ -123,13 +124,13 @@ public class GameManagerUI : MonoBehaviour
             UnitSpawnerUI.Instance.AutoDeployBattlefield();
         }
 
-        if (loadingPanel != null) loadingPanel.SetActive(false);
+        CanvasGroupFader.SetVisible(loadingPanel, false);
     }
     
     public void HideLoading()
     {
-        if (loadingPanel != null) loadingPanel.SetActive(false);
-        if (errorPanel != null) errorPanel.SetActive(false);
+        CanvasGroupFader.SetVisible(loadingPanel, false);
+        CanvasGroupFader.SetVisible(errorPanel, false);
     }
 
     void OnGUI()
@@ -157,6 +158,11 @@ public class GameManagerUI : MonoBehaviour
             float x = (virtualW - w) * 0.5f;
             float y = (virtualH - h) * 0.5f;
 
+            startupPanelFade = UIAnimator.Advance(startupPanelFade, true, 6f);
+            Rect poppedPanel = UIAnimator.PopRect(new Rect(x, y, w, h), startupPanelFade);
+            x = poppedPanel.x; y = poppedPanel.y; w = poppedPanel.width; h = poppedPanel.height;
+            UIAnimator.ApplyFadeColor(startupPanelFade);
+
             GUIStyle boxStyle = new GUIStyle(GUI.skin.box);
             boxStyle.fontSize = 15;
             boxStyle.fontStyle = FontStyle.Bold;
@@ -170,7 +176,7 @@ public class GameManagerUI : MonoBehaviour
             btnStyle1.normal.textColor = Color.cyan;
 
             // OPTION 1 : Carte Hors-Ligne par défaut
-            if (GUI.Button(new Rect(x + 15, y + 50, w - 30, 62), "🏙️ 1. COMBAT URBAIN HORS-LIGNE\n(Chargement Immédiat)", btnStyle1))
+            if (ProceduralIconFactory.IconButton(new Rect(x + 15, y + 50, w - 30, 62), ProceduralIconFactory.House(), "🏙️ 1. COMBAT URBAIN HORS-LIGNE\n(Chargement Immédiat)", btnStyle1))
             {
                 isMapSelectorOpen = false;
                 OnClickLoadDefaultOfflineMap();
@@ -182,7 +188,7 @@ public class GameManagerUI : MonoBehaviour
             btnStyle2.normal.textColor = new Color(0.3f, 1f, 0.4f);
 
             // OPTION 2 : Ma Position GPS Réelle
-            if (GUI.Button(new Rect(x + 15, y + 124, w - 30, 62), "🛰️ 2. MA POSITION GPS RÉELLE\n(Géolocalisation Directe)", btnStyle2))
+            if (ProceduralIconFactory.IconButton(new Rect(x + 15, y + 124, w - 30, 62), ProceduralIconFactory.Eye(), "🛰️ 2. MA POSITION GPS RÉELLE\n(Géolocalisation Directe)", btnStyle2))
             {
                 StartCoroutine(StartDeviceGPS());
             }
@@ -197,11 +203,12 @@ public class GameManagerUI : MonoBehaviour
             }
 
             // Bouton Quitter / Fermer (Jouer immédiatement avec la scène actuelle)
-            if (GUI.Button(new Rect(x + 15, y + 242, w - 30, 48), "▶️ JOUER (Terrain Actuel)"))
+            if (ProceduralIconFactory.IconButton(new Rect(x + 15, y + 242, w - 30, 48), ProceduralIconFactory.Check(), "▶️ JOUER (Terrain Actuel)"))
             {
                 isMapSelectorOpen = false;
             }
 
+            GUI.color = Color.white;
             GUI.matrix = origMat;
         }
         else
@@ -220,7 +227,7 @@ public class GameManagerUI : MonoBehaviour
             restartStyle.normal.textColor = new Color(0.85f, 0.85f, 0.85f, 0.85f);
 
             // Bouton discret et épuré
-            if (GUI.Button(new Rect(virtualW * 0.5f - 55, 10, 110, 30), "🔄 Recommencer", restartStyle))
+            if (ProceduralIconFactory.IconButton(new Rect(virtualW * 0.5f - 55, 10, 110, 30), ProceduralIconFactory.Reset(), "🔄 Recommencer", restartStyle))
             {
                 UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
             }
@@ -264,7 +271,7 @@ public class GameManagerUI : MonoBehaviour
         CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
         MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
 
-        if (loadingPanel != null) loadingPanel.SetActive(true);
+        CanvasGroupFader.SetVisible(loadingPanel, true);
 
         if (cityGen != null)
         {
@@ -286,6 +293,6 @@ public class GameManagerUI : MonoBehaviour
             UnitSpawnerUI.Instance.AutoDeployBattlefield();
         }
 
-        if (loadingPanel != null) loadingPanel.SetActive(false);
+        CanvasGroupFader.SetVisible(loadingPanel, false);
     }
 }
