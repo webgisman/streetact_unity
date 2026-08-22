@@ -17,6 +17,13 @@ public partial class UnitAI : MonoBehaviour
     public bool isSelected = false; // Permet de savoir si le joueur planifie pour cette unité
     public float maxMovementPerTurn = 50f;
 
+    /// <summary>
+    /// Multijoueur uniquement : true quand le joueur propriétaire de cette unité est absent/déconnecté
+    /// ce tour-ci. Autorise TacticalAIPlanner à planifier ses ordres malgré isPlayerControlled = true
+    /// (voir Assets/Scripts/AI/TacticalAIPlanner.cs et Assets/_ServerDocs/multiplayer/04-unity-headless-server.md).
+    /// </summary>
+    public bool isGhosted = false;
+
     [Header("Combat")]
     public int health = 100;
     public float maxHealth = 100f;
@@ -895,6 +902,42 @@ public partial class UnitAI : MonoBehaviour
         cachedDrawPoints.Clear();
         if (tacticalLineRenderer != null) tacticalLineRenderer.positionCount = 0;
         TacticalPathManager.SetPathsDirty();
+    }
+
+    /// <summary>
+    /// Multijoueur/serveur : reflète l'état "IsShooting" de l'Animator sans exposer le champ privé.
+    /// Utilisé par MatchSessionManager pour construire les snapshots réseau (voir Assets/Scripts/Server/).
+    /// </summary>
+    public bool IsShootingNow => animator != null && animator.GetBool("IsShooting");
+
+    /// <summary>
+    /// Multijoueur/client : applique un point de vie reçu du serveur (snapshot de lecture), sans
+    /// recalculer aucune réduction de dégâts locale (déjà appliquée côté serveur autoritaire).
+    /// </summary>
+    public void SetNetworkHealth(int newHealth)
+    {
+        health = newHealth;
+        UpdateHealthBar();
+    }
+
+    /// <summary>
+    /// Multijoueur/client : déclenche la séquence de mort existante quand le serveur signale
+    /// qu'une unité est morte pendant la lecture d'un snapshot (voir MultiplayerMatchController).
+    /// </summary>
+    public void ApplyNetworkDeath()
+    {
+        if (!isDead) Die();
+    }
+
+    /// <summary>
+    /// Multijoueur/client : pilote l'Animator pendant la lecture d'un snapshot (mouvement/tir),
+    /// sans dupliquer la logique de combat/déplacement réelle qui reste strictement côté serveur.
+    /// </summary>
+    public void SetNetworkAnimState(bool shooting, float moveSpeed)
+    {
+        if (animator == null || isTank) return;
+        animator.SetBool("IsShooting", shooting);
+        animator.SetFloat("Speed", moveSpeed);
     }
 
     public void RemoveLastTacticalNode()

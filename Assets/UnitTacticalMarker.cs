@@ -49,6 +49,7 @@ public class UnitTacticalMarker : MonoBehaviour
         Texture2D iconTex = GetOrCreateIconTexture(isPlayer, isTank);
 
         Material mat = SafeMaterialFactory.CreateUnlit(Color.white);
+        if (mat == null) return; // ex: build Dedicated Server sans shaders — marqueur purement cosmétique, inutile côté serveur
         mat.mainTexture = iconTex;
         if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", iconTex);
         

@@ -110,6 +110,9 @@ public class TacticalPathManager : MonoBehaviour
 
     void Update()
     {
+#if UNITY_SERVER
+        return; // Aucune entrée tactile/souris à traiter côté serveur headless.
+#endif
         // Bloquer l'assignation de nouveaux ordres pendant l'exécution ou pendant le placement d'unités
         if (phaseActuelle == GamePhase.Execution || UnitSpawnerUI.IsPlacingUnit) return;
 
@@ -819,6 +822,15 @@ public class TacticalPathManager : MonoBehaviour
             if (wm != null) Destroy(wm.gameObject);
         }
 
+        // MULTIJOUEUR : le calcul du tour est entièrement délégué au serveur autoritaire (voir
+        // Assets/Scripts/Network/MultiplayerMatchController.cs). On envoie nos ordres et on
+        // n'exécute JAMAIS de simulation locale ni de planification IA pour l'adversaire.
+        if (StreetAct.Network.MultiplayerMatchController.IsActive)
+        {
+            StreetAct.Network.MultiplayerMatchController.Instance.SubmitLocalTurn();
+            return;
+        }
+
         UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude);
         List<UnitAI> livingUnits = new List<UnitAI>();
         foreach (var u in allUnits)
@@ -946,6 +958,9 @@ public class TacticalPathManager : MonoBehaviour
 
     void OnGUI()
     {
+#if UNITY_SERVER
+        return; // Aucune UI sur le serveur headless — voir Assets/Scripts/Server/.
+#endif
         // Mise à l'échelle automatique +50% pour écrans tactiles mobiles
         Matrix4x4 origMat = GUI.matrix;
         float uiScale = Mathf.Clamp(Screen.width / 480f, 1.35f, 2.2f);

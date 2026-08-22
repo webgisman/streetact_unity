@@ -68,6 +68,14 @@ public class TacticalVisibility : MonoBehaviour
                      ?? Shader.Find("Unlit/Transparent")
                      ?? Shader.Find("Universal Render Pipeline/Lit");
 
+        if (shader == null)
+        {
+            // Aucun shader disponible (ex: build Dedicated Server avec "Enable Dedicated Server
+            // optimizations" actif, qui exclut tous les shaders) — effet purement cosmétique,
+            // sans incidence sur la simulation, on l'ignore proprement plutôt que de planter.
+            return;
+        }
+
         cutawayMaterial = new Material(shader);
         cutawayMaterial.name = "Roof_Cutaway_80Percent_Transparent";
 

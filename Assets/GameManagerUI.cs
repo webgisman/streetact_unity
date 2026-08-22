@@ -135,6 +135,9 @@ public class GameManagerUI : MonoBehaviour
 
     void OnGUI()
     {
+#if UNITY_SERVER
+        return; // Aucune UI sur le serveur headless — voir Assets/Scripts/Server/.
+#else
         // ÉCRAN DE DÉMARRAGE : CHOIX DU THÉÂTRE D'OPÉRATIONS AVANT DE JOUER
         if (isMapSelectorOpen)
         {
@@ -154,7 +157,7 @@ public class GameManagerUI : MonoBehaviour
             float virtualH = Screen.height / uiScale;
 
             float w = Mathf.Min(380f, virtualW - 30f);
-            float h = 310f;
+            float h = 366f;
             float x = (virtualW - w) * 0.5f;
             float y = (virtualH - h) * 0.5f;
 
@@ -193,17 +196,29 @@ public class GameManagerUI : MonoBehaviour
                 StartCoroutine(StartDeviceGPS());
             }
 
+            GUIStyle btnStyle3 = new GUIStyle(GUI.skin.button);
+            btnStyle3.fontSize = 13;
+            btnStyle3.fontStyle = FontStyle.Bold;
+            btnStyle3.normal.textColor = new Color(1f, 0.55f, 0.15f);
+
+            // OPTION 3 : Multijoueur PvP (voir Assets/Scripts/Network/MultiplayerMatchController.cs)
+            if (GUI.Button(new Rect(x + 15, y + 196, w - 30, 50), "⚔️ 3. MULTIJOUEUR (PvP en ligne)", btnStyle3))
+            {
+                isMapSelectorOpen = false;
+                StreetAct.Network.MultiplayerMatchController.EnsureInstance().BeginLoginFlow();
+            }
+
             if (!string.IsNullOrEmpty(gpsStatus))
             {
                 GUIStyle statusStyle = new GUIStyle(GUI.skin.label);
                 statusStyle.alignment = TextAnchor.MiddleCenter;
                 statusStyle.normal.textColor = Color.yellow;
                 statusStyle.fontSize = 12;
-                GUI.Label(new Rect(x + 15, y + 196, w - 30, 35), gpsStatus, statusStyle);
+                GUI.Label(new Rect(x + 15, y + 250, w - 30, 30), gpsStatus, statusStyle);
             }
 
             // Bouton Quitter / Fermer (Jouer immédiatement avec la scène actuelle)
-            if (ProceduralIconFactory.IconButton(new Rect(x + 15, y + 242, w - 30, 48), ProceduralIconFactory.Check(), "▶️ JOUER (Terrain Actuel)"))
+            if (ProceduralIconFactory.IconButton(new Rect(x + 15, y + 292, w - 30, 48), ProceduralIconFactory.Check(), "▶️ JOUER (Terrain Actuel)"))
             {
                 isMapSelectorOpen = false;
             }
@@ -234,6 +249,7 @@ public class GameManagerUI : MonoBehaviour
 
             GUI.matrix = origMat;
         }
+#endif
     }
 
     private IEnumerator StartDeviceGPS()

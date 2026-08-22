@@ -34,20 +34,31 @@ public static class SafeMaterialFactory
         return _cachedLitShader;
     }
 
+    /// <summary>
+    /// Peut retourner null (ex: build Dedicated Server avec "Enable Dedicated Server
+    /// optimizations" actif, qui retire tous les shaders du build) — les appelants doivent
+    /// tolérer un retour null (matériau simplement non assigné, sans incidence côté serveur
+    /// headless où rien n'est de toute façon rendu à l'écran).
+    /// </summary>
     public static Material CreateUnlit(Color color)
     {
         Shader s = GetUnlitShader();
-        Material mat = (s != null) ? new Material(s) : new Material(Shader.Find("Sprites/Default"));
+        if (s == null) return null;
+
+        Material mat = new Material(s);
         mat.enableInstancing = true;
         if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
         if (mat.HasProperty("_Color")) mat.color = color;
         return mat;
     }
 
+    /// <summary>Peut retourner null — voir CreateUnlit.</summary>
     public static Material CreateLit(Color color)
     {
         Shader s = GetLitShader();
-        Material mat = (s != null) ? new Material(s) : CreateUnlit(color);
+        if (s == null) return CreateUnlit(color);
+
+        Material mat = new Material(s);
         mat.enableInstancing = true;
         if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
         if (mat.HasProperty("_Color")) mat.color = color;

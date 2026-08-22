@@ -235,7 +235,9 @@ public class UnitSpawnerUI : MonoBehaviour
                                 Debug.Log($"<color=lime>[UnitSpawnerUI] 🚀 DÉPLOIEMENT : {activePlacingType.Value} en position {navHit.position} pour équipe {selectedTeam} !</color>");
                                 SpawnUnitAt(activePlacingType.Value, navHit.position, selectedTeam);
                                 CancelPlacement();
+#if UNITY_ANDROID || UNITY_IOS
                                 if (Application.isMobilePlatform) Handheld.Vibrate();
+#endif
                             }
                             else
                             {
@@ -631,6 +633,9 @@ public class UnitSpawnerUI : MonoBehaviour
 
     void OnGUI()
     {
+#if UNITY_SERVER
+        return; // Aucune UI sur le serveur headless — voir Assets/Scripts/Server/.
+#endif
         // Masquer en vue 3D Action pour libérer totalement le champ de vision
         if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action) return;
 

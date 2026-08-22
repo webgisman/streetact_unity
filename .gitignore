@@ -6,6 +6,15 @@
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
 
+# Identifiants serveur (VPS, Supabase, clé SSH) — ne JAMAIS committer, voir CREDENTIALS.md.
+/CREDENTIALS.md
+
+# Build compilé du serveur de jeu headless (gros binaire, régénérable) — voir
+# Assets/_ServerDocs/multiplayer/08-known-issues-and-todo.md pour comment le reconstruire.
+/Assets/_ServerDocs/multiplayer/game-server/StreetActServer.x86_64
+/Assets/_ServerDocs/multiplayer/game-server/StreetActServer_Data/
+/Assets/_ServerDocs/multiplayer/game-server/UnityPlayer.so
+
 # MemoryCaptures can get excessive in size.
 # They also could contain extremely sensitive data
 /[Mm]emoryCaptures/

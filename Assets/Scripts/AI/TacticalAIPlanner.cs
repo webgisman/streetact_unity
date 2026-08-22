@@ -11,7 +11,10 @@ public static class TacticalAIPlanner
 {
     public static void PlanTurnForUnit(UnitAI unit)
     {
-        if (unit == null || unit.isDead || unit.isPlayerControlled) return;
+        if (unit == null || unit.isDead) return;
+        // isGhosted : multijoueur, le joueur propriétaire est absent/déconnecté ce tour-ci —
+        // on autorise l'IA à planifier ses ordres malgré isPlayerControlled = true.
+        if (unit.isPlayerControlled && !unit.isGhosted) return;
 
         unit.tacticalPath.Clear();
         unit.currentNodeIndex = 0;
