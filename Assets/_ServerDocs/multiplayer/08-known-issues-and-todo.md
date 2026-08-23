@@ -122,14 +122,14 @@ du projet.
 ## 3. Une fois le build Linux obtenu — ce qu'il reste à faire
 
 1. **Copier le build** dans `Assets/_ServerDocs/multiplayer/game-server/` : le fichier exécutable
-   (`StreetActServer.x86_64`), le dossier `StreetActServer_Data/`, et **`UnityPlayer.so`** (facile
+   (`NovgovServer.x86_64`), le dossier `NovgovServer_Data/`, et **`UnityPlayer.so`** (facile
    à oublier — il est à côté de l'exécutable, pas dedans `_Data/`).
 2. Transférer sur le VPS (`scp` + `tar`, voir historique de session pour la commande exacte —
    env. 40 Mo compressés) dans `/opt/streetact/game-server/`.
 3. `docker compose build game-server && docker compose up -d game-server` sur le VPS.
 4. **Vérifier les logs** (`docker compose logs -f game-server`) : le serveur doit charger la
    carte par défaut, générer les ~396 bâtiments (pas seulement 21 — sinon le fix shader n'a pas
-   pris), et afficher `[GameServerBootstrap] Serveur de jeu StreetAct à l'écoute sur le port 7777.`
+   pris), et afficher `[GameServerBootstrap] Serveur de jeu Novgov à l'écoute sur le port 7777.`
 5. **Test de fumée sans téléphone** : ouvrir une connexion TCP brute vers `novgov.com:7777`,
    envoyer un message `auth` avec un JWT valide (récupérable via un vrai login sur
    `/auth/v1/token`), vérifier qu'il n'y a pas de crash serveur. Ceci teste `GameServerBootstrap`
@@ -200,3 +200,145 @@ Fichiers entièrement nouveaux (non listés ici en détail, voir leur en-tête d
 Le mot de passe VPS initial (`5JnJtq7KWEYF-1`) a transité en clair dans la conversation avant la
 mise en place de l'auth par clé. Voir `CREDENTIALS.md` (fichier local, gitignored, jamais
 committé) pour le détail et la marche à suivre.
+
+---
+
+## 7. Audit de préparation production (2026-08-23)
+
+Audit complet (sécurité, robustesse serveur, config de build, performance client, logique de
+gameplay) fait le 2026-08-23. Les points critiques (triche sur le rating via PostgREST, déni de
+service pré-authentification sur le port 7777, blocage définitif du serveur sur un message
+malformé, Deathmatch sans plafond de tours, `applicationId` encore celui du template Unity,
+absence de keystore de signature) ont déjà été corrigés — voir `06-security-checklist.md` section
+"Audit de production (2026-08-23)" pour le détail des correctifs serveur/DB, et le
+`.gitignore`/`CREDENTIALS.md` pour le keystore Android.
+
+Restant à faire avant un build de diffusion large (pas bloquant pour continuer les tests) :
+
+### Build Android
+- [ ] **Development Build actif dans le profil de build sauvegardé**
+      (`Assets/Settings/Build Profiles/Android™.asset` : `m_Development: 1`,
+      `m_AllowDebugging: 1`) — désactiver avant de builder la version à diffuser (build plus
+      lent/plus gros/débogable, refusé tel quel par la review du Play Store).
+- [ ] **Le profil génère un APK, pas un AAB** (`m_BuildAppBundle: 0`) — le Play Store exige un
+      `.aab` pour toute nouvelle fiche/mise à jour.
+- [ ] **Minification Android désactivée** (`AndroidMinifyRelease: 0`) — pas de réduction
+      R8/ProGuard sur le build release, taille d'AAB inutilement plus grosse.
+- [ ] **`AndroidTargetSdkVersion: 0` (Automatic)** — vérifier/fixer explicitement une version qui
+      respecte l'exigence de target API glissante du Play Store au moment du build (elle change
+      chaque année).
+- [ ] `managedStrippingLevel` non fixé explicitement pour IL2CPP — vérifier que la valeur par
+      défaut effective est suffisante.
+- [ ] Cosmétique, à nettoyer avant publication : `companyName: DefaultCompany`,
+      `projectName`/champs Metro encore à "My project" dans `ProjectSettings/ProjectSettings.asset`
+      (les champs Metro/UWP ne sont pas utilisés par ce projet, sans urgence).
+- [ ] Seule `TacticalCamera`/`CameraStateManager` et quelques scripts de scène n'ont pas été
+      audités un par un pour une éventuelle dépendance non gardée à l'Input System hors du
+      chemin déjà corrigé cette session (menu de démarrage, dock de déploiement, menus
+      contextuels tactiques) — à surveiller si un autre écran/interaction ne répond pas au
+      tactile sur appareil réel.
+
+### Performance client (mobile)
+- [ ] **Chargement de carte bloquant le thread principal** (`MapTileLoader.cs`) — allocation et
+      copie de pixels sans `yield` sur la branche "déjà en cache", risque de gel (ANR Android)
+      proportionnel au rayon/zoom de la carte.
+- [ ] **Effets de combat sans pooling** (`UnitAI_Visuals.cs` : traceurs, sang, impacts, fumée) —
+      `Instantiate`/`Destroy` à chaque tir/impact, à remplacer par un pool d'objets réutilisables
+      si les accrochages à beaucoup d'unités deviennent un point chaud de performance.
+- [ ] **`Camera.main` non mis en cache**, appelé chaque frame par unité/instance dans
+      `UnitAI_Combat.cs` et `RoadBarrier.cs` — à mettre en cache une fois dans `Awake()`/`Start()`.
+- [ ] **`Physics.RaycastAll` alloue à chaque scan de ligne de vue** (`UnitAI_Combat.cs`,
+      ~4×/seconde par unité) — envisager `Physics.RaycastNonAlloc` avec un buffer réutilisable si
+      le nombre d'unités simultanées augmente.
+- [ ] **`TacticalRadarUI.cs` reste en IMGUI** (`OnGUI()`), seul écran non converti en UI Toolkit
+      (décision assumée cette session — c'est un widget d'affichage non interactif, aucun
+      conflit avec le reste de l'UI Toolkit) ; alloue un `GUIStyle` par repaint pendant qu'il est
+      affiché — coût mineur mais facile à éliminer si converti un jour.
+- [ ] Quelques `GetComponent`/`FindObjectsByType` par frame au lieu d'être mis en cache
+      (`TacticalPathManager.cs`, `RoadBarrier.cs`) — `UnitAI.AllLivingUnits` existe déjà comme
+      cache et n'est pas toujours réutilisé partout où un scan de toutes les unités serait
+      possible.
+
+### Gameplay
+- [ ] Le rating ELO calculé peut théoriquement descendre sous 0 pour un joueur à rating très bas
+      qui perd contre un adversaire beaucoup mieux classé (`MatchSessionManager.cs`, pas de
+      `Mathf.Max(0, ...)` sur le résultat) — cosmétique/affichage, pas un bug de calcul.
+
+---
+
+## 8. Session du 2026-08-23 (soir) — build Android sur tablette + bug de sélection + UI
+
+### Build Android : signature du keystore
+
+- **Symptôme 1** : popup Unity "Unable to sign the Android application — No keystore passwords
+  were found" à chaque tentative de build. Cause : Unity ne persiste jamais les mots de passe du
+  keystore dans `ProjectSettings/ProjectSettings.asset` (par sécurité) — il faut les ressaisir dans
+  **Edit > Project Settings > Player > Android > Publishing Settings** à chaque nouvelle session
+  d'Editor. Mot de passe dans `CREDENTIALS.md` section 6 (fichier local, gitignored).
+- **Symptôme 2** (après avoir saisi les mots de passe) : échec Gradle
+  `Keystore file '...\Library\Bee\Android\Prj\IL2CPP\Gradle\launcher\novgov-release.keystore' not
+  found for signing config 'release'`, y compris après un nettoyage complet de
+  `Library/Bee/Android` (export Gradle entièrement neuf, 35/35 tâches exécutées). Cause réelle :
+  avec **Custom Keystore** actif, Unity ne copie le fichier `.keystore` dans le projet Gradle
+  exporté **que pour un build Release** — jamais pour `assembleDebug` (Development Build), même si
+  la config de signature du variant Debug pointe quand même vers ce même keystore. C'est une
+  limitation connue d'Unity, pas un bug du projet.
+  - **Pour tester rapidement** (build de dev) : décocher **Custom Keystore** dans Publishing
+    Settings — Unity signe alors avec une clé de debug auto-générée.
+  - **Pour un vrai build signé** (Play Store) : décocher **Development Build** dans *File > Build
+    Settings* avant de builder, pour forcer `assembleRelease`.
+
+### Build Android : `stripEngineCode` cassait le module Physics
+
+- **Symptôme** : sur la tablette réelle, sélectionner une unité tactile ne fonctionnait plus du
+  tout (fonctionnait dans l'Editor), et le logcat affichait `Can't add component because class
+  'SphereCollider' doesn't exist!` lors de la génération des props de rue
+  (`StreetPropsGenerator.CreateTree`/`CreateStreetLight`).
+- **Cause** : `PlayerSettings.stripEngineCode` ("Strip Engine Code", Android > Optimization) était
+  actif. L'analyseur statique d'Unity n'a pas détecté d'usage direct du module Physics et l'a
+  retiré du build IL2CPP — tous les `Collider` deviennent alors non fonctionnels au runtime, ce qui
+  casse silencieusement tout raycast de sélection.
+- **Correction** : `stripEngineCode` mis à `0` dans `ProjectSettings/ProjectSettings.asset`. Coût :
+  APK légèrement plus gros, mais tous les modules moteur restent intacts.
+
+### Bug de sélection tactile : piège du mode Placement
+
+- **Symptôme** : sur tablette, taper sur une unité déjà déployée ne la sélectionnait jamais — le
+  logcat confirmait qu'à chaque tap, `UnitSpawnerUI` **déployait une nouvelle unité** au lieu de
+  déclencher `TacticalPathManager.SelectionnerUnite()`.
+- **Cause** : `TacticalPathManager.Update()` (ligne ~121) retourne immédiatement tant que
+  `UnitSpawnerUI.IsPlacingUnit == true` — un mode "Placement" resté armé après un clic sur un
+  bouton du dock de déploiement (ex. "🛡️ Char Leopard 2") absorbe alors tous les taps suivants
+  pour déployer de nouvelles unités, sans jamais les transmettre à la sélection tant qu'on ne
+  l'annule pas explicitement.
+- **Correctifs** (`Assets/UnitSpawnerUI.cs`) :
+  1. Taper directement sur une unité déjà posée pendant que le mode Placement est actif annule
+     maintenant ce mode (au lieu de risquer de redéployer une unité par-dessus) — voir
+     `tappedOnExistingUnit` dans `HandlePlacementPreview()`.
+  2. La bannière "MODE PLACEMENT" du dock de déploiement est rendue beaucoup plus visible (voir
+     section UI ci-dessous) pour qu'on ne l'oublie plus active par erreur.
+
+### Refonte visuelle : menu d'action contextuel + dock de déploiement
+
+Aucun fichier `.uss` n'existait dans tout le projet avant cette session — tout l'UI Toolkit
+runtime (`UIScreenManager`) reposait uniquement sur le thème par défaut d'Unity et des styles
+inline minimaux, d'où un rendu très brut ("horrible" au retour utilisateur).
+
+- **Nouveau** `Assets/Resources/UI/ContextMenuScreen.uss` + UXML mis à jour : panneau sombre
+  arrondi façon bottom-sheet (poignée en haut), boutons avec liseré coloré à gauche au lieu de
+  texte multicolore peu lisible, retour visuel au tap (`:active`), et fond assombri cliquable pour
+  fermer le menu en tapant à côté (`TacticalPathManager.cs` : callback `ClickEvent` sur le nouvel
+  élément `backdrop`).
+- **Nouveau** `Assets/Resources/UI/DeploymentDockScreen.uss` + UXML mis à jour : même traitement
+  visuel pour le dock de déploiement (panneau, boutons d'unité, indicateur d'équipe active via
+  `EnableInClassList`), et bannière "MODE PLACEMENT" recolorée en orange vif avec bordure pour
+  qu'elle soit impossible à manquer.
+
+### Fichiers touchés cette session
+| Fichier | Changement |
+|---|---|
+| `ProjectSettings/ProjectSettings.asset` | `stripEngineCode: 0`, config keystore (`AndroidKeystoreName`/`AndroidKeyaliasName`) |
+| `Assets/UnitSpawnerUI.cs` | Détection de tap sur unité existante pendant le mode Placement → annulation au lieu de redéploiement ; classes USS sur les boutons du dock ; état actif équipe |
+| `Assets/TacticalPathManager.cs` | Backdrop cliquable pour le menu contextuel ; boutons du menu contextuel migrés vers la classe USS `context-button` |
+| `Assets/Resources/UI/ContextMenuScreen.uxml` + `.uss` (nouveau) | Refonte visuelle du menu d'action contextuel |
+| `Assets/Resources/UI/DeploymentDockScreen.uxml` + `.uss` (nouveau) | Refonte visuelle du dock de déploiement |
