@@ -1,7 +1,7 @@
 using UnityEngine;
 using UnityEngine.EventSystems;
 
-namespace StreetAct.Interaction
+namespace Novgov.Interaction
 {
     /// <summary>
     /// Composant attaché à chaque porte de bâtiment pour gérer la surbrillance (Hover)

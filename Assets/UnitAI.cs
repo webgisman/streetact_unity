@@ -270,8 +270,8 @@ public partial class UnitAI : MonoBehaviour
         if (isTank)
         {
             AudioClip vehicleClip = null;
-            if (isCanonVehicle) vehicleClip = Resources.Load<AudioClip>("Sounds/vehicle-walk");
-            else vehicleClip = Resources.Load<AudioClip>("Sounds/tank-walk-sound");
+            if (isCanonVehicle) vehicleClip = Resources.Load<AudioClip>("Sounds/vehicle-walk-sound");
+            else vehicleClip = Resources.Load<AudioClip>("Sounds/tank-walk_sound");
             
             if (vehicleClip == null) vehicleClip = ProceduralAudioBuilder.CreateVehicleEngineSound();
             footstepAudioSource.clip = vehicleClip;
@@ -774,7 +774,7 @@ public partial class UnitAI : MonoBehaviour
             // Son d'explosion GÉANT
             AudioClip explosionSound = Resources.Load<AudioClip>("ExplosionSound");
             if (explosionSound != null) AudioSource.PlayClipAtPoint(explosionSound, transform.position, 5.0f);
-            else AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateGunshotSound(), transform.position, 5.0f);
+            else AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateMortarExplosionSound(), transform.position, 5.0f);
             
             // Effet visuel massif de destruction
             if (muzzleFlashPrefab != null)
@@ -860,7 +860,7 @@ public partial class UnitAI : MonoBehaviour
             Destroy(mf, 1.0f);
         }
 
-        StreetAct.Combat.MortarShell.Launch(muzzlePos, targetPos, teamID);
+        Novgov.Combat.MortarShell.Launch(muzzlePos, targetPos, teamID);
         Debug.Log($"<color=orange>[{gameObject.name}] 💥 Obus de mortier tiré vers ({targetPos.x:F1}, {targetPos.z:F1}) !</color>");
         
         FogOfWarEntity fow = GetComponent<FogOfWarEntity>();

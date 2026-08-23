@@ -3,7 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
-using StreetAct.Core;
+using Novgov.Core;
 using UnityEngine.Networking;
 
 public class MapTileLoader : MonoBehaviour
@@ -162,7 +162,7 @@ public class MapTileLoader : MonoBehaviour
 
                     using (UnityWebRequest www = UnityWebRequestTexture.GetTexture(url))
                     {
-                        www.SetRequestHeader("User-Agent", "StreetActTacticalGame/1.0 (Windows; Unity)");
+                        www.SetRequestHeader("User-Agent", "NovgovTacticalGame/1.0 (Windows; Unity)");
                         www.timeout = 15;
                         
                         yield return www.SendWebRequest();

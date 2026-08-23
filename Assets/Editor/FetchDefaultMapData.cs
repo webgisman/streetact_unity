@@ -8,7 +8,7 @@ public class FetchDefaultMapData : EditorWindow
 {
     private static IEnumerator currentRoutine;
 
-    [MenuItem("Tools/StreetAct/Télécharger la carte hors-ligne (Default)")]
+    [MenuItem("Tools/Novgov/Télécharger la carte hors-ligne (Default)")]
     public static void FetchData()
     {
         currentRoutine = DownloadRoutine();

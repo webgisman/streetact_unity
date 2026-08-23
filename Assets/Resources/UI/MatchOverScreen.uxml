@@ -1,0 +1,10 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.85);">
+        <ui:VisualElement class="panel" style="width: 70%; max-width: 500px; align-items: center;">
+            <ui:Label name="result-label" text="" class="title" style="margin-bottom: 12px;" />
+            <ui:Label name="rating-label" text="" class="subtitle" style="margin-bottom: 24px;" />
+            <ui:Button name="leaderboard-button" text="🏆 Classement" style="width: 100%; margin-bottom: 12px;" />
+            <ui:Button name="menu-button" text="Retour au menu" class="btn-primary" style="width: 100%;" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

@@ -2,8 +2,8 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using StreetAct.Core;
-using StreetAct.Generation;
+using Novgov.Core;
+using Novgov.Generation;
 using UnityEngine.Networking;
 using UnityEngine.AI;
 using Unity.AI.Navigation;
@@ -969,7 +969,7 @@ public class CityGenerator : MonoBehaviour
                 bc.size = new Vector3(1.4f, 2.2f, 0.6f);
 
                 // Composant d'interaction avec surbrillance cyan
-                var doorInteract = doorObj.AddComponent<StreetAct.Interaction.DoorInteraction>();
+                var doorInteract = doorObj.AddComponent<Novgov.Interaction.DoorInteraction>();
                 doorInteract.Initialize(structure, door, sharedDoorMaterial);
                 structure.doorInteractions.Add(doorInteract);
 

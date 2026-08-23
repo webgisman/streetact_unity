@@ -36,8 +36,8 @@ public class BuildingStructure : MonoBehaviour
 
     public List<BuildingDoor> doors = new List<BuildingDoor>();
     public List<BuildingWindow> windows = new List<BuildingWindow>();
-    public List<StreetAct.Interaction.DoorInteraction> doorInteractions = new List<StreetAct.Interaction.DoorInteraction>();
-    public List<StreetAct.Interaction.WindowInteraction> windowInteractions = new List<StreetAct.Interaction.WindowInteraction>();
+    public List<Novgov.Interaction.DoorInteraction> doorInteractions = new List<Novgov.Interaction.DoorInteraction>();
+    public List<Novgov.Interaction.WindowInteraction> windowInteractions = new List<Novgov.Interaction.WindowInteraction>();
     public List<UnitAI> unitsInside = new List<UnitAI>();
     public List<UnitAI> unitsOnRoof = new List<UnitAI>();
     public TacticalVisibility tacticalVisibility;
@@ -206,10 +206,10 @@ public class BuildingStructure : MonoBehaviour
     /// <summary>
     /// Trouve le composant d'interaction de porte le plus proche.
     /// </summary>
-    public StreetAct.Interaction.DoorInteraction GetClosestDoorInteraction(Vector3 fromPos, float maxDist = 3.5f)
+    public Novgov.Interaction.DoorInteraction GetClosestDoorInteraction(Vector3 fromPos, float maxDist = 3.5f)
     {
         if (doorInteractions == null || doorInteractions.Count == 0) return null;
-        StreetAct.Interaction.DoorInteraction best = null;
+        Novgov.Interaction.DoorInteraction best = null;
         float minDist = maxDist;
         foreach (var di in doorInteractions)
         {

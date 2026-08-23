@@ -1,0 +1,147 @@
+/*
+ * Thème visuel global "tactique militaire" — cohérent avec l'esthétique déjà en place dans
+ * TacticalRadarUI (panneaux sombres, angles coupés, teintes équipe bleu/rouge).
+ * Chaque écran importe ce thème (héritage automatique via PanelSettings.themeStyleSheet) et
+ * n'a besoin que de ses propres règles de mise en page par-dessus.
+ */
+
+:root {
+    --color-bg-dark: rgb(16, 20, 24);
+    --color-panel: rgb(24, 30, 36);
+    --color-panel-border: rgb(58, 74, 84);
+    --color-text: rgb(226, 232, 236);
+    --color-text-dim: rgb(150, 162, 170);
+    --color-team1: rgb(38, 153, 255);
+    --color-team2: rgb(255, 60, 60);
+    --color-accent: rgb(255, 176, 40);
+    --color-danger: rgb(220, 60, 60);
+    --color-success: rgb(70, 200, 120);
+}
+
+Label {
+    color: var(--color-text);
+    -unity-font-style: normal;
+    font-size: 28px;
+}
+
+.title {
+    font-size: 40px;
+    -unity-font-style: bold;
+    color: var(--color-text);
+    -unity-text-align: middle-center;
+    letter-spacing: 2px;
+}
+
+.subtitle {
+    font-size: 24px;
+    color: var(--color-text-dim);
+    -unity-text-align: middle-center;
+}
+
+.panel {
+    background-color: var(--color-panel);
+    border-width: 2px;
+    border-color: var(--color-panel-border);
+    padding: 24px;
+    border-radius: 4px;
+}
+
+.hint {
+    font-size: 20px;
+    color: var(--color-text-dim);
+}
+
+.error-text {
+    font-size: 22px;
+    color: var(--color-danger);
+    white-space: normal;
+}
+
+Button {
+    background-color: rgb(38, 46, 54);
+    border-width: 2px;
+    border-color: var(--color-panel-border);
+    border-radius: 2px;
+    color: var(--color-text);
+    font-size: 26px;
+    -unity-font-style: bold;
+    padding: 16px;
+    transition-property: background-color, border-color;
+    transition-duration: 0.1s;
+}
+
+Button:hover {
+    background-color: rgb(50, 60, 70);
+    border-color: var(--color-accent);
+}
+
+Button:active {
+    background-color: rgb(30, 36, 42);
+}
+
+Button.btn-primary {
+    background-color: rgb(30, 90, 140);
+    border-color: var(--color-team1);
+}
+
+Button.btn-primary:hover {
+    background-color: rgb(40, 110, 165);
+}
+
+Button.btn-team1 {
+    border-color: var(--color-team1);
+    border-width: 3px;
+}
+
+Button.btn-team2 {
+    border-color: var(--color-team2);
+    border-width: 3px;
+}
+
+TextField {
+    font-size: 26px;
+    margin-bottom: 4px;
+}
+
+TextField > .unity-text-field__input {
+    background-color: rgb(12, 15, 18);
+    border-width: 1px;
+    border-color: var(--color-panel-border);
+    color: var(--color-text);
+    padding: 8px;
+}
+
+.team1-badge {
+    background-color: var(--color-team1);
+    color: white;
+    padding: 6px 16px;
+    border-radius: 2px;
+    -unity-font-style: bold;
+}
+
+.team2-badge {
+    background-color: var(--color-team2);
+    color: white;
+    padding: 6px 16px;
+    border-radius: 2px;
+    -unity-font-style: bold;
+}
+
+.progress-bar-bg {
+    background-color: rgb(12, 15, 18);
+    border-width: 1px;
+    border-color: var(--color-panel-border);
+    height: 24px;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-bar-fill-team1 {
+    background-color: var(--color-team1);
+    height: 100%;
+}
+
+.progress-bar-fill-team2 {
+    background-color: var(--color-team2);
+    height: 100%;
+}

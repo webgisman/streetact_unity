@@ -39,7 +39,7 @@ public class TacticalStreamingManager : MonoBehaviour
     public void RegisterAllBuildings()
     {
         cachedChunks.Clear();
-        BuildingStructure[] allBuildings = FindObjectsByType<BuildingStructure>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        BuildingStructure[] allBuildings = FindObjectsByType<BuildingStructure>(FindObjectsInactive.Include);
         
         foreach (var building in allBuildings)
         {

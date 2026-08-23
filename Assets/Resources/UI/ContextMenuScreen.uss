@@ -1,0 +1,85 @@
+.context-root {
+    flex-grow: 1;
+    picking-mode: Ignore;
+    justify-content: flex-end;
+    align-items: center;
+    padding-bottom: 90px;
+}
+
+.context-backdrop {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.4);
+}
+
+.context-panel {
+    background-color: rgba(17, 21, 28, 0.96);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    padding: 10px 18px 18px 18px;
+}
+
+.context-panel__handle {
+    width: 42px;
+    height: 4px;
+    border-radius: 2px;
+    background-color: rgba(255, 255, 255, 0.22);
+    align-self: center;
+    margin-top: 4px;
+    margin-bottom: 14px;
+}
+
+.context-title {
+    font-size: 19px;
+    -unity-font-style: bold;
+    color: rgb(245, 246, 248);
+    -unity-text-align: middle-center;
+    white-space: normal;
+    margin-bottom: 14px;
+}
+
+.context-button {
+    flex-direction: row;
+    align-items: center;
+    background-color: rgba(255, 255, 255, 0.05);
+    border-left-width: 4px;
+    border-top-width: 0;
+    border-right-width: 0;
+    border-bottom-width: 0;
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    min-height: 52px;
+    color: rgb(232, 233, 238);
+    font-size: 15px;
+    -unity-font-style: bold;
+    -unity-text-align: middle-left;
+    white-space: normal;
+}
+
+.context-button:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+}
+
+.context-button:active {
+    background-color: rgba(255, 255, 255, 0.16);
+}
+
+.context-cancel {
+    background-color: rgba(255, 255, 255, 0.04);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.14);
+    border-radius: 12px;
+    color: rgb(175, 180, 190);
+    min-height: 46px;
+    margin-top: 6px;
+    -unity-font-style: bold;
+}
+
+.context-cancel:active {
+    background-color: rgba(255, 255, 255, 0.12);
+}

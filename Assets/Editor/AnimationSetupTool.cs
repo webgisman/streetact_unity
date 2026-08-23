@@ -4,7 +4,7 @@ using UnityEditor.Animations;
 
 public class AnimationSetupTool : Editor
 {
-    [MenuItem("StreetAct/1. Réparer les Squelettes 3D (Humanoid)")]
+    [MenuItem("Novgov/1. Réparer les Squelettes 3D (Humanoid)")]
     public static void ConfigurerSquelettes()
     {
         string[] fbxFiles = AssetDatabase.FindAssets("t:Model");
@@ -28,7 +28,7 @@ public class AnimationSetupTool : Editor
         EditorUtility.DisplayDialog("Terminé", $"{count} modèles 3D ont été convertis avec succès au format Generic !\n\nCela permet aux animations de Mixamo de fonctionner sans corrompre le mesh.", "OK");
     }
 
-    [MenuItem("StreetAct/2. Configuration Magique des Animations")]
+    [MenuItem("Novgov/2. Configuration Magique des Animations")]
     public static void ConfigurerAnimations()
     {
         // 1. Trouver les clips d'animation dans les FBX

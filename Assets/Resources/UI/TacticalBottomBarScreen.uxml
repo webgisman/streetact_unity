@@ -1,0 +1,20 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore;">
+
+        <ui:VisualElement name="planification-group" style="flex-grow: 1; picking-mode: Ignore;">
+            <ui:Button name="end-turn-button" text="▶️ FIN TOUR" class="btn-primary" style="position: absolute; right: 16px; bottom: 16px; width: 150px; height: 56px;" />
+
+            <ui:VisualElement name="contextual-bar" style="display: none; position: absolute; left: 16px; bottom: 16px; flex-direction: row; picking-mode: Position;">
+                <ui:Button name="deselect-button" text="❌" style="width: 56px; height: 56px; color: rgb(255, 115, 115); margin-right: 6px;" />
+                <ui:Button name="undo-button" text="↩️ Annuler" style="width: 110px; height: 56px; color: rgb(255, 217, 51); margin-right: 6px;" />
+                <ui:Button name="view3d-button" text="🔍 VUE 3D" style="display: none; width: 130px; height: 56px; color: rgb(51, 242, 255);" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:VisualElement name="execution-group" style="display: none; position: absolute; top: 16px; left: 16px; right: 16px; flex-direction: row; justify-content: space-between; picking-mode: Position;">
+            <ui:Label name="execution-label" text="ACTION EN COURS..." class="panel" style="color: rgb(255, 217, 51); font-size: 22px; -unity-font-style: bold; padding: 10px 24px;" />
+            <ui:Button name="skip-button" text="Passer" style="width: 120px; height: 46px;" />
+        </ui:VisualElement>
+
+    </ui:VisualElement>
+</ui:UXML>

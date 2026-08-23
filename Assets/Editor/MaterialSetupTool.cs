@@ -3,7 +3,7 @@ using UnityEditor;
 
 public class MaterialSetupTool : Editor
 {
-    [MenuItem("StreetAct/3. Assigner Textures Briques Rouges")]
+    [MenuItem("Novgov/3. Assigner Textures Briques Rouges")]
     public static void SetupMaterial()
     {
         string folderPath = "Assets/Textures/RedBrick";

@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace StreetAct.Generation
+namespace Novgov.Generation
 {
     /// <summary>
     /// Place du mobilier urbain procédural (lampadaires, bancs, poubelles, arbres) le long des façades

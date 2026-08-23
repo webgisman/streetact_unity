@@ -5,7 +5,7 @@ using UnityEngine.EventSystems;
 
 public class SetupOfflineUI
 {
-    [MenuItem("Tools/StreetAct/Générer l'Interface Hors-Ligne (UI)")]
+    [MenuItem("Tools/Novgov/Générer l'Interface Hors-Ligne (UI)")]
     public static void GenerateUI()
     {
         // 1. Setup EventSystem

@@ -20,7 +20,7 @@ Pour tout nouveau fichier FBX importé depuis Mixamo (personnage OU animation) :
 3. **Avatar Definition** : `Create From This Model`.
 
 > **Outils Automatiques disponibles :**
-> - **`StreetAct > 1. Réparer les Squelettes 3D (Humanoid)`** : Analyse tous les FBX du projet et les convertit en Humanoid avec Avatar.
+> - **`Novgov > 1. Réparer les Squelettes 3D (Humanoid)`** : Analyse tous les FBX du projet et les convertit en Humanoid avec Avatar.
 > - **`Tools > Corriger les Animations (Mettre en Humanoid + Bake Y)`** : Force le type Humanoid et verrouille l'axe vertical Y sur les animations de pose.
 
 ---
@@ -32,7 +32,7 @@ Pour les animations de déplacement (ex: `Rifle Run.fbx`) :
 - **Règle absolue** : Cocher `Bake Into Pose` (Position XZ et Rotation).
 
 > **Outil Automatique :**
-> - **`StreetAct > 4. Activer le Loop et Fixer les Saccades d'Animation (Bake Into Pose)`** : Applique en un clic le bouclage continu et le verrouillage de position sans toucher au Root Motion de Unity.
+> - **`Novgov > 4. Activer le Loop et Fixer les Saccades d'Animation (Bake Into Pose)`** : Applique en un clic le bouclage continu et le verrouillage de position sans toucher au Root Motion de Unity.
 
 ---
 

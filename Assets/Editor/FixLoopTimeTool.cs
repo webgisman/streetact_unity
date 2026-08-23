@@ -3,7 +3,7 @@ using UnityEditor;
 
 public class FixLoopTimeTool : Editor
 {
-    [MenuItem("StreetAct/4. Activer le Loop et Fixer les Saccades d'Animation (Bake Into Pose)")]
+    [MenuItem("Novgov/4. Activer le Loop et Fixer les Saccades d'Animation (Bake Into Pose)")]
     public static void FixLoopTime()
     {
         // On cible tous les FBX du projet pour être sûr de corriger le soldat ET ses animations

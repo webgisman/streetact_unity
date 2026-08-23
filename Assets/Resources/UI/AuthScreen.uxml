@@ -1,0 +1,26 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.85);">
+        <ui:VisualElement name="panel" class="panel" style="width: 70%; max-width: 620px;">
+            <ui:Label name="title-label" text="⚔️ CONNEXION MULTIJOUEUR" class="title" style="margin-bottom: 24px;" />
+
+            <ui:Label text="Email :" class="hint" />
+            <ui:TextField name="email-field" style="margin-bottom: 16px;" />
+
+            <ui:VisualElement style="flex-direction: row; justify-content: space-between; align-items: center;">
+                <ui:Label text="Mot de passe (6 caractères min.) :" class="hint" />
+                <ui:Toggle name="show-password-toggle" label="Afficher" />
+            </ui:VisualElement>
+            <ui:TextField name="password-field" password="true" style="margin-bottom: 16px;" />
+
+            <ui:VisualElement name="username-container" style="margin-bottom: 16px;">
+                <ui:Label text="Pseudo :" class="hint" />
+                <ui:TextField name="username-field" />
+            </ui:VisualElement>
+
+            <ui:Button name="submit-button" text="Se connecter" class="btn-primary" style="height: 70px; margin-bottom: 12px;" />
+            <ui:Button name="toggle-mode-button" text="Pas encore de compte ? Créer un compte" style="background-color: transparent; border-width: 0;" />
+
+            <ui:Label name="status-label" text="" class="error-text" style="margin-top: 12px;" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

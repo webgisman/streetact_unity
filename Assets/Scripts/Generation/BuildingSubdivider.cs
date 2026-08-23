@@ -1,7 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-namespace StreetAct.Generation
+namespace Novgov.Generation
 {
     public static class BuildingSubdivider
     {

@@ -1,0 +1,23 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore;">
+
+        <ui:VisualElement name="top-bar" style="flex-direction: row; justify-content: space-between; align-items: flex-start; padding: 24px; picking-mode: Ignore;">
+            <ui:Label name="team-banner" text="ÉQUIPE BLEUE" class="team1-badge" style="font-size: 24px; picking-mode: Ignore;" />
+            <ui:Label name="timer-label" text="" class="panel" style="font-size: 26px; -unity-font-style: bold; padding: 8px 20px; picking-mode: Ignore;" />
+        </ui:VisualElement>
+
+        <ui:Label name="phase-label" text="PLANIFICATION" class="panel" style="align-self: center; margin-top: 8px; font-size: 22px; -unity-font-style: bold; padding: 6px 24px; picking-mode: Ignore;" />
+
+        <ui:VisualElement name="zone-bar-container" style="display: none; align-self: center; width: 60%; margin-top: 16px; picking-mode: Ignore;">
+            <ui:Label text="ZONE DE CONTRÔLE" class="hint" style="align-self: center; margin-bottom: 4px; picking-mode: Ignore;" />
+            <ui:VisualElement style="flex-direction: row; height: 24px; picking-mode: Ignore;">
+                <ui:VisualElement name="zone-fill-team1" class="progress-bar-fill-team1" style="width: 0%; picking-mode: Ignore;" />
+                <ui:VisualElement name="zone-fill-team2" class="progress-bar-fill-team2" style="width: 0%; picking-mode: Ignore;" />
+                <ui:VisualElement name="zone-fill-empty" style="flex-grow: 1; background-color: rgb(12, 15, 18); picking-mode: Ignore;" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:Label name="ghost-banner" text="" class="panel" style="display: none; align-self: center; margin-top: 16px; color: rgb(255, 176, 40); font-size: 20px; -unity-font-style: bold; picking-mode: Ignore;" />
+
+    </ui:VisualElement>
+</ui:UXML>

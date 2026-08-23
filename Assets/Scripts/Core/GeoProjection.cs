@@ -1,7 +1,7 @@
 using UnityEngine;
 using System;
 
-namespace StreetAct.Core
+namespace Novgov.Core
 {
     /// <summary>
     /// Classe utilitaire pour garantir une précision absolue entre les données OSM et les tuiles de carte.

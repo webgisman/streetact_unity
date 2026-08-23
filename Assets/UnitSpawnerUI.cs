@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.InputSystem;
 using UnityEngine.EventSystems;
+using UnityEngine.UIElements;
 
 /// <summary>
 /// Menu tactique de déploiement et de Drag & Drop des unités sur le champ de bataille (Max 6 unités).
@@ -39,6 +40,9 @@ public class UnitSpawnerUI : MonoBehaviour
     void Awake()
     {
         Instance = this;
+#if !UNITY_SERVER
+        BindDeploymentUI();
+#endif
     }
 
     void Start()
@@ -85,6 +89,10 @@ public class UnitSpawnerUI : MonoBehaviour
                 CancelPlacement();
             }
         }
+
+#if !UNITY_SERVER
+        RefreshDeploymentDockUI();
+#endif
     }
 
     private Vector2 placementDownPos;
@@ -107,27 +115,12 @@ public class UnitSpawnerUI : MonoBehaviour
                 wasPressed = touch.press.wasPressedThisFrame;
                 wasReleased = touch.press.wasReleasedThisFrame;
             }
-            else if (Input.touchCount > 0)
-            {
-                Touch t = Input.GetTouch(0);
-                pointerPos = t.position;
-                hasPointer = true;
-                wasPressed = (t.phase == UnityEngine.TouchPhase.Began);
-                wasReleased = (t.phase == UnityEngine.TouchPhase.Ended);
-            }
             else if (Pointer.current != null)
             {
                 pointerPos = Pointer.current.position.ReadValue();
                 hasPointer = true;
                 wasPressed = Pointer.current.press.wasPressedThisFrame;
                 wasReleased = Pointer.current.press.wasReleasedThisFrame;
-            }
-            else if (Input.mousePresent)
-            {
-                pointerPos = Input.mousePosition;
-                hasPointer = true;
-                wasPressed = Input.GetMouseButtonDown(0);
-                wasReleased = Input.GetMouseButtonUp(0);
             }
 
             if (!hasPointer) return;
@@ -172,6 +165,8 @@ public class UnitSpawnerUI : MonoBehaviour
                         }
                     }
                 }
+
+                bool tappedOnExistingUnit = hitInfo.collider != null && hitInfo.collider.GetComponentInParent<UnitAI>() != null;
 
                 bool isHeavyUnit = (activePlacingType == UnitType.CharLeopard ||
                                     activePlacingType == UnitType.VehiculeCanon ||
@@ -230,7 +225,14 @@ public class UnitSpawnerUI : MonoBehaviour
                         
                         if (!cancelBtnRect.Contains(guiPos))
                         {
-                            if (isValid && activePlacingType.HasValue)
+                            if (tappedOnExistingUnit)
+                            {
+                                // On ne redéploie jamais une unité par-dessus une autre déjà posée :
+                                // on annule le placement pour que le prochain tap serve à la sélectionner.
+                                CancelPlacement();
+                                ShowMessage("Emplacement occupé — placement annulé. Retape sur l'unité pour la sélectionner.", 2.5f);
+                            }
+                            else if (isValid && activePlacingType.HasValue)
                             {
                                 Debug.Log($"<color=lime>[UnitSpawnerUI] 🚀 DÉPLOIEMENT : {activePlacingType.Value} en position {navHit.position} pour équipe {selectedTeam} !</color>");
                                 SpawnUnitAt(activePlacingType.Value, navHit.position, selectedTeam);
@@ -580,15 +582,52 @@ public class UnitSpawnerUI : MonoBehaviour
     }
 
     /// <summary>
+    /// Échantillonne plusieurs points de NavMesh autour de "desired" (le point visé lui-même, puis
+    /// un anneau de points à distances/angles croissants) et retourne celui avec le Y le plus bas.
+    /// Un simple NavMesh.SamplePosition() renvoie le point le plus proche, qui peut être un toit de
+    /// bâtiment si celui-ci est géométriquement plus près du point visé que la rue — le toit est
+    /// praticable pour l'IA (snipers), donc valide pour le NavMesh mais faux pour une zone de spawn.
+    /// </summary>
+    public static Vector3 FindGroundLevelNavPoint(Vector3 desired, float searchRadius)
+    {
+        var candidates = new List<Vector3> { desired };
+        const int ringSteps = 8;
+        for (int ring = 1; ring <= 3; ring++)
+        {
+            float radius = searchRadius * ring / 3f;
+            for (int i = 0; i < ringSteps; i++)
+            {
+                float angle = i * (360f / ringSteps) * Mathf.Deg2Rad;
+                candidates.Add(desired + new Vector3(Mathf.Cos(angle) * radius, 0f, Mathf.Sin(angle) * radius));
+            }
+        }
+
+        Vector3 best = desired;
+        float bestY = float.MaxValue;
+        bool found = false;
+
+        foreach (var candidate in candidates)
+        {
+            if (NavMesh.SamplePosition(candidate, out NavMeshHit hit, searchRadius, NavMesh.AllAreas))
+            {
+                if (!found || hit.position.y < bestY)
+                {
+                    bestY = hit.position.y;
+                    best = hit.position;
+                    found = true;
+                }
+            }
+        }
+
+        return found ? best : desired;
+    }
+
+    /// <summary>
     /// Déploie instantanément une escouade ennemie IA (Fantassins, Char, Mortier) sur les routes.
     /// </summary>
     public void SpawnEnemyWave()
     {
-        Vector3 enemyBase = new Vector3(25f, 0f, 25f);
-        if (NavMesh.SamplePosition(enemyBase, out NavMeshHit enh, 40f, NavMesh.AllAreas))
-        {
-            enemyBase = enh.position;
-        }
+        Vector3 enemyBase = FindGroundLevelNavPoint(new Vector3(25f, 0f, 25f), 40f);
 
         SpawnUnitAt(UnitType.Fantassin, enemyBase + new Vector3(-3f, 0, 3f), 2);
         SpawnUnitAt(UnitType.Fantassin, enemyBase + new Vector3(3f, 0, -3f), 2);
@@ -606,11 +645,7 @@ public class UnitSpawnerUI : MonoBehaviour
     public void AutoDeployBattlefield()
     {
         // Camp Joueur (Sud-Ouest)
-        Vector3 playerPos = new Vector3(-25f, 0f, -25f);
-        if (NavMesh.SamplePosition(playerPos, out NavMeshHit pnh, 40f, NavMesh.AllAreas))
-        {
-            playerPos = pnh.position;
-        }
+        Vector3 playerPos = FindGroundLevelNavPoint(new Vector3(-25f, 0f, -25f), 40f);
 
         if (GetTeamLivingUnitsCount(1) == 0)
         {
@@ -631,33 +666,31 @@ public class UnitSpawnerUI : MonoBehaviour
         statusMessageTimer = duration;
     }
 
-    void OnGUI()
+#if !UNITY_SERVER
+    private VisualElement dockPanel;
+    private Button tabButton, team1Button, team2Button;
+    private Label effectifsLabel, placingBanner, statusMessageLabel;
+    private bool deploymentUiBound = false;
+
+    private void BindDeploymentUI()
     {
-#if UNITY_SERVER
-        return; // Aucune UI sur le serveur headless — voir Assets/Scripts/Server/.
-#endif
-        // Masquer en vue 3D Action pour libérer totalement le champ de vision
-        if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action) return;
+        if (UIScreenManager.Instance == null)
+        {
+            Debug.LogError("[UnitSpawnerUI] UIScreenManager.Instance introuvable — UIBootstrap ne s'est-il pas exécuté avant cette scène ?");
+            return;
+        }
+        deploymentUiBound = true;
 
-        // Ne pas afficher pendant l'exécution du tour
-        TacticalPathManager pathManager = FindAnyObjectByType<TacticalPathManager>();
-        if (pathManager != null && pathManager.phaseActuelle == TacticalPathManager.GamePhase.Execution) return;
+        VisualElement root = UIScreenManager.Instance.GetScreen("DeploymentDock");
+        tabButton = root.Q<Button>("tab-button");
+        dockPanel = root.Q<VisualElement>("dock-panel");
+        effectifsLabel = root.Q<Label>("effectifs-label");
+        team1Button = root.Q<Button>("team1-button");
+        team2Button = root.Q<Button>("team2-button");
+        placingBanner = root.Q<Label>("placing-banner");
+        statusMessageLabel = root.Q<Label>("status-message");
 
-        Matrix4x4 origMat = GUI.matrix;
-        float uiScale = Mathf.Clamp(Screen.width / 480f, 1.35f, 2.2f);
-        GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
-
-        int playerUnits = GetTeamLivingUnitsCount(1);
-        int enemyUnits = GetTeamLivingUnitsCount(2);
-
-        // 1. Bouton compact d'ouverture/fermeture du Déploiement
-        GUIStyle tabBtnStyle = new GUIStyle(GUI.skin.button);
-        tabBtnStyle.fontSize = 11;
-        tabBtnStyle.fontStyle = FontStyle.Bold;
-        tabBtnStyle.normal.textColor = isPanelOpen ? new Color(1f, 0.4f, 0.4f) : Color.white;
-
-        string tabText = IsPlacingUnit ? "❌ Annuler Placement" : (isPanelOpen ? "▲ Fermer Menu" : $"🎖️ Déploiement ({playerUnits} vs {enemyUnits})");
-        if (GUI.Button(new Rect(14, 12, 185, 36), tabText, tabBtnStyle))
+        tabButton.clicked += () =>
         {
             lastUIClickTime = Time.time;
             if (IsPlacingUnit)
@@ -670,150 +703,100 @@ public class UnitSpawnerUI : MonoBehaviour
                 isPanelOpen = !isPanelOpen;
             }
             AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-        }
+        };
 
-        // 2. Panneau de déploiement
+        team1Button.clicked += () => { lastUIClickTime = Time.time; selectedTeam = 1; AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position); };
+        team2Button.clicked += () => { lastUIClickTime = Time.time; selectedTeam = 2; AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position); };
+
+        root.Q<Button>("btn-fantassin").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.Fantassin); };
+        root.Q<Button>("btn-leopard").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.CharLeopard); };
+        root.Q<Button>("btn-canon").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.VehiculeCanon); };
+        root.Q<Button>("btn-mortier").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.Mortier); };
+        root.Q<Button>("btn-barricade").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.BarricadeRoutiere); };
+        root.Q<Button>("btn-ai-squad").clicked += () => { lastUIClickTime = Time.time; SpawnEnemyWave(); };
+        root.Q<Button>("btn-auto-deploy").clicked += () => { lastUIClickTime = Time.time; AutoDeployBattlefield(); };
+        root.Q<Button>("btn-clear").clicked += () => { lastUIClickTime = Time.time; ClearAllUnits(); };
+
+        // Pas de SetVisible(true) ici : RefreshDeploymentDockUI() (appelé chaque frame depuis
+        // Update) décide seul de la visibilité dès la première frame, startup menu inclus.
+    }
+
+    /// <summary>Remplace l'ancien OnGUI() — met à jour l'affichage sans reconstruire l'UI chaque frame.</summary>
+    private void RefreshDeploymentDockUI()
+    {
+        if (!deploymentUiBound) return;
+
+        // Masqué en vue 3D Action, pendant l'exécution du tour, et pendant tout écran multijoueur
+        // (login/mode/matchmaking/HUD/fin de partie — le dock de déploiement manuel n'a pas de sens
+        // en PvP, les unités y sont toujours auto-déployées, voir MultiplayerMatchController).
+        bool hidden = (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action);
+        TacticalPathManager pathManager = TacticalPathManager.Instance;
+        if (pathManager != null && pathManager.phaseActuelle == TacticalPathManager.GamePhase.Execution) hidden = true;
+        if (Novgov.Network.MultiplayerMatchController.IsFlowActive) hidden = true;
+        // Le menu de démarrage (choix de carte hors-ligne/GPS/multijoueur) n'a encore chargé aucune
+        // carte ni unité — sans ce garde-fou, ce dock plein écran (même vide) reste au-dessus du
+        // menu de démarrage dans l'arbre UI Toolkit et intercepte silencieusement tous les taps
+        // destinés à ses boutons.
+        if (GameManagerUI.Instance != null && GameManagerUI.Instance.IsStartupSelectionActive) hidden = true;
+
+        UIScreenManager.Instance.SetVisible("DeploymentDock", !hidden);
+        if (hidden) return;
+
+        int playerUnits = GetTeamLivingUnitsCount(1);
+        int enemyUnits = GetTeamLivingUnitsCount(2);
+
+        tabButton.text = IsPlacingUnit ? "❌ Annuler Placement" : (isPanelOpen ? "▲ Fermer Menu" : $"🎖️ Déploiement ({playerUnits} vs {enemyUnits})");
+        dockPanel.style.display = isPanelOpen ? DisplayStyle.Flex : DisplayStyle.None;
+
         if (isPanelOpen)
         {
-            GUIStyle panelStyle = new GUIStyle(GUI.skin.box);
-            panelStyle.fontSize = 12;
-            panelStyle.fontStyle = FontStyle.Bold;
-            panelStyle.normal.textColor = Color.white;
-
-            GUI.Box(new Rect(14, 52, 230, 410), "QG : RENFORTS & UNITÉS", panelStyle);
-
-            // Compteur par équipe
-            GUIStyle counterStyle = new GUIStyle(GUI.skin.label);
-            counterStyle.fontStyle = FontStyle.Bold;
-            counterStyle.fontSize = 12;
             int currentTeamCount = (selectedTeam == 1) ? playerUnits : enemyUnits;
-            counterStyle.normal.textColor = (currentTeamCount >= maxUnitsPerTeam) ? Color.red : Color.cyan;
-            GUI.Label(new Rect(25, 92, 230, 22), $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}", counterStyle);
+            effectifsLabel.text = $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}";
+            effectifsLabel.style.color = new StyleColor(currentTeamCount >= maxUnitsPerTeam ? Color.red : new Color(0.15f, 0.85f, 1f));
 
-            // Sélecteur d'Équipe
-            string team1Label = (selectedTeam == 1) ? $"🔵 Joueur ({playerUnits})" : $"Joueur ({playerUnits})";
-            string team2Label = (selectedTeam == 2) ? $"🔴 IA ({enemyUnits})" : $"IA ({enemyUnits})";
-
-            if (GUI.Button(new Rect(25, 116, 110, 32), team1Label))
-            {
-                lastUIClickTime = Time.time;
-                selectedTeam = 1;
-                AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-            }
-            if (GUI.Button(new Rect(140, 116, 110, 32), team2Label))
-            {
-                lastUIClickTime = Time.time;
-                selectedTeam = 2;
-                AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-            }
-
-            // Boutons de Sélection d'Unités (+50% de hauteur pour le tactile)
-            if (ProceduralIconFactory.IconButton(new Rect(25, 154, 225, 32), ProceduralIconFactory.Soldier(), "🎖️ Fantassin (Fusil)"))
-            {
-                lastUIClickTime = Time.time;
-                StartPlacingUnit(UnitType.Fantassin);
-            }
-
-            if (ProceduralIconFactory.IconButton(new Rect(25, 190, 225, 32), ProceduralIconFactory.Tank(), "🛡️ Char Leopard 2 (Obus)"))
-            {
-                lastUIClickTime = Time.time;
-                StartPlacingUnit(UnitType.CharLeopard);
-            }
-
-            if (ProceduralIconFactory.IconButton(new Rect(25, 226, 225, 32), ProceduralIconFactory.GunVehicle(), "💥 Véhicule Canon"))
-            {
-                lastUIClickTime = Time.time;
-                StartPlacingUnit(UnitType.VehiculeCanon);
-            }
-
-            if (ProceduralIconFactory.IconButton(new Rect(25, 262, 225, 32), ProceduralIconFactory.Mortar(), "🎯 Mortier Lourd (120m)"))
-            {
-                lastUIClickTime = Time.time;
-                StartPlacingUnit(UnitType.Mortier);
-            }
-
-            if (ProceduralIconFactory.IconButton(new Rect(25, 298, 225, 32), ProceduralIconFactory.Barrier(), "🚧 Barricade Routière"))
-            {
-                lastUIClickTime = Time.time;
-                StartPlacingUnit(UnitType.BarricadeRoutiere);
-            }
-
-            // Actions rapides IA et Déploiement Auto
-            GUIStyle aiBtnStyle = new GUIStyle(GUI.skin.button);
-            aiBtnStyle.fontStyle = FontStyle.Bold;
-            aiBtnStyle.fontSize = 12;
-            aiBtnStyle.normal.textColor = new Color(1f, 0.35f, 0.25f);
-
-            if (ProceduralIconFactory.IconButton(new Rect(25, 336, 225, 34), ProceduralIconFactory.Squad(), "🤖 ESCOUADE IA (Rouge)", aiBtnStyle))
-            {
-                lastUIClickTime = Time.time;
-                SpawnEnemyWave();
-            }
-
-            GUIStyle autoBtnStyle = new GUIStyle(GUI.skin.button);
-            autoBtnStyle.fontStyle = FontStyle.Bold;
-            autoBtnStyle.fontSize = 12;
-            autoBtnStyle.normal.textColor = Color.yellow;
-
-            if (ProceduralIconFactory.IconButton(new Rect(25, 374, 225, 34), ProceduralIconFactory.Bolt(), "⚡ DÉPLOIEMENT AUTO", autoBtnStyle))
-            {
-                lastUIClickTime = Time.time;
-                AutoDeployBattlefield();
-            }
-
-            // Bouton Nettoyer
-            if (ProceduralIconFactory.IconButton(new Rect(25, 412, 225, 28), ProceduralIconFactory.Reset(), "🧹 Nettoyer le Terrain"))
-            {
-                lastUIClickTime = Time.time;
-                ClearAllUnits();
-            }
+            team1Button.text = (selectedTeam == 1) ? $"🔵 Joueur ({playerUnits})" : $"Joueur ({playerUnits})";
+            team2Button.text = (selectedTeam == 2) ? $"🔴 IA ({enemyUnits})" : $"IA ({enemyUnits})";
+            team1Button.EnableInClassList("dock-team-btn--active-p1", selectedTeam == 1);
+            team2Button.EnableInClassList("dock-team-btn--active-p2", selectedTeam == 2);
         }
 
-        // 3. Indicateur de Placement actif
         if (IsPlacingUnit && activePlacingType.HasValue)
         {
-            GUIStyle placingStyle = new GUIStyle(GUI.skin.box);
-            placingStyle.fontSize = 14;
-            placingStyle.fontStyle = FontStyle.Bold;
-            placingStyle.normal.textColor = (selectedTeam == 1) ? Color.cyan : Color.red;
-            float virtualW = Screen.width / uiScale;
-            GUI.Box(new Rect(virtualW / 2 - 160, 15, 320, 48), $"MODE PLACEMENT : {activePlacingType.Value}\n[Touchez la rue] Poser | [Annuler]", placingStyle);
+            placingBanner.text = $"MODE PLACEMENT : {activePlacingType.Value}\n[Touchez la rue] Poser | [Annuler]";
+            placingBanner.style.color = new StyleColor(selectedTeam == 1 ? new Color(0.15f, 0.85f, 1f) : Color.red);
+            placingBanner.style.display = DisplayStyle.Flex;
+        }
+        else
+        {
+            placingBanner.style.display = DisplayStyle.None;
         }
 
-        // 4. Message d'alerte / feedback
         if (!string.IsNullOrEmpty(statusMessage))
         {
-            GUIStyle msgStyle = new GUIStyle(GUI.skin.box);
-            msgStyle.fontSize = 13;
-            msgStyle.normal.textColor = Color.yellow;
-            float virtualW = Screen.width / uiScale;
-            float virtualH = Screen.height / uiScale;
-            GUI.Box(new Rect(virtualW / 2 - 180, virtualH - 60, 360, 40), statusMessage, msgStyle);
+            statusMessageLabel.text = statusMessage;
+            statusMessageLabel.style.display = DisplayStyle.Flex;
         }
-
-        GUI.matrix = origMat;
+        else
+        {
+            statusMessageLabel.style.display = DisplayStyle.None;
+        }
     }
 
+    /// <summary>
+    /// Remplace l'ancien test par Rect codées en dur : s'appuie sur le picking natif d'UI Toolkit,
+    /// donc reste correct même si la mise en page de l'UI change.
+    /// </summary>
     public bool IsPointerOverOnGUI(Vector2 screenPos)
     {
-        // 1. Vérification par le timer de bouton (le plus fiable pour les clics directs sur les boutons)
         if (Time.time - lastUIClickTime < 0.4f) return true;
 
-        Vector2 guiPos = new Vector2(screenPos.x, Screen.height - screenPos.y);
-        float uiScale = Mathf.Clamp(Screen.width / 480f, 1.35f, 2.2f);
-        
-        // Marge de sécurité de 5 pixels (virtuels)
-        float margin = 5f * uiScale;
+        if (UIScreenManager.Instance == null) return false;
+        var uiDoc = UIScreenManager.Instance.GetComponent<UIDocument>();
+        if (uiDoc == null || uiDoc.rootVisualElement?.panel == null) return false;
 
-        Rect mainBtn = new Rect((15 * uiScale) - margin, (15 * uiScale) - margin, (230 * uiScale) + margin*2, (44 * uiScale) + margin*2);
-        if (mainBtn.Contains(guiPos)) return true;
-        
-        if (isPanelOpen) 
-        {
-            Rect panelArea = new Rect((15 * uiScale) - margin, (65 * uiScale) - margin, (250 * uiScale) + margin*2, (430 * uiScale) + margin*2);
-            if (panelArea.Contains(guiPos)) return true;
-        }
-        
-        return false;
+        Vector2 panelPos = RuntimePanelUtils.ScreenToPanel(uiDoc.rootVisualElement.panel, screenPos);
+        VisualElement picked = uiDoc.rootVisualElement.panel.Pick(panelPos);
+        return picked != null && picked != uiDoc.rootVisualElement;
     }
+#endif
 }

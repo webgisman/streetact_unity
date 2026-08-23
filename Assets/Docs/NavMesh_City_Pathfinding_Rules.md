@@ -36,7 +36,7 @@ Ce document sert de référence technique absolue pour éviter toute régression
   3. **Micro-noeuds et surcompensation d'angles** : `PlanifierTourIA` injectait chaque coin de bâtiment comme sous-objectif, créant des micro-arrêts et demi-tours à chaque virage.
   4. **Collision PhysX vs NavMeshAgent** : Le `CapsuleCollider` physique non-trigger repoussait l'agent en arrière lors des contacts avec les murs.
 * **Solution Définitive :** 
-  1. **Fixer l'animation avec `Bake Into Pose`** : Dans Unity, cocher `Bake Into Pose` (Position XZ et Rotation) pour forcer l'animation à jouer "sur place" sans décaler le squelette. (Utiliser l'outil **StreetAct > 4. Activer le Loop et Fixer les Saccades**)
+  1. **Fixer l'animation avec `Bake Into Pose`** : Dans Unity, cocher `Bake Into Pose` (Position XZ et Rotation) pour forcer l'animation à jouer "sur place" sans décaler le squelette. (Utiliser l'outil **Novgov > 4. Activer le Loop et Fixer les Saccades**)
   2. **Exécution par Coroutine séquentielle (`ExecuteMovementCoroutine`)** : L'exécution attend proprement la fin du calcul et du parcours, avec une seule destination finale par tour.
   3. **`CapsuleCollider.isTrigger = true`** : Zéro conflit de répulsion physique.
 

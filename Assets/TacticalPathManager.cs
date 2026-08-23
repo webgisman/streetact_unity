@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem; // Importation du nouveau système
+using UnityEngine.UIElements;
 
 public class TacticalPathManager : MonoBehaviour
 {
@@ -24,8 +25,8 @@ public class TacticalPathManager : MonoBehaviour
 
     public GameObject uniteSelectionnee;
     private Vector3 positionClicTemporaire;
-    private StreetAct.Interaction.DoorInteraction selectedDoor = null;
-    private StreetAct.Interaction.WindowInteraction selectedWindow = null;
+    private Novgov.Interaction.DoorInteraction selectedDoor = null;
+    private Novgov.Interaction.WindowInteraction selectedWindow = null;
     private BuildingStructure selectedBuilding = null;
     private bool isBuildingSelected = false;
     private bool isDoorSelected = false;
@@ -33,8 +34,6 @@ public class TacticalPathManager : MonoBehaviour
     private bool isExitDoorAction = false;
     private bool isGroundCheckpointSelected = false;
     private bool isNearBuildingWall = false;
-    private float contextMenuFade = 0f; // Anim. légère (pop + fondu) des menus contextuels
-    private Rect activeMenuRect = Rect.zero;
 
     private Color couleurOriginale;
     // Pour stocker TOUTES les parties du soldat (corps, arme, etc.)
@@ -58,6 +57,9 @@ public class TacticalPathManager : MonoBehaviour
     void Awake()
     {
         Instance = this;
+#if !UNITY_SERVER
+        BindTacticalUI();
+#endif
     }
 
     void Start()
@@ -112,6 +114,8 @@ public class TacticalPathManager : MonoBehaviour
     {
 #if UNITY_SERVER
         return; // Aucune entrée tactile/souris à traiter côté serveur headless.
+#else
+        RefreshTacticalUI();
 #endif
         // Bloquer l'assignation de nouveaux ordres pendant l'exécution ou pendant le placement d'unités
         if (phaseActuelle == GamePhase.Execution || UnitSpawnerUI.IsPlacingUnit) return;
@@ -139,14 +143,6 @@ public class TacticalPathManager : MonoBehaviour
             wasPressed = touch.press.wasPressedThisFrame;
             wasReleased = touch.press.wasReleasedThisFrame;
         }
-        else if (Input.touchCount > 0)
-        {
-            Touch t = Input.GetTouch(0);
-            pointerPosition = t.position;
-            isPointerActive = true;
-            wasPressed = (t.phase == UnityEngine.TouchPhase.Began);
-            wasReleased = (t.phase == UnityEngine.TouchPhase.Ended);
-        }
         else if (Pointer.current != null)
         {
             pointerPosition = Pointer.current.position.ReadValue();
@@ -154,16 +150,6 @@ public class TacticalPathManager : MonoBehaviour
             wasPressed = Pointer.current.press.wasPressedThisFrame;
             wasReleased = Pointer.current.press.wasReleasedThisFrame;
         }
-        else if (Input.mousePresent)
-        {
-            pointerPosition = Input.mousePosition;
-            isPointerActive = true;
-            wasPressed = Input.GetMouseButtonDown(0);
-            wasReleased = Input.GetMouseButtonUp(0);
-        }
-
-        Vector2 guiMousePos = new Vector2(pointerPosition.x, Screen.height - pointerPosition.y);
-        Rect endTurnRect = new Rect(Screen.width - 220, Screen.height - 80, 200, 60);
 
         // Clic Droit : Annulation rapide du menu ou du dernier checkpoint
         if (Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame)
@@ -174,7 +160,6 @@ public class TacticalPathManager : MonoBehaviour
                 isWindowSelected = false;
                 isBuildingSelected = false;
                 isGroundCheckpointSelected = false;
-                activeMenuRect = Rect.zero;
                 return;
             }
             else if (uniteSelectionnee != null)
@@ -204,10 +189,6 @@ public class TacticalPathManager : MonoBehaviour
                 {
                     isActionClick = true;
                 }
-                else if (Input.GetMouseButtonDown(0))
-                {
-                    isActionClick = true;
-                }
             }
             else if (wasReleased && isPointerDown)
             {
@@ -225,9 +206,9 @@ public class TacticalPathManager : MonoBehaviour
             // Bloquer si le joueur est en train de déployer une nouvelle unité depuis le QG
             if (UnitSpawnerUI.IsPlacingUnit) return;
 
-            // Vérifier si le clic est sur un bouton spécifique de l'interface
-            if (activeMenuRect != Rect.zero && activeMenuRect.Contains(guiMousePos)) return;
-            if (endTurnRect.Contains(guiMousePos)) return;
+            // Vérifier si le clic est sur un bouton de l'interface — un seul test générique
+            // (UI Toolkit picking) couvre désormais la barre du bas, les menus contextuels et
+            // le dock de déploiement, plus besoin de Rect codées en dur par écran.
             if (UnitSpawnerUI.Instance != null && UnitSpawnerUI.Instance.IsPointerOverOnGUI(pointerPosition)) return;
 
             // 1. Détection ultra-tolérante des unités en espace écran (Mobile Forgiving Touch)
@@ -260,7 +241,6 @@ public class TacticalPathManager : MonoBehaviour
                 isWindowSelected = false;
                 isBuildingSelected = false;
                 isGroundCheckpointSelected = false;
-                activeMenuRect = Rect.zero;
                 phaseActuelle = GamePhase.Planification;
                 SelectionnerUnite(closestUnit.gameObject);
                 return;
@@ -301,15 +281,18 @@ public class TacticalPathManager : MonoBehaviour
 
                     AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
                     if (menuPanel != null) menuPanel.SetActive(false);
+#if !UNITY_SERVER
+                    ShowGroundCheckpointMenu();
+#endif
                     return;
                 }
 
                 // 1. Détection clic sur porte
-                StreetAct.Interaction.DoorInteraction clickedDoor = null;
+                Novgov.Interaction.DoorInteraction clickedDoor = null;
                 if (hit.collider != null)
                 {
-                    clickedDoor = hit.collider.GetComponent<StreetAct.Interaction.DoorInteraction>() 
-                               ?? hit.collider.GetComponentInParent<StreetAct.Interaction.DoorInteraction>();
+                    clickedDoor = hit.collider.GetComponent<Novgov.Interaction.DoorInteraction>() 
+                               ?? hit.collider.GetComponentInParent<Novgov.Interaction.DoorInteraction>();
                 }
 
                 if (clickedDoor != null)
@@ -349,15 +332,18 @@ public class TacticalPathManager : MonoBehaviour
 
                     AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
                     if (menuPanel != null) menuPanel.SetActive(false);
+#if !UNITY_SERVER
+                    ShowDoorMenu();
+#endif
                     return;
                 }
 
                 // 2. Détection clic sur fenêtre
-                StreetAct.Interaction.WindowInteraction clickedWindow = null;
+                Novgov.Interaction.WindowInteraction clickedWindow = null;
                 if (hit.collider != null)
                 {
-                    clickedWindow = hit.collider.GetComponent<StreetAct.Interaction.WindowInteraction>() 
-                                 ?? hit.collider.GetComponentInParent<StreetAct.Interaction.WindowInteraction>();
+                    clickedWindow = hit.collider.GetComponent<Novgov.Interaction.WindowInteraction>() 
+                                 ?? hit.collider.GetComponentInParent<Novgov.Interaction.WindowInteraction>();
                 }
 
                 if (clickedWindow != null)
@@ -381,6 +367,9 @@ public class TacticalPathManager : MonoBehaviour
 
                     AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
                     if (menuPanel != null) menuPanel.SetActive(false);
+#if !UNITY_SERVER
+                    ShowWindowMenu();
+#endif
                     return;
                 }
 
@@ -416,6 +405,9 @@ public class TacticalPathManager : MonoBehaviour
 
                     AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
                     if (menuPanel != null) menuPanel.SetActive(false);
+#if !UNITY_SERVER
+                    ShowBuildingMenu();
+#endif
                     return;
                 }
 
@@ -454,6 +446,9 @@ public class TacticalPathManager : MonoBehaviour
 
                     AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
                     if (menuPanel != null) menuPanel.SetActive(false);
+#if !UNITY_SERVER
+                    ShowGroundCheckpointMenu();
+#endif
                 }
             }
         }
@@ -473,7 +468,6 @@ public class TacticalPathManager : MonoBehaviour
         isDoorSelected = false;
         isWindowSelected = false;
         isGroundCheckpointSelected = false;
-        activeMenuRect = Rect.zero;
 
         uniteSelectionnee = unite;
 
@@ -497,6 +491,7 @@ public class TacticalPathManager : MonoBehaviour
 
                 // Son de sélection
                 AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateHoverSound(), Camera.main.transform.position);
+                PlayUnitVoiceLine(unitAI, isSelection: true);
                 Debug.Log("Unité sélectionnée : " + unite.name);
                 isPathsDirty = true;
             }
@@ -669,10 +664,27 @@ public class TacticalPathManager : MonoBehaviour
         return Vector3.zero;
     }
 
+    /// <summary>
+    /// Petites répliques radio pour donner du caractère aux ordres (voir Assets/Resources/Sounds/)
+    /// — une paire sélection/accusé de réception pour l'infanterie, une autre pour le reste
+    /// (blindés, véhicules canon, mortiers).
+    /// </summary>
+    private void PlayUnitVoiceLine(UnitAI unitAI, bool isSelection)
+    {
+        if (unitAI == null || Camera.main == null) return;
+        bool isInfantry = !unitAI.isMortar && !unitAI.isTank;
+        string clipName = isSelection
+            ? (isInfantry ? "Sounds/yes_sir_rex_sneaky_laugh" : "Sounds/target_locked_radio_deep")
+            : (isInfantry ? "Sounds/ok_ill_do_it_rex" : "Sounds/roger_will_do_radio");
+        AudioClip clip = Resources.Load<AudioClip>(clipName);
+        if (clip != null) AudioSource.PlayClipAtPoint(clip, Camera.main.transform.position);
+    }
+
     public void ConfirmerAction(int actionIndex)
     {
         // Son de clic UI et Vibration
         AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+        if (uniteSelectionnee != null) PlayUnitVoiceLine(uniteSelectionnee.GetComponent<UnitAI>(), isSelection: false);
 #if UNITY_ANDROID || UNITY_IOS
         Handheld.Vibrate();
 #endif
@@ -725,7 +737,6 @@ public class TacticalPathManager : MonoBehaviour
         isBuildingSelected = false;
         selectedBuilding = null;
         isGroundCheckpointSelected = false;
-        activeMenuRect = Rect.zero;
 
         if (menuPanel != null) menuPanel.SetActive(false);
     }
@@ -739,6 +750,7 @@ public class TacticalPathManager : MonoBehaviour
         if (selectedBuilding == null || uniteSelectionnee == null) return;
         UnitAI unitAI = uniteSelectionnee.GetComponent<UnitAI>();
         if (unitAI == null) return;
+        PlayUnitVoiceLine(unitAI, isSelection: false);
 
         if (choice == 1) // Infiltration / Intérieur
         {
@@ -787,7 +799,6 @@ public class TacticalPathManager : MonoBehaviour
         isDoorSelected = false;
         isWindowSelected = false;
         isGroundCheckpointSelected = false;
-        activeMenuRect = Rect.zero;
 
         if (menuPanel != null) menuPanel.SetActive(false);
         DessinerTousLesChemins();
@@ -816,7 +827,7 @@ public class TacticalPathManager : MonoBehaviour
         if (menuPanel != null) menuPanel.SetActive(false);
 
         // Nettoyer les anciens marqueurs de waypoints holographiques au début de l'exécution
-        WaypointMarker[] existingMarkers = FindObjectsByType<WaypointMarker>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        WaypointMarker[] existingMarkers = FindObjectsByType<WaypointMarker>(FindObjectsInactive.Include);
         foreach (var wm in existingMarkers)
         {
             if (wm != null) Destroy(wm.gameObject);
@@ -825,9 +836,9 @@ public class TacticalPathManager : MonoBehaviour
         // MULTIJOUEUR : le calcul du tour est entièrement délégué au serveur autoritaire (voir
         // Assets/Scripts/Network/MultiplayerMatchController.cs). On envoie nos ordres et on
         // n'exécute JAMAIS de simulation locale ni de planification IA pour l'adversaire.
-        if (StreetAct.Network.MultiplayerMatchController.IsActive)
+        if (Novgov.Network.MultiplayerMatchController.IsActive)
         {
-            StreetAct.Network.MultiplayerMatchController.Instance.SubmitLocalTurn();
+            Novgov.Network.MultiplayerMatchController.Instance.SubmitLocalTurn();
             return;
         }
 
@@ -956,566 +967,257 @@ public class TacticalPathManager : MonoBehaviour
         // Résolution dynamique gérée par ExecuterTourCoroutine
     }
 
-    void OnGUI()
+    // =====================================================================
+    // UI Toolkit (barre du bas + menus contextuels) — remplace l'ancien OnGUI().
+    // Le contenu d'un menu contextuel est construit une seule fois, au moment précis où le
+    // joueur tape (aux points où isXSelected passe à true, voir Update() plus haut) — pas
+    // chaque frame comme le faisait OnGUI, pour ne jamais reconstruire un bouton pendant qu'il
+    // est en train d'être touché. RefreshTacticalUI() (appelé chaque frame) ne fait que basculer
+    // de la visibilité, jamais de reconstruction, donc sans risque d'interrompre un tap en cours.
+    // =====================================================================
+#if !UNITY_SERVER
+    private bool tacticalUiBound = false;
+    private VisualElement bottomBarRoot, contextMenuRoot, planGroupEl, execGroupEl, contextualBarEl;
+    private Button view3dButtonEl;
+    private System.Action currentMenuCancelAction;
+
+    private void BindTacticalUI()
     {
-#if UNITY_SERVER
-        return; // Aucune UI sur le serveur headless — voir Assets/Scripts/Server/.
-#endif
-        // Mise à l'échelle automatique +50% pour écrans tactiles mobiles
-        Matrix4x4 origMat = GUI.matrix;
-        float uiScale = Mathf.Clamp(Screen.width / 480f, 1.35f, 2.2f);
-        GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
-
-        float virtualW = Screen.width / uiScale;
-        float virtualH = Screen.height / uiScale;
-
-        if (phaseActuelle == GamePhase.Planification)
+        if (UIScreenManager.Instance == null)
         {
-            // --- BARRE DE CONTRÔLE TACTILE MOBILE (BOTTOM DOCK) ---
-            GUIStyle endTurnBtnStyle = new GUIStyle(GUI.skin.button);
-            endTurnBtnStyle.fontSize = 13;
-            endTurnBtnStyle.fontStyle = FontStyle.Bold;
-            endTurnBtnStyle.normal.textColor = Color.white;
+            Debug.LogError("[TacticalPathManager] UIScreenManager.Instance introuvable — UIBootstrap ne s'est-il pas exécuté avant cette scène ?");
+            return;
+        }
+        tacticalUiBound = true;
 
-            // Bouton Fin de Tour (Bas Droite)
-            if (ProceduralIconFactory.IconButton(new Rect(virtualW - 145, virtualH - 58, 135, 46), ProceduralIconFactory.Check(), "▶️ FIN TOUR", endTurnBtnStyle))
+        bottomBarRoot = UIScreenManager.Instance.GetScreen("TacticalBottomBar");
+        planGroupEl = bottomBarRoot.Q<VisualElement>("planification-group");
+        execGroupEl = bottomBarRoot.Q<VisualElement>("execution-group");
+        contextualBarEl = bottomBarRoot.Q<VisualElement>("contextual-bar");
+        view3dButtonEl = bottomBarRoot.Q<Button>("view3d-button");
+
+        bottomBarRoot.Q<Button>("end-turn-button").clicked += LancerExecutionTour;
+        bottomBarRoot.Q<Button>("skip-button").clicked += ForcerFinExecution;
+
+        bottomBarRoot.Q<Button>("deselect-button").clicked += () =>
+        {
+            SelectionnerUnite(null);
+            isDoorSelected = false;
+            isWindowSelected = false;
+            isGroundCheckpointSelected = false;
+        };
+
+        bottomBarRoot.Q<Button>("undo-button").clicked += () =>
+        {
+            UnitAI uAI = uniteSelectionnee != null ? uniteSelectionnee.GetComponent<UnitAI>() : null;
+            if (uAI != null && uAI.tacticalPath.Count > 0)
             {
-                LancerExecutionTour();
+                uAI.RemoveLastTacticalNode();
+                DessinerTousLesChemins();
+                AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
             }
+            isGroundCheckpointSelected = false;
+        };
 
-            // Barre contextuelle épurée lorsqu'une unité est sélectionnée (Bas Gauche)
-            if (uniteSelectionnee != null)
+        view3dButtonEl.clicked += () =>
+        {
+            if (CameraStateManager.Instance != null && uniteSelectionnee != null)
             {
-                GUIStyle touchBtnStyle = new GUIStyle(GUI.skin.button);
-                touchBtnStyle.fontSize = 11;
-                touchBtnStyle.fontStyle = FontStyle.Bold;
-
-                // 1. Désélectionner (Croix rouge compacte)
-                touchBtnStyle.normal.textColor = new Color(1f, 0.45f, 0.45f);
-                if (GUI.Button(new Rect(14, virtualH - 58, 50, 46), "❌", touchBtnStyle))
-                {
-                    SelectionnerUnite(null);
-                    isDoorSelected = false;
-                    isWindowSelected = false;
-                    isGroundCheckpointSelected = false;
-                    activeMenuRect = Rect.zero;
-                }
-
-                // 2. Annuler dernier point
-                touchBtnStyle.normal.textColor = new Color(1f, 0.85f, 0.2f);
-                if (GUI.Button(new Rect(70, virtualH - 58, 95, 46), "↩️ Annuler", touchBtnStyle))
-                {
-                    UnitAI uAI = uniteSelectionnee.GetComponent<UnitAI>();
-                    if (uAI != null && uAI.tacticalPath.Count > 0)
-                    {
-                        uAI.RemoveLastTacticalNode();
-                        DessinerTousLesChemins();
-                        AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-                    }
-                    isGroundCheckpointSelected = false;
-                    activeMenuRect = Rect.zero;
-                }
-
-                // 3. Bouton Vue Action 3D (Seulement en vue 2D)
-                bool is2DMode = CameraStateManager.Instance == null || CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Command;
-                if (is2DMode)
-                {
-                    touchBtnStyle.normal.textColor = new Color(0.2f, 0.95f, 1f);
-                    if (ProceduralIconFactory.IconButton(new Rect(172, virtualH - 58, 125, 46), ProceduralIconFactory.Cube3D(), "🔍 VUE 3D", touchBtnStyle))
-                    {
-                        if (CameraStateManager.Instance != null)
-                        {
-                            CameraStateManager.Instance.Enter3DView(uniteSelectionnee.transform);
-                            isDoorSelected = false;
-                            isWindowSelected = false;
-                            if (menuPanel != null) menuPanel.SetActive(false);
-                        }
-                    }
-                }
+                CameraStateManager.Instance.Enter3DView(uniteSelectionnee.transform);
+                isDoorSelected = false;
+                isWindowSelected = false;
+                if (menuPanel != null) menuPanel.SetActive(false);
             }
-
-            bool isAnyMenuDrawn = false;
-
-            // MENU CONTEXTUEL DE BÂTIMENT (POLYGON 2D / 3D)
-            if (uniteSelectionnee != null && isBuildingSelected && selectedBuilding != null)
-            {
-                isAnyMenuDrawn = true;
-                contextMenuFade = UIAnimator.Advance(contextMenuFade, true, 8f);
-                UIAnimator.ApplyFadeColor(contextMenuFade);
-                GUIStyle titleStyle = new GUIStyle(GUI.skin.box);
-                titleStyle.fontSize = 13;
-                titleStyle.fontStyle = FontStyle.Bold;
-                titleStyle.normal.textColor = Color.white;
-
-                GUIStyle btnStyle = new GUIStyle(GUI.skin.button);
-                btnStyle.fontSize = 12;
-                btnStyle.fontStyle = FontStyle.Bold;
-
-                float menuWidth = 310;
-                float menuHeight = 185;
-                float startX = (virtualW - menuWidth) * 0.5f;
-                float startY = virtualH - menuHeight - 70;
-                activeMenuRect = new Rect(startX, startY, menuWidth, menuHeight);
-
-                GUI.Box(activeMenuRect, $"🏢 BÂTIMENT : {selectedBuilding.gameObject.name}", titleStyle);
-
-                // Option 1 : Infiltration / Intérieur
-                btnStyle.normal.textColor = new Color(0.3f, 1f, 0.5f);
-                if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 28, menuWidth - 20, 34), ProceduralIconFactory.House(), "1. 🏢 INFILTRATION / INTÉRIEUR (RDC)", btnStyle))
-                {
-                    ConfirmerBuildingAction(1);
-                }
-
-                // Option 2 : Monter sur le toit
-                btnStyle.normal.textColor = new Color(0.2f, 0.9f, 1f);
-                if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 66, menuWidth - 20, 34), ProceduralIconFactory.Ladder(), "2. 🧗 MONTER SUR LE TOIT (Sniper / Guet)", btnStyle))
-                {
-                    ConfirmerBuildingAction(2);
-                }
-
-                // Option 3 : Porte la plus proche
-                btnStyle.normal.textColor = Color.yellow;
-                if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 104, menuWidth - 20, 34), ProceduralIconFactory.Door(), "3. 🚪 PORTE LA PLUS PROCHE", btnStyle))
-                {
-                    ConfirmerBuildingAction(3);
-                }
-
-                // Annuler
-                btnStyle.normal.textColor = Color.gray;
-                if (GUI.Button(new Rect(startX + 10, startY + 142, menuWidth - 20, 28), "Annuler", btnStyle))
-                {
-                    isBuildingSelected = false;
-                    selectedBuilding = null;
-                    activeMenuRect = Rect.zero;
-                }
-            }
-            // MENU CONTEXTUEL DE PORTE
-            else if (uniteSelectionnee != null && isDoorSelected && selectedDoor != null)
-            {
-                isAnyMenuDrawn = true;
-                contextMenuFade = UIAnimator.Advance(contextMenuFade, true, 8f);
-                UIAnimator.ApplyFadeColor(contextMenuFade);
-                GUIStyle titleStyle = new GUIStyle(GUI.skin.box);
-                titleStyle.fontSize = 13;
-                titleStyle.fontStyle = FontStyle.Bold;
-                titleStyle.normal.textColor = Color.white;
-
-                GUIStyle btnStyle = new GUIStyle(GUI.skin.button);
-                btnStyle.fontSize = 12;
-                btnStyle.fontStyle = FontStyle.Bold;
-
-                if (isExitDoorAction)
-                {
-                    float menuWidth = 280;
-                    float menuHeight = 180;
-                    float startX = (virtualW - menuWidth) * 0.5f;
-                    float startY = virtualH - menuHeight - 70;
-                    activeMenuRect = new Rect(startX, startY, menuWidth, menuHeight);
-
-                    GUI.Box(activeMenuRect, $"🚪 PORTE : {selectedDoor.building.gameObject.name}", titleStyle);
-
-                    btnStyle.normal.textColor = Color.green;
-                    if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 34), "1. 🚪 SORTIR DANS LA RUE", btnStyle))
-                    {
-                        ConfirmerAction((int)NodeAction.SortirBatiment);
-                    }
-
-                    btnStyle.normal.textColor = Color.cyan;
-                    if (GUI.Button(new Rect(startX + 10, startY + 66, menuWidth - 20, 34), "2. 👁️ GUETTER PAR LA PORTE", btnStyle))
-                    {
-                        ConfirmerAction((int)NodeAction.GuetterPorte);
-                    }
-
-                    btnStyle.normal.textColor = Color.yellow;
-                    if (GUI.Button(new Rect(startX + 10, startY + 104, menuWidth - 20, 34), "3. 📍 CHECKPOINT SIMPLE", btnStyle))
-                    {
-                        ConfirmerAction((int)NodeAction.Continuer);
-                    }
-
-                    btnStyle.normal.textColor = Color.gray;
-                    if (GUI.Button(new Rect(startX + 10, startY + 142, menuWidth - 20, 28), "Annuler", btnStyle))
-                    {
-                        isDoorSelected = false;
-                        activeMenuRect = Rect.zero;
-                    }
-                }
-                else
-                {
-                    float menuWidth = 260;
-                    float menuHeight = 105;
-                    float startX = (virtualW - menuWidth) * 0.5f;
-                    float startY = virtualH - menuHeight - 70;
-                    activeMenuRect = new Rect(startX, startY, menuWidth, menuHeight);
-
-                    GUI.Box(activeMenuRect, $"🚪 ENTRÉE : {selectedDoor.building.gameObject.name}", titleStyle);
-
-                    btnStyle.normal.textColor = Color.cyan;
-                    if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 34), "🚪 ENTRER DANS LE BÂTIMENT", btnStyle))
-                    {
-                        ConfirmerAction((int)NodeAction.EntrerBatiment);
-                    }
-
-                    btnStyle.normal.textColor = Color.gray;
-                    if (GUI.Button(new Rect(startX + 10, startY + 66, menuWidth - 20, 28), "Annuler", btnStyle))
-                    {
-                        isDoorSelected = false;
-                        activeMenuRect = Rect.zero;
-                    }
-                }
-            }
-            // MENU CONTEXTUEL DE FENÊTRE
-            else if (uniteSelectionnee != null && isWindowSelected && selectedWindow != null)
-            {
-                isAnyMenuDrawn = true;
-                contextMenuFade = UIAnimator.Advance(contextMenuFade, true, 8f);
-                UIAnimator.ApplyFadeColor(contextMenuFade);
-                GUIStyle titleStyle = new GUIStyle(GUI.skin.box);
-                titleStyle.fontSize = 13;
-                titleStyle.fontStyle = FontStyle.Bold;
-                titleStyle.normal.textColor = Color.white;
-
-                GUIStyle btnStyle = new GUIStyle(GUI.skin.button);
-                btnStyle.fontSize = 12;
-                btnStyle.fontStyle = FontStyle.Bold;
-
-                float menuWidth = 280;
-                float menuHeight = 145;
-                float startX = (virtualW - menuWidth) * 0.5f;
-                float startY = virtualH - menuHeight - 70;
-                activeMenuRect = new Rect(startX, startY, menuWidth, menuHeight);
-
-                GUI.Box(activeMenuRect, $"🛡️ FENÊTRE : {selectedWindow.building.gameObject.name}", titleStyle);
-
-                btnStyle.normal.textColor = new Color(1f, 0.75f, 0.1f);
-                if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 28, menuWidth - 20, 34), ProceduralIconFactory.Shield(), "1. 🛡️ GUETTER (Couvert -75%)", btnStyle))
-                {
-                    ConfirmerAction((int)NodeAction.GarnisonFenetre);
-                }
-
-                btnStyle.normal.textColor = Color.yellow;
-                if (GUI.Button(new Rect(startX + 10, startY + 66, menuWidth - 20, 34), "2. 📍 CHECKPOINT SIMPLE", btnStyle))
-                {
-                    ConfirmerAction((int)NodeAction.Continuer);
-                }
-
-                btnStyle.normal.textColor = Color.gray;
-                if (GUI.Button(new Rect(startX + 10, startY + 104, menuWidth - 20, 28), "Annuler", btnStyle))
-                {
-                    isWindowSelected = false;
-                    activeMenuRect = Rect.zero;
-                }
-            }
-            // MENU TACTIQUE DU CHECKPOINT AU SOL (4 CHOIX)
-            else if (uniteSelectionnee != null && isGroundCheckpointSelected)
-            {
-                isAnyMenuDrawn = true;
-                contextMenuFade = UIAnimator.Advance(contextMenuFade, true, 8f);
-                UIAnimator.ApplyFadeColor(contextMenuFade);
-                UnitAI selectedUnitAI = uniteSelectionnee.GetComponent<UnitAI>();
-                bool isMortarUnit = (selectedUnitAI != null && selectedUnitAI.isMortar);
-
-                GUIStyle titleStyle = new GUIStyle(GUI.skin.box);
-                titleStyle.fontSize = 13;
-                titleStyle.fontStyle = FontStyle.Bold;
-                titleStyle.normal.textColor = Color.white;
-
-                GUIStyle btnStyle = new GUIStyle(GUI.skin.button);
-                btnStyle.fontSize = 12;
-                btnStyle.fontStyle = FontStyle.Bold;
-
-                if (isMortarUnit)
-                {
-                    float menuWidth = 300;
-                    float menuHeight = 175;
-                    float startX = (virtualW - menuWidth) * 0.5f;
-                    float startY = virtualH - menuHeight - 70;
-                    activeMenuRect = new Rect(startX, startY, menuWidth, menuHeight);
-
-                    GUI.Box(activeMenuRect, "💥 ARTILLERIE : ORDRE DE TIR", titleStyle);
-
-                    // Option 1 : Tir de Mortier
-                    btnStyle.normal.textColor = new Color(1f, 0.4f, 0.1f);
-                    if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), ProceduralIconFactory.Mortar(), "1. 🎯 TIR DE MORTIER (Zone AoE)", btnStyle))
-                    {
-                        ConfirmerAction((int)NodeAction.TirMortier);
-                    }
-
-                    // Option 2 : Déplacement
-                    btnStyle.normal.textColor = Color.white;
-                    if (GUI.Button(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), "2. ▶️ SE DÉPLACER (Position)", btnStyle))
-                    {
-                        ConfirmerAction((int)NodeAction.Continuer);
-                    }
-
-                    // Option 3 : Attendre 30 secondes
-                    btnStyle.normal.textColor = Color.yellow;
-                    if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
-                    {
-                        ConfirmerAction((int)NodeAction.Attendre30s);
-                    }
-
-                    // Annuler
-                    btnStyle.normal.textColor = Color.gray;
-                    if (GUI.Button(new Rect(startX + 10, startY + 136, menuWidth - 20, 28), "Annuler", btnStyle))
-                    {
-                        isGroundCheckpointSelected = false;
-                        activeMenuRect = Rect.zero;
-                    }
-                }
-                else if (selectedUnitAI != null && selectedUnitAI.isTank)
-                {
-                    // Menu Blindé
-                    float menuWidth = 290;
-                    float menuHeight = 175;
-                    float startX = (virtualW - menuWidth) * 0.5f;
-                    float startY = virtualH - menuHeight - 70;
-                    activeMenuRect = new Rect(startX, startY, menuWidth, menuHeight);
-
-                    GUI.Box(activeMenuRect, "🛡️ BLINDÉ : ORDRE DE MANOEUVRE", titleStyle);
-
-                    // Option 1 : Avancer
-                    btnStyle.normal.textColor = Color.white;
-                    if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), "1. ▶️ AVANCER (Déplacement)", btnStyle))
-                    {
-                        ConfirmerAction((int)NodeAction.Continuer);
-                    }
-
-                    // Option 2 : Guetter Tourelle
-                    btnStyle.normal.textColor = Color.cyan;
-                    if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER (Surveillance)", btnStyle))
-                    {
-                        ConfirmerAction((int)NodeAction.Guetter);
-                    }
-
-                    // Option 3 : Attendre 30 secondes
-                    btnStyle.normal.textColor = Color.yellow;
-                    if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
-                    {
-                        ConfirmerAction((int)NodeAction.Attendre30s);
-                    }
-
-                    // Annuler
-                    btnStyle.normal.textColor = Color.gray;
-                    if (GUI.Button(new Rect(startX + 10, startY + 136, menuWidth - 20, 28), "Annuler", btnStyle))
-                    {
-                        isGroundCheckpointSelected = false;
-                        activeMenuRect = Rect.zero;
-                    }
-                }
-                else
-                {
-                    // Menu Fantassin
-                    UnitAI uAI = uniteSelectionnee.GetComponent<UnitAI>();
-                    bool isTargetOnRoof = positionClicTemporaire.y > 1.8f;
-                    
-                    bool unitIsAlreadyOnRoof = (uAI != null && (uAI.isRooftopSniper || uAI.transform.position.y > 2.0f));
-                    if (uAI != null && uAI.tacticalPath.Count > 0)
-                    {
-                        var lastN = uAI.tacticalPath[uAI.tacticalPath.Count - 1];
-                        if (lastN.action == NodeAction.Escalade || lastN.position.y > 2.0f)
-                        {
-                            unitIsAlreadyOnRoof = true;
-                        }
-                    }
-
-                    bool unitIsInsideBuilding = (uAI != null && uAI.currentBuilding != null && !uAI.isRooftopSniper);
-                    if (uAI != null && uAI.tacticalPath.Count > 0)
-                    {
-                        var lastN = uAI.tacticalPath[uAI.tacticalPath.Count - 1];
-                        if (lastN.action == NodeAction.EntrerBatiment) unitIsInsideBuilding = true;
-                        else if (lastN.action == NodeAction.SortirBatiment) unitIsInsideBuilding = false;
-                    }
-
-                    float menuWidth = 300;
-                    float menuHeight = (isNearBuildingWall && !isTargetOnRoof && !unitIsAlreadyOnRoof && !unitIsInsideBuilding) ? 215 : 175;
-                    float startX = (virtualW - menuWidth) * 0.5f;
-                    float startY = virtualH - menuHeight - 70;
-                    activeMenuRect = new Rect(startX, startY, menuWidth, menuHeight);
-
-                    if (isTargetOnRoof)
-                    {
-                        if (unitIsAlreadyOnRoof)
-                        {
-                            GUI.Box(activeMenuRect, "🏃 INFANTERIE : DÉPLACEMENT TOIT", titleStyle);
-
-                            btnStyle.normal.textColor = Color.white;
-                            if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), "1. ▶️ CONTINUER SUR LE TOIT", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Continuer);
-                            }
-
-                            btnStyle.normal.textColor = Color.cyan;
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER SUR LE TOIT", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Guetter);
-                            }
-
-                            btnStyle.normal.textColor = Color.yellow;
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Attendre30s);
-                            }
-
-                            btnStyle.normal.textColor = Color.gray;
-                            if (GUI.Button(new Rect(startX + 10, startY + 136, menuWidth - 20, 28), "Annuler", btnStyle))
-                            {
-                                isGroundCheckpointSelected = false;
-                                activeMenuRect = Rect.zero;
-                            }
-                        }
-                        else
-                        {
-                            GUI.Box(activeMenuRect, "🧗 INFANTERIE : ESCALADE DE FAÇADE", titleStyle);
-
-                            btnStyle.normal.textColor = new Color(0.2f, 0.9f, 0.4f);
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), ProceduralIconFactory.Ladder(), "1. 🧗 ESCALADER SUR LE TOIT", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Escalade);
-                            }
-
-                            btnStyle.normal.textColor = Color.cyan;
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER (+50% Défense)", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Guetter);
-                            }
-
-                            btnStyle.normal.textColor = Color.yellow;
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Attendre30s);
-                            }
-
-                            btnStyle.normal.textColor = Color.gray;
-                            if (GUI.Button(new Rect(startX + 10, startY + 136, menuWidth - 20, 28), "Annuler", btnStyle))
-                            {
-                                isGroundCheckpointSelected = false;
-                                activeMenuRect = Rect.zero;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        if (unitIsAlreadyOnRoof)
-                        {
-                            GUI.Box(activeMenuRect, "🧗 INFANTERIE : DESCENTE VERS RUE", titleStyle);
-
-                            btnStyle.normal.textColor = new Color(1f, 0.6f, 0.2f);
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), ProceduralIconFactory.Ladder(), "1. 🧗 DESCENDRE DU TOIT", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Escalade);
-                            }
-
-                            btnStyle.normal.textColor = Color.cyan;
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER (+50% Défense)", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Guetter);
-                            }
-
-                            btnStyle.normal.textColor = Color.yellow;
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Attendre30s);
-                            }
-
-                            btnStyle.normal.textColor = Color.gray;
-                            if (GUI.Button(new Rect(startX + 10, startY + 136, menuWidth - 20, 28), "Annuler", btnStyle))
-                            {
-                                isGroundCheckpointSelected = false;
-                                activeMenuRect = Rect.zero;
-                            }
-                        }
-                        else if (unitIsInsideBuilding)
-                        {
-                            GUI.Box(activeMenuRect, "🏢 INFANTERIE : DÉPLACEMENT INTÉRIEUR", titleStyle);
-
-                            btnStyle.normal.textColor = Color.white;
-                            if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), "1. ▶️ SE DÉPLACER À L'INTÉRIEUR", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Continuer);
-                            }
-
-                            btnStyle.normal.textColor = Color.cyan;
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER INTÉRIEUR", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Guetter);
-                            }
-
-                            btnStyle.normal.textColor = Color.yellow;
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Attendre30s);
-                            }
-
-                            btnStyle.normal.textColor = Color.gray;
-                            if (GUI.Button(new Rect(startX + 10, startY + 136, menuWidth - 20, 28), "Annuler", btnStyle))
-                            {
-                                isGroundCheckpointSelected = false;
-                                activeMenuRect = Rect.zero;
-                            }
-                        }
-                        else
-                        {
-                            GUI.Box(activeMenuRect, "🎖️ INFANTERIE : ORDRE TACTIQUE", titleStyle);
-
-                            btnStyle.normal.textColor = Color.white;
-                            if (GUI.Button(new Rect(startX + 10, startY + 28, menuWidth - 20, 32), "1. ▶️ CONTINUER (Mouvement)", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Continuer);
-                            }
-
-                            btnStyle.normal.textColor = Color.cyan;
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 64, menuWidth - 20, 32), ProceduralIconFactory.Shield(), "2. 🛡️ GUETTER (+50% Défense)", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Guetter);
-                            }
-
-                            btnStyle.normal.textColor = Color.yellow;
-                            if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 100, menuWidth - 20, 32), ProceduralIconFactory.Clock(), "3. ⏳ ATTENDRE 30 SECONDES", btnStyle))
-                            {
-                                ConfirmerAction((int)NodeAction.Attendre30s);
-                            }
-
-                            if (isNearBuildingWall)
-                            {
-                                btnStyle.normal.textColor = Color.green;
-                                if (ProceduralIconFactory.IconButton(new Rect(startX + 10, startY + 136, menuWidth - 20, 32), ProceduralIconFactory.Eye(), "4. 🥷 SE CACHER (Contre mur)", btnStyle))
-                                {
-                                    ConfirmerAction((int)NodeAction.SeCacher);
-                                }
-                            }
-
-                            btnStyle.normal.textColor = Color.gray;
-                            float cancelY = (isNearBuildingWall) ? startY + 172 : startY + 136;
-                            if (GUI.Button(new Rect(startX + 10, cancelY, menuWidth - 20, 28), "Annuler", btnStyle))
-                            {
-                                isGroundCheckpointSelected = false;
-                                activeMenuRect = Rect.zero;
-                            }
-                        }
-                    }
-                }
-            }
-
-            GUI.color = Color.white; // Toujours restaurer après le fondu des menus contextuels ci-dessus
-
-            if (!isAnyMenuDrawn)
-            {
-                activeMenuRect = Rect.zero;
-                contextMenuFade = UIAnimator.Advance(contextMenuFade, false, 8f);
-            }
+        };
+
+        contextMenuRoot = UIScreenManager.Instance.GetScreen("ContextMenu");
+        contextMenuRoot.Q<Button>("cancel-button").clicked += () => currentMenuCancelAction?.Invoke();
+        contextMenuRoot.Q<VisualElement>("backdrop").RegisterCallback<ClickEvent>(_ => currentMenuCancelAction?.Invoke());
+
+        UIScreenManager.Instance.SetVisible("TacticalBottomBar", true);
+    }
+
+    /// <summary>Bascule la visibilité (fin de tour / barre contextuelle / bandeau d'exécution /
+    /// menu ouvert) chaque frame — jamais de reconstruction ici.</summary>
+    private void RefreshTacticalUI()
+    {
+        if (!tacticalUiBound) return;
+
+        bool isPlanification = phaseActuelle == GamePhase.Planification;
+        planGroupEl.style.display = isPlanification ? DisplayStyle.Flex : DisplayStyle.None;
+        execGroupEl.style.display = isPlanification ? DisplayStyle.None : DisplayStyle.Flex;
+
+        contextualBarEl.style.display = (isPlanification && uniteSelectionnee != null) ? DisplayStyle.Flex : DisplayStyle.None;
+        bool is2DMode = CameraStateManager.Instance == null || CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Command;
+        view3dButtonEl.style.display = (is2DMode && uniteSelectionnee != null) ? DisplayStyle.Flex : DisplayStyle.None;
+
+        bool anyContextMenu = isBuildingSelected || isDoorSelected || isWindowSelected || isGroundCheckpointSelected;
+        UIScreenManager.Instance.SetVisible("ContextMenu", anyContextMenu);
+    }
+
+    private void ShowContextMenu(string title, System.Action onCancel, params (string text, Color color, System.Action onClick)[] buttons)
+    {
+        if (!tacticalUiBound) return;
+        contextMenuRoot.Q<Label>("menu-title").text = title;
+        VisualElement container = contextMenuRoot.Q<VisualElement>("button-container");
+        container.Clear();
+        foreach (var (text, color, onClick) in buttons)
+        {
+            var btn = new Button(onClick) { text = text };
+            btn.AddToClassList("context-button");
+            btn.style.borderLeftColor = new StyleColor(color);
+            container.Add(btn);
+        }
+        currentMenuCancelAction = onCancel;
+        UIScreenManager.Instance.SetVisible("ContextMenu", true);
+    }
+
+    private void ShowBuildingMenu()
+    {
+        ShowContextMenu($"🏢 BÂTIMENT : {selectedBuilding.gameObject.name}",
+            () => { isBuildingSelected = false; selectedBuilding = null; },
+            ("1. 🏢 INFILTRATION / INTÉRIEUR (RDC)", new Color(0.3f, 1f, 0.5f), () => ConfirmerBuildingAction(1)),
+            ("2. 🧗 MONTER SUR LE TOIT (Sniper / Guet)", new Color(0.2f, 0.9f, 1f), () => ConfirmerBuildingAction(2)),
+            ("3. 🚪 PORTE LA PLUS PROCHE", Color.yellow, () => ConfirmerBuildingAction(3))
+        );
+    }
+
+    private void ShowDoorMenu()
+    {
+        if (isExitDoorAction)
+        {
+            ShowContextMenu($"🚪 PORTE : {selectedDoor.building.gameObject.name}",
+                () => { isDoorSelected = false; },
+                ("1. 🚪 SORTIR DANS LA RUE", Color.green, () => ConfirmerAction((int)NodeAction.SortirBatiment)),
+                ("2. 👁️ GUETTER PAR LA PORTE", Color.cyan, () => ConfirmerAction((int)NodeAction.GuetterPorte)),
+                ("3. 📍 CHECKPOINT SIMPLE", Color.yellow, () => ConfirmerAction((int)NodeAction.Continuer))
+            );
         }
         else
         {
-            GUIStyle style = new GUIStyle(GUI.skin.box);
-            style.fontSize = 14;
-            style.fontStyle = FontStyle.Bold;
-            style.normal.textColor = Color.yellow;
-            GUI.Box(new Rect(virtualW / 2 - 140, 15, 280, 42), "ACTION EN COURS...", style);
-
-            if (GUI.Button(new Rect(virtualW - 130, 15, 115, 42), "Passer"))
-            {
-                ForcerFinExecution();
-            }
+            ShowContextMenu($"🚪 ENTRÉE : {selectedDoor.building.gameObject.name}",
+                () => { isDoorSelected = false; },
+                ("🚪 ENTRER DANS LE BÂTIMENT", Color.cyan, () => ConfirmerAction((int)NodeAction.EntrerBatiment))
+            );
         }
     }
+
+    private void ShowWindowMenu()
+    {
+        ShowContextMenu($"🛡️ FENÊTRE : {selectedWindow.building.gameObject.name}",
+            () => { isWindowSelected = false; },
+            ("1. 🛡️ GUETTER (Couvert -75%)", new Color(1f, 0.75f, 0.1f), () => ConfirmerAction((int)NodeAction.GarnisonFenetre)),
+            ("2. 📍 CHECKPOINT SIMPLE", Color.yellow, () => ConfirmerAction((int)NodeAction.Continuer))
+        );
+    }
+
+    /// <summary>Reconstruit le menu du checkpoint au sol — mêmes règles que l'ancien OnGUI (mortier
+    /// / blindé / 4 variantes d'infanterie selon toit-cible, unité déjà sur un toit, unité à
+    /// l'intérieur). Appelé une fois au moment du tap (voir Update()), pas chaque frame.</summary>
+    private void ShowGroundCheckpointMenu()
+    {
+        UnitAI selectedUnitAI = uniteSelectionnee.GetComponent<UnitAI>();
+        bool isMortarUnit = (selectedUnitAI != null && selectedUnitAI.isMortar);
+
+        System.Action onCancel = () => { isGroundCheckpointSelected = false; };
+
+        if (isMortarUnit)
+        {
+            ShowContextMenu("💥 ARTILLERIE : ORDRE DE TIR", onCancel,
+                ("1. 🎯 TIR DE MORTIER (Zone AoE)", new Color(1f, 0.4f, 0.1f), () => ConfirmerAction((int)NodeAction.TirMortier)),
+                ("2. ▶️ SE DÉPLACER (Position)", Color.white, () => ConfirmerAction((int)NodeAction.Continuer)),
+                ("3. ⏳ ATTENDRE 30 SECONDES", Color.yellow, () => ConfirmerAction((int)NodeAction.Attendre30s))
+            );
+            return;
+        }
+
+        if (selectedUnitAI != null && selectedUnitAI.isTank)
+        {
+            ShowContextMenu("🛡️ BLINDÉ : ORDRE DE MANOEUVRE", onCancel,
+                ("1. ▶️ AVANCER (Déplacement)", Color.white, () => ConfirmerAction((int)NodeAction.Continuer)),
+                ("2. 🛡️ GUETTER (Surveillance)", Color.cyan, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("3. ⏳ ATTENDRE 30 SECONDES", Color.yellow, () => ConfirmerAction((int)NodeAction.Attendre30s))
+            );
+            return;
+        }
+
+        // Menu Fantassin
+        UnitAI uAI = uniteSelectionnee.GetComponent<UnitAI>();
+        bool isTargetOnRoof = positionClicTemporaire.y > 1.8f;
+
+        bool unitIsAlreadyOnRoof = (uAI != null && (uAI.isRooftopSniper || uAI.transform.position.y > 2.0f));
+        if (uAI != null && uAI.tacticalPath.Count > 0)
+        {
+            var lastN = uAI.tacticalPath[uAI.tacticalPath.Count - 1];
+            if (lastN.action == NodeAction.Escalade || lastN.position.y > 2.0f) unitIsAlreadyOnRoof = true;
+        }
+
+        bool unitIsInsideBuilding = (uAI != null && uAI.currentBuilding != null && !uAI.isRooftopSniper);
+        if (uAI != null && uAI.tacticalPath.Count > 0)
+        {
+            var lastN = uAI.tacticalPath[uAI.tacticalPath.Count - 1];
+            if (lastN.action == NodeAction.EntrerBatiment) unitIsInsideBuilding = true;
+            else if (lastN.action == NodeAction.SortirBatiment) unitIsInsideBuilding = false;
+        }
+
+        if (isTargetOnRoof)
+        {
+            if (unitIsAlreadyOnRoof)
+            {
+                ShowContextMenu("🏃 INFANTERIE : DÉPLACEMENT TOIT", onCancel,
+                    ("1. ▶️ CONTINUER SUR LE TOIT", Color.white, () => ConfirmerAction((int)NodeAction.Continuer)),
+                    ("2. 🛡️ GUETTER SUR LE TOIT", Color.cyan, () => ConfirmerAction((int)NodeAction.Guetter)),
+                    ("3. ⏳ ATTENDRE 30 SECONDES", Color.yellow, () => ConfirmerAction((int)NodeAction.Attendre30s))
+                );
+            }
+            else
+            {
+                ShowContextMenu("🧗 INFANTERIE : ESCALADE DE FAÇADE", onCancel,
+                    ("1. 🧗 ESCALADER SUR LE TOIT", new Color(0.2f, 0.9f, 0.4f), () => ConfirmerAction((int)NodeAction.Escalade)),
+                    ("2. 🛡️ GUETTER (+50% Défense)", Color.cyan, () => ConfirmerAction((int)NodeAction.Guetter)),
+                    ("3. ⏳ ATTENDRE 30 SECONDES", Color.yellow, () => ConfirmerAction((int)NodeAction.Attendre30s))
+                );
+            }
+            return;
+        }
+
+        if (unitIsAlreadyOnRoof)
+        {
+            ShowContextMenu("🧗 INFANTERIE : DESCENTE VERS RUE", onCancel,
+                ("1. 🧗 DESCENDRE DU TOIT", new Color(1f, 0.6f, 0.2f), () => ConfirmerAction((int)NodeAction.Escalade)),
+                ("2. 🛡️ GUETTER (+50% Défense)", Color.cyan, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("3. ⏳ ATTENDRE 30 SECONDES", Color.yellow, () => ConfirmerAction((int)NodeAction.Attendre30s))
+            );
+            return;
+        }
+
+        if (unitIsInsideBuilding)
+        {
+            ShowContextMenu("🏢 INFANTERIE : DÉPLACEMENT INTÉRIEUR", onCancel,
+                ("1. ▶️ SE DÉPLACER À L'INTÉRIEUR", Color.white, () => ConfirmerAction((int)NodeAction.Continuer)),
+                ("2. 🛡️ GUETTER INTÉRIEUR", Color.cyan, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("3. ⏳ ATTENDRE 30 SECONDES", Color.yellow, () => ConfirmerAction((int)NodeAction.Attendre30s))
+            );
+            return;
+        }
+
+        if (isNearBuildingWall)
+        {
+            ShowContextMenu("🎖️ INFANTERIE : ORDRE TACTIQUE", onCancel,
+                ("1. ▶️ CONTINUER (Mouvement)", Color.white, () => ConfirmerAction((int)NodeAction.Continuer)),
+                ("2. 🛡️ GUETTER (+50% Défense)", Color.cyan, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("3. ⏳ ATTENDRE 30 SECONDES", Color.yellow, () => ConfirmerAction((int)NodeAction.Attendre30s)),
+                ("4. 🥷 SE CACHER (Contre mur)", Color.green, () => ConfirmerAction((int)NodeAction.SeCacher))
+            );
+        }
+        else
+        {
+            ShowContextMenu("🎖️ INFANTERIE : ORDRE TACTIQUE", onCancel,
+                ("1. ▶️ CONTINUER (Mouvement)", Color.white, () => ConfirmerAction((int)NodeAction.Continuer)),
+                ("2. 🛡️ GUETTER (+50% Défense)", Color.cyan, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("3. ⏳ ATTENDRE 30 SECONDES", Color.yellow, () => ConfirmerAction((int)NodeAction.Attendre30s))
+            );
+        }
+    }
+#endif
 }

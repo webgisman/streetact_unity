@@ -2,7 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace StreetAct.Combat
+namespace Novgov.Combat
 {
     /// <summary>
     /// Obus d'artillerie de mortier suivant une trajectoire balistique parabolique haute (survol des bâtiments)

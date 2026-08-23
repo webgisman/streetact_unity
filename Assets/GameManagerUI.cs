@@ -1,6 +1,10 @@
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.UIElements;
 using System.Collections;
+#if UNITY_ANDROID
+using UnityEngine.Android;
+#endif
 
 public class GameManagerUI : MonoBehaviour
 {
@@ -18,9 +22,7 @@ public class GameManagerUI : MonoBehaviour
     private bool isMapSelectorOpen = true; // S'ouvre automatiquement au lancement du jeu
     public bool IsStartupSelectionActive => isMapSelectorOpen;
     private string gpsStatus = "";
-    private float startupPanelFade = 0f; // Anim. d'apparition (pop + fondu) de l'écran de démarrage
-
-    private Texture2D overlayDimTex;
+    private Label gpsStatusLabel;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     private static void ConfigurePerformanceSettings()
@@ -51,17 +53,65 @@ public class GameManagerUI : MonoBehaviour
         RenderSettings.fogStartDistance = 45f;
         RenderSettings.fogEndDistance = 180f;
         RenderSettings.fogColor = new Color(0.12f, 0.16f, 0.22f);
-
-        // Texture d'assombrissement pour l'écran d'accueil
-        overlayDimTex = new Texture2D(1, 1);
-        overlayDimTex.SetPixel(0, 0, new Color(0f, 0f, 0f, 0.75f));
-        overlayDimTex.Apply();
     }
 
     private void Start()
     {
         OptimizeSceneMaterials();
+#if !UNITY_SERVER
+        BindStartupUI();
+#endif
     }
+
+#if !UNITY_SERVER
+    private void Update()
+    {
+        if (gpsStatusLabel != null) gpsStatusLabel.text = gpsStatus;
+    }
+
+    private void BindStartupUI()
+    {
+        if (UIScreenManager.Instance == null)
+        {
+            Debug.LogError("[GameManagerUI] UIScreenManager.Instance introuvable — UIBootstrap ne s'est-il pas exécuté avant cette scène ?");
+            return;
+        }
+
+        VisualElement root = UIScreenManager.Instance.GetScreen("StartupMenu");
+        root.Q<UnityEngine.UIElements.Button>("btn-offline").clicked += () =>
+        {
+            isMapSelectorOpen = false;
+            UIScreenManager.Instance.HideAll();
+            MusicManager.SetGameplayVolume();
+            OnClickLoadDefaultOfflineMap();
+        };
+        root.Q<UnityEngine.UIElements.Button>("btn-gps").clicked += () =>
+        {
+            MusicManager.SetGameplayVolume();
+            StartCoroutine(StartDeviceGPS());
+        };
+        root.Q<UnityEngine.UIElements.Button>("btn-multiplayer").clicked += () =>
+        {
+            isMapSelectorOpen = false;
+            UIScreenManager.Instance.HideAll();
+            Novgov.Network.MultiplayerMatchController.EnsureInstance().BeginLoginFlow();
+        };
+        root.Q<UnityEngine.UIElements.Button>("btn-play-current").clicked += () =>
+        {
+            isMapSelectorOpen = false;
+            UIScreenManager.Instance.HideAll();
+            MusicManager.SetGameplayVolume();
+        };
+
+        gpsStatusLabel = root.Q<Label>("gps-status-label");
+
+        if (isMapSelectorOpen)
+        {
+            UIScreenManager.Instance.Show("StartupMenu");
+            MusicManager.SetMenuVolume();
+        }
+    }
+#endif
 
     /// <summary>
     /// Active le GPU Instancing sur les matériaux de la scène pour minimiser les Draw Calls.
@@ -133,128 +183,36 @@ public class GameManagerUI : MonoBehaviour
         CanvasGroupFader.SetVisible(errorPanel, false);
     }
 
-    void OnGUI()
-    {
-#if UNITY_SERVER
-        return; // Aucune UI sur le serveur headless — voir Assets/Scripts/Server/.
-#else
-        // ÉCRAN DE DÉMARRAGE : CHOIX DU THÉÂTRE D'OPÉRATIONS AVANT DE JOUER
-        if (isMapSelectorOpen)
-        {
-            GUI.depth = -200; // Priorité absolue au-dessus de tout le jeu au démarrage
-
-            // Fond noir translucide couvrant tout l'écran
-            if (overlayDimTex != null)
-            {
-                GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), overlayDimTex);
-            }
-
-            Matrix4x4 origMat = GUI.matrix;
-            float uiScale = Mathf.Clamp(Screen.width / 450f, 1.35f, 2.2f);
-            GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
-
-            float virtualW = Screen.width / uiScale;
-            float virtualH = Screen.height / uiScale;
-
-            float w = Mathf.Min(380f, virtualW - 30f);
-            float h = 366f;
-            float x = (virtualW - w) * 0.5f;
-            float y = (virtualH - h) * 0.5f;
-
-            startupPanelFade = UIAnimator.Advance(startupPanelFade, true, 6f);
-            Rect poppedPanel = UIAnimator.PopRect(new Rect(x, y, w, h), startupPanelFade);
-            x = poppedPanel.x; y = poppedPanel.y; w = poppedPanel.width; h = poppedPanel.height;
-            UIAnimator.ApplyFadeColor(startupPanelFade);
-
-            GUIStyle boxStyle = new GUIStyle(GUI.skin.box);
-            boxStyle.fontSize = 15;
-            boxStyle.fontStyle = FontStyle.Bold;
-            boxStyle.normal.textColor = Color.white;
-
-            GUI.Box(new Rect(x, y, w, h), "⚔️ STREETACT : CHAMP DE BATAILLE", boxStyle);
-
-            GUIStyle btnStyle1 = new GUIStyle(GUI.skin.button);
-            btnStyle1.fontSize = 13;
-            btnStyle1.fontStyle = FontStyle.Bold;
-            btnStyle1.normal.textColor = Color.cyan;
-
-            // OPTION 1 : Carte Hors-Ligne par défaut
-            if (ProceduralIconFactory.IconButton(new Rect(x + 15, y + 50, w - 30, 62), ProceduralIconFactory.House(), "🏙️ 1. COMBAT URBAIN HORS-LIGNE\n(Chargement Immédiat)", btnStyle1))
-            {
-                isMapSelectorOpen = false;
-                OnClickLoadDefaultOfflineMap();
-            }
-
-            GUIStyle btnStyle2 = new GUIStyle(GUI.skin.button);
-            btnStyle2.fontSize = 13;
-            btnStyle2.fontStyle = FontStyle.Bold;
-            btnStyle2.normal.textColor = new Color(0.3f, 1f, 0.4f);
-
-            // OPTION 2 : Ma Position GPS Réelle
-            if (ProceduralIconFactory.IconButton(new Rect(x + 15, y + 124, w - 30, 62), ProceduralIconFactory.Eye(), "🛰️ 2. MA POSITION GPS RÉELLE\n(Géolocalisation Directe)", btnStyle2))
-            {
-                StartCoroutine(StartDeviceGPS());
-            }
-
-            GUIStyle btnStyle3 = new GUIStyle(GUI.skin.button);
-            btnStyle3.fontSize = 13;
-            btnStyle3.fontStyle = FontStyle.Bold;
-            btnStyle3.normal.textColor = new Color(1f, 0.55f, 0.15f);
-
-            // OPTION 3 : Multijoueur PvP (voir Assets/Scripts/Network/MultiplayerMatchController.cs)
-            if (GUI.Button(new Rect(x + 15, y + 196, w - 30, 50), "⚔️ 3. MULTIJOUEUR (PvP en ligne)", btnStyle3))
-            {
-                isMapSelectorOpen = false;
-                StreetAct.Network.MultiplayerMatchController.EnsureInstance().BeginLoginFlow();
-            }
-
-            if (!string.IsNullOrEmpty(gpsStatus))
-            {
-                GUIStyle statusStyle = new GUIStyle(GUI.skin.label);
-                statusStyle.alignment = TextAnchor.MiddleCenter;
-                statusStyle.normal.textColor = Color.yellow;
-                statusStyle.fontSize = 12;
-                GUI.Label(new Rect(x + 15, y + 250, w - 30, 30), gpsStatus, statusStyle);
-            }
-
-            // Bouton Quitter / Fermer (Jouer immédiatement avec la scène actuelle)
-            if (ProceduralIconFactory.IconButton(new Rect(x + 15, y + 292, w - 30, 48), ProceduralIconFactory.Check(), "▶️ JOUER (Terrain Actuel)"))
-            {
-                isMapSelectorOpen = false;
-            }
-
-            GUI.color = Color.white;
-            GUI.matrix = origMat;
-        }
-        else
-        {
-            if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action) return;
-
-            Matrix4x4 origMat = GUI.matrix;
-            float uiScale = Mathf.Clamp(Screen.width / 450f, 1.35f, 2.2f);
-            GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
-
-            float virtualW = Screen.width / uiScale;
-            
-            GUIStyle restartStyle = new GUIStyle(GUI.skin.button);
-            restartStyle.fontSize = 10;
-            restartStyle.fontStyle = FontStyle.Bold;
-            restartStyle.normal.textColor = new Color(0.85f, 0.85f, 0.85f, 0.85f);
-
-            // Bouton discret et épuré
-            if (ProceduralIconFactory.IconButton(new Rect(virtualW * 0.5f - 55, 10, 110, 30), ProceduralIconFactory.Reset(), "🔄 Recommencer", restartStyle))
-            {
-                UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
-            }
-
-            GUI.matrix = origMat;
-        }
-#endif
-    }
-
     private IEnumerator StartDeviceGPS()
     {
         gpsStatus = "📡 Recherche du signal GPS de l'appareil...";
+
+#if UNITY_ANDROID
+        // Android 6+ : la permission déclarée dans le manifeste ne suffit pas, il faut la demander
+        // explicitement à l'exécution pour déclencher la boîte de dialogue système — sans ça,
+        // chaque joueur devrait aller l'activer à la main dans les paramètres de l'appareil comme
+        // il a fallu le faire manuellement pendant les tests.
+        if (!Permission.HasUserAuthorizedPermission(Permission.FineLocation))
+        {
+            gpsStatus = "📍 Autorise l'accès à la position pour continuer...";
+            bool permissionResolved = false;
+            bool permissionGranted = false;
+
+            var callbacks = new PermissionCallbacks();
+            callbacks.PermissionGranted += _ => { permissionGranted = true; permissionResolved = true; };
+            callbacks.PermissionDenied += _ => { permissionResolved = true; };
+            Permission.RequestUserPermission(Permission.FineLocation, callbacks);
+
+            while (!permissionResolved) yield return null;
+
+            if (!permissionGranted)
+            {
+                gpsStatus = "⚠️ Autorisation de localisation refusée. Active-la dans les paramètres de l'appareil pour utiliser le GPS.";
+                yield break;
+            }
+        }
+#endif
+
         if (!Input.location.isEnabledByUser)
         {
             gpsStatus = "⚠️ GPS désactivé dans les paramètres du téléphone.";
@@ -282,6 +240,9 @@ public class GameManagerUI : MonoBehaviour
 
         yield return new WaitForSeconds(0.6f);
         isMapSelectorOpen = false;
+#if !UNITY_SERVER
+        if (UIScreenManager.Instance != null) UIScreenManager.Instance.HideAll();
+#endif
 
         // Générer la ville à la position GPS réelle avec 250m de rayon
         CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();

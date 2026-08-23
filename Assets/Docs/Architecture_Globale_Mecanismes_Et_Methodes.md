@@ -1,12 +1,12 @@
-# Architecture Globale, Mécanismes & Méthodes : Projet StreetAct
+# Architecture Globale, Mécanismes & Méthodes : Projet Novgov
 
-Ce document constitue la **référence technique et architecturale exhaustive** du projet de jeu tactique urbain **StreetAct**. Il détaille l'ensemble des sous-systèmes, les principes de conception retenus, ainsi que les solutions aux problématiques de performance, de synchronisation, d'intelligence artificielle et de gameplay.
+Ce document constitue la **référence technique et architecturale exhaustive** du projet de jeu tactique urbain **Novgov**. Il détaille l'ensemble des sous-systèmes, les principes de conception retenus, ainsi que les solutions aux problématiques de performance, de synchronisation, d'intelligence artificielle et de gameplay.
 
 ---
 
 ## 1. Vue d'Ensemble & Philosophie de Conception
 
-**StreetAct** est un jeu de tactique militaire urbaine au tour par tour avec exécution simultanée en temps réel combinant :
+**Novgov** est un jeu de tactique militaire urbaine au tour par tour avec exécution simultanée en temps réel combinant :
 - Une **vue 2D Commandement** (haute définition, ultra-rapide, basée sur la topologie polygonale des bâtiments).
 - Une **vue 3D Action** (isométrique, immersive, avec streaming dynamique des structures et vue en coupe).
 - Un cycle tactique en 3 temps : **Planification** (tracé des ordres) -> **Création** (points de passage / actions contextuelles) -> **Exécution Simultanée** (résolution physique, cinématique et balistique en temps réel).
@@ -256,16 +256,16 @@ Emplacement : `Assets/Editor/`
 
 | Menu Unity | Script Éditeur | Action Réalisée |
 | :--- | :--- | :--- |
-| **`StreetAct > 1. Réparer les Squelettes 3D (Humanoid)`** | `AnimationSetupTool.cs` | Force l'import de tous les FBX de personnages en Humanoid. |
-| **`StreetAct > 2. Configuration Magique des Animations`** | `AnimationSetupTool.cs` | Configure les clips d'animation et leurs propriétés. |
-| **`StreetAct > 3. Assigner Textures Briques Rouges`** | `MaterialSetupTool.cs` | Configure les matériaux de façade des bâtiments. |
-| **`StreetAct > 4. Activer le Loop et Fixer les Saccades`** | `FixLoopTimeTool.cs` | Active `Bake Into Pose` (XZ & Rotation) sur les clips de course pour supprimer le jittering. |
+| **`Novgov > 1. Réparer les Squelettes 3D (Humanoid)`** | `AnimationSetupTool.cs` | Force l'import de tous les FBX de personnages en Humanoid. |
+| **`Novgov > 2. Configuration Magique des Animations`** | `AnimationSetupTool.cs` | Configure les clips d'animation et leurs propriétés. |
+| **`Novgov > 3. Assigner Textures Briques Rouges`** | `MaterialSetupTool.cs` | Configure les matériaux de façade des bâtiments. |
+| **`Novgov > 4. Activer le Loop et Fixer les Saccades`** | `FixLoopTimeTool.cs` | Active `Bake Into Pose` (XZ & Rotation) sur les clips de course pour supprimer le jittering. |
 | **`Tools > Configurer Animator Unités (Hit, Death et Escalade)`** | `AnimatorSetupEditor.cs` | Construit automatiquement l'arbre d'état de l'Animator Controller. |
 | **`Tools > Configurer Combat (Armes & Animations)`** | `CombatSetupTool.cs` | Positionne les armes et points d'ancrage sur les modèles. |
 | **`Tools > Configurer le Tank (Leopard 2)`** | `TankSetupEditor.cs` | Configure les os de tourelle et canon du char. |
 | **`Tools > Réparer les Couleurs du Tank Leopard`** | `TankMaterialFixer.cs` | Applique les shaders et textures militaires sur les véhicules. |
 | **`Tools > Configurer WarFX (Auto-Setup)`** | `WarFXSetupEditor.cs` | Relie les prefabs de particules de tir et d'impacts. |
-| **`Tools > StreetAct > Télécharger la carte hors-ligne`** | `FetchDefaultMapData.cs` | Télécharge et enregistre en local le JSON Overpass de référence. |
+| **`Tools > Novgov > Télécharger la carte hors-ligne`** | `FetchDefaultMapData.cs` | Télécharge et enregistre en local le JSON Overpass de référence. |
 
 ---
 

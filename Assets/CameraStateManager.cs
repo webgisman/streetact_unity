@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.UIElements;
 using System;
 
 /// <summary>
@@ -147,44 +148,41 @@ public class CameraStateManager : MonoBehaviour
         }
 
         OnCameraStateChanged?.Invoke(newState);
+
+#if !UNITY_SERVER
+        UpdateActionViewUI(newState);
+#endif
     }
 
-    private void OnGUI()
+#if !UNITY_SERVER
+    private bool actionViewUiBound = false;
+
+    private void UpdateActionViewUI(CameraState newState)
     {
-        if (CurrentState == CameraState.Action)
+        if (UIScreenManager.Instance == null) return;
+
+        if (!actionViewUiBound)
         {
-            GUI.depth = -200; // Au premier plan absolu (ne peut pas être masqué par le radar)
+            actionViewUiBound = true;
+            var root = UIScreenManager.Instance.GetScreen("ActionViewBack");
+            root.Q<UnityEngine.UIElements.Button>("back-button").clicked += ReturnTo2DView;
+        }
 
-            Matrix4x4 origMat = GUI.matrix;
-            float uiScale = Mathf.Clamp(Screen.width / 480f, 1.35f, 2.2f);
-            GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
+        UIScreenManager.Instance.SetVisible("ActionViewBack", newState == CameraState.Action);
 
-            GUIStyle backBtnStyle = new GUIStyle(GUI.skin.button);
-            backBtnStyle.fontSize = 12;
-            backBtnStyle.fontStyle = FontStyle.Bold;
-            backBtnStyle.alignment = TextAnchor.MiddleCenter;
-            backBtnStyle.normal.textColor = new Color(1f, 0.95f, 0.2f);
-
-            // Bouton unique élégant en Haut à Gauche
-            if (GUI.Button(new Rect(14, 12, 160, 42), "◀ VUE 2D (CARTE)", backBtnStyle))
-            {
-                ReturnTo2DView();
-            }
-
-            // Bannière d'état en haut au centre
+        if (newState == CameraState.Action)
+        {
+            var banner = UIScreenManager.Instance.GetScreen("ActionViewBack").Q<UnityEngine.UIElements.Label>("focus-banner");
             if (focusedUnit != null)
             {
-                GUIStyle bannerStyle = new GUIStyle(GUI.skin.box);
-                bannerStyle.fontSize = 11;
-                bannerStyle.fontStyle = FontStyle.Bold;
-                bannerStyle.alignment = TextAnchor.MiddleCenter;
-                bannerStyle.normal.textColor = Color.cyan;
-                
-                float virtualW = Screen.width / uiScale;
-                GUI.Box(new Rect(virtualW * 0.5f - 110, 12, 220, 36), $"🔍 ACTION 3D : {focusedUnit.name.ToUpper()}", bannerStyle);
+                banner.text = $"🔍 ACTION 3D : {focusedUnit.name.ToUpper()}";
+                banner.style.display = UnityEngine.UIElements.DisplayStyle.Flex;
             }
-
-            GUI.matrix = origMat;
+            else
+            {
+                banner.style.display = UnityEngine.UIElements.DisplayStyle.None;
+            }
         }
     }
+#endif
 }
