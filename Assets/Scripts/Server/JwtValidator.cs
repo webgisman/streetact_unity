@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using UnityEngine;
 
-namespace StreetAct.Server
+namespace Novgov.Server
 {
     [Serializable]
     internal class JwtClaims

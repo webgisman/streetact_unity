@@ -10,6 +10,11 @@
 # Identifiants serveur (VPS, Supabase, clé SSH) — ne JAMAIS committer, voir CREDENTIALS.md.
 /CREDENTIALS.md
 
+# Keystore de signature Android release — perdre ce fichier (ou son mot de passe, voir
+# CREDENTIALS.md) rend impossible toute future mise à jour de l'app sur le Play Store.
+*.keystore
+*.jks
+
 # Build compilé du serveur de jeu headless (gros binaire, régénérable) — voir
 # Assets/_ServerDocs/multiplayer/08-known-issues-and-todo.md pour comment le reconstruire.
 /Assets/_ServerDocs/multiplayer/game-server/StreetActServer.x86_64

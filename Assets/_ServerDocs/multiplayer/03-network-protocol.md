@@ -37,9 +37,13 @@ Premier message obligatoire après connexion TCP.
 ```
 
 ### `join_matchmaking`
+`mode` détermine la file d'attente : les joueurs ne sont appariés qu'avec d'autres joueurs
+ayant demandé le même mode.
 ```json
-{ "type": "join_matchmaking" }
+{ "type": "join_matchmaking", "mode": "deathmatch" }
 ```
+`mode` = `"deathmatch"` (élimination, historique) ou `"zone_control"` (capture et tenue d'une
+zone centrale — voir `04-unity-headless-server.md`).
 
 ### `submit_turn`
 Correspond directement au contenu de `UnitAI.tacticalPath` pour chaque unité du joueur au
@@ -74,7 +78,7 @@ l'expiration du timer de tour.
 
 ### `match_found`
 ```json
-{ "type": "match_found", "match_id": "uuid", "team_id": 1, "opponent_username": "xX_Sniper_Xx" }
+{ "type": "match_found", "match_id": "uuid", "team_id": 1, "opponent_username": "xX_Sniper_Xx", "mode": "deathmatch" }
 ```
 
 ### `turn_timer`
@@ -109,12 +113,16 @@ d'un snapshot à l'autre, sans jamais recalculer de NavMesh ni de ligne de vue l
   "snapshots": [
     {
       "t": 0,
+      "zone_progress_team1": 0,
+      "zone_progress_team2": 0,
       "units": [
         { "unit_id": "Fantassin_1_1", "x": 12.4, "y": 0, "z": -5.2, "ry": 90.0, "health": 100, "dead": false, "shooting": false }
       ]
     },
     {
       "t": 1300,
+      "zone_progress_team1": 5,
+      "zone_progress_team2": 0,
       "units": [
         { "unit_id": "Fantassin_1_1", "x": 12.4, "y": 0, "z": -5.2, "ry": 90.0, "health": 0, "dead": true, "shooting": false }
       ]
@@ -122,13 +130,18 @@ d'un snapshot à l'autre, sans jamais recalculer de NavMesh ni de ligne de vue l
   ]
 }
 ```
+`zone_progress_team1`/`zone_progress_team2` (0 à 100) ne sont pertinents qu'en mode
+`zone_control` — toujours à 0 en mode `deathmatch`.
 La mort et les dégâts sont donc *déduits* des variations de `health`/`dead` entre deux
 snapshots côté client (déclenchement de l'animation de mort via `UnitAI.ApplyNetworkDeath()`),
 plutôt que transmis comme événements discrets `shot`/`death`.
 
 ### `match_over`
+`winner_team` = 0 signifie match nul (anéantissement mutuel, double déconnexion, ou égalité de
+progression en mode `zone_control` à la limite de tours). `your_new_rating`/`rating_delta` sont
+propres à chaque destinataire (calcul ELO, K=32, voir `MatchSessionManager.UpdateRatings()`).
 ```json
-{ "type": "match_over", "winner_team": 2 }
+{ "type": "match_over", "winner_team": 2, "your_new_rating": 1014, "rating_delta": 14 }
 ```
 
 ## Mapping avec le code existant

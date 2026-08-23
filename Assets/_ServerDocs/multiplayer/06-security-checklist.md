@@ -64,3 +64,70 @@
       téléphones vu qu'aucune donnée de compte n'y transite (seul le JWT déjà émis via HTTPS y
       circule), mais à chiffrer (TLS sur le socket, ou tunneling) avant une diffusion plus
       large.
+
+## Audit de production (2026-08-23) — corrigés
+
+Les points ci-dessous ont été trouvés lors d'un audit complet avant mise en production et déjà
+corrigés (code + base de données live) :
+
+- [x] **`profiles.rating` modifiable directement par un client authentifié via PostgREST**
+      (`PATCH /profiles?id=eq.<son-id> {"rating": 99999}`) — RLS protège la ligne mais pas les
+      colonnes ; le rôle `authenticated` avait `update` sur toutes les colonnes de `profiles` via
+      le `grant` générique de `bootstrap-db.sh`. Corrigé dans `schema.sql` (colonne restreinte à
+      `username` uniquement, `rating` réservé à `service_role`) et appliqué en direct sur la base
+      de production le 2026-08-23.
+- [x] **Déni de service pré-authentification sur le port 7777** — un socket non authentifié
+      pouvait annoncer une longueur de message jusqu'à 8 Mo (la limite gameplay normale) avant
+      même l'envoi du JWT, permettant d'épuiser la RAM du VPS avec quelques centaines de
+      connexions. Corrigé : `NetFraming.ReadMessage` accepte maintenant un plafond de taille
+      différent selon le contexte, `GameServerBootstrap.HandleHandshake` l'utilise avec un
+      plafond de 8 Ko (largement suffisant pour un message `auth`).
+- [x] **Un message de tour malformé pouvait bloquer le serveur définitivement** — aucune
+      exception n'était rattrapée pendant le traitement d'un match (`RunMatch`/
+      `ApplyOrdersToUnits`), et `matchInProgress` restait bloqué à `true` pour toujours en cas
+      d'exception, empêchant tout nouveau match de démarrer, sans crash ni redémarrage Docker
+      possible (aucun healthcheck). Corrigé : `RunMatchGuarded` encapsule l'énumérateur du match
+      et garantit l'abandon propre (match nul + fermeture des connexions +
+      `matchInProgress = false`) sur toute exception ; `ApplyOrdersToUnits` valide maintenant les
+      coordonnées (rejette NaN/Infinity), l'action (doit être une valeur valide de l'enum
+      `NodeAction`) et la longueur du chemin (plafond 200 points) avant utilisation.
+- [x] **Deathmatch sans plafond de tours** — contrairement à la Zone de Contrôle, deux joueurs
+      qui se cachaient indéfiniment bloquaient l'unique emplacement de match du serveur pour
+      toujours. Corrigé : plafond de 60 tours, départage par unités vivantes puis PV totaux,
+      égalité parfaite = match nul.
+
+## Audit de production (2026-08-23) — restant à faire avant diffusion large
+
+Trouvés lors du même audit, pas encore corrigés (pas critiques, mais à traiter avant une
+diffusion au-delà de tests restreints) :
+
+- [ ] **Pas de timeout d'écriture socket côté serveur, pas de TCP keepalive.**
+      `client.ReceiveTimeout` repasse à `0` (infini) après l'authentification
+      (`GameServerBootstrap.cs`), et rien n'est configuré côté envoi. Si un client mobile perd le
+      réseau ou s'endort sans fermeture propre (FIN/RST), et que son tampon socket se remplit,
+      `PlayerConnection.Send()` (appelé depuis le thread principal, ex. le tick `turn_timer`
+      chaque seconde) peut bloquer indéfiniment — gelant tout le serveur puisqu'un seul match
+      tourne à la fois. Fix : fixer `SendTimeout` et un `ReceiveTimeout` raisonnable (30-60s)
+      même après l'auth, traiter un timeout comme une déconnexion ; activer
+      `SocketOptionName.KeepAlive` à l'acceptation.
+- [ ] **Aucune limite de connexions/débit sur le port 7777 (type Slowloris).**
+      `AcceptLoop` crée un thread par connexion entrante sans plafond, et rien ne limite le
+      nombre de connexions par IP. Un client peut garder un socket ouvert indéfiniment en
+      n'envoyant rien (ou en gardant le flux juste sous le timeout de 10s du handshake). Fix :
+      plafonner les handshakes concurrents (ex. sémaphore ~50) et compter les connexions par IP.
+- [ ] **Aucun healthcheck Docker sur `game-server`**, et pas de limite mémoire/CPU dans
+      `docker-compose.yml`. Combiné aux deux points ci-dessus, un serveur "gelé mais vivant" ne
+      redémarre jamais automatiquement. Fix : ajouter un healthcheck applicatif (ex. fichier de
+      vivacité mis à jour à chaque tick `Update()`, ou auto-connexion TCP périodique) et des
+      limites `mem_limit`/`cpus`.
+- [ ] **Échec silencieux de l'écriture du rating.** Si le `PATCH /profiles` échoue (blip
+      réseau), `MatchSessionManager.UpdateRatings` a déjà pré-calculé et stocké le nouveau
+      rating/delta sur `PlayerConnection` avant de tenter l'écriture — le message `match_over`
+      part avec ces valeurs même si l'écriture échoue, donc le client peut afficher "+15" alors
+      que la base garde l'ancienne valeur. De même, un échec de la lecture GET précédente laisse
+      `NewRating`/`RatingDelta` à leur valeur par défaut `0`, envoyée telle quelle. Fix : ne
+      peupler/envoyer ces champs qu'après confirmation d'écriture réussie, ou exposer un indicateur
+      explicite d'indisponibilité plutôt que la valeur par défaut `0`.
+- [ ] **Un mode de matchmaking invalide/mal orthographié tombe silencieusement en Deathmatch**
+      (`MatchSessionManager.cs`, aucune liste blanche de modes acceptés) — pas de crash, mais
+      aucune erreur n'est renvoyée si un futur client envoie une valeur inattendue.

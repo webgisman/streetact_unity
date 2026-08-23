@@ -2,10 +2,10 @@ using System;
 using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Threading;
-using StreetAct.Network;
+using Novgov.Network;
 using UnityEngine;
 
-namespace StreetAct.Server
+namespace Novgov.Server
 {
     /// <summary>
     /// Représente une connexion TCP authentifiée d'un joueur, côté serveur.
@@ -20,6 +20,9 @@ namespace StreetAct.Server
         public string Username = "Joueur";
 
         public int TeamId; // assigné par MatchSessionManager au début d'un match
+        public string Mode; // "deathmatch" ou "zone_control", lu depuis join_matchmaking
+        public int NewRating; // rempli par MatchSessionManager.UpdateRatings() en fin de partie
+        public int RatingDelta;
         public DateTime LastHeartbeat = DateTime.UtcNow;
         public bool HasSubmittedThisTurn = false;
         public UnitOrder[] PendingOrders = Array.Empty<UnitOrder>();

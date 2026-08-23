@@ -121,6 +121,16 @@ apt install -y certbot python3-certbot-nginx
 certbot --nginx -d ton-domaine.com
 ```
 
+## 8bis. Migrations appliquées manuellement après le déploiement initial
+
+`schema.sql` n'est exécuté qu'au tout premier démarrage de Postgres (`docker-entrypoint-initdb.d`,
+ignoré si le volume `db-data` existe déjà). Toute évolution de schéma après coup doit être
+appliquée manuellement sur la base déjà déployée via `psql` (voir §3, "Connexion Postgres
+directe"), en plus de la mise à jour de `schema.sql` pour les futurs déploiements neufs.
+
+- **2026-08-23** : ajout de `public.matches.mode` (deathmatch / zone_control) —
+  `ALTER TABLE public.matches ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'deathmatch';`
+
 ## 9. Sauvegardes
 
 ```bash

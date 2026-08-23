@@ -4,7 +4,7 @@ using System.Net.Sockets;
 using System.Threading;
 using UnityEngine;
 
-namespace StreetAct.Network
+namespace Novgov.Network
 {
     /// <summary>
     /// Connexion TCP vers le serveur de jeu Unity headless (voir 03-network-protocol.md).

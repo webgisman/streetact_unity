@@ -1,7 +1,7 @@
-# StreetAct Multijoueur — Documentation de déploiement
+# Novgov Multijoueur — Documentation de déploiement
 
 Ce dossier contient toute la documentation et les fichiers de configuration nécessaires pour
-transformer StreetAct (actuellement un jeu solo Joueur vs IA) en un jeu **multijoueur PvP
+transformer Novgov (actuellement un jeu solo Joueur vs IA) en un jeu **multijoueur PvP
 asynchrone à tour par tour**, hébergé sur un VPS Hetzner via Docker.
 
 **Ne PAS build/importer ce dossier dans le jeu.** Il contient uniquement de la doc et des

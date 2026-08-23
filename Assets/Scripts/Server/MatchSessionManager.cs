@@ -3,11 +3,11 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using StreetAct.Network;
+using Novgov.Network;
 using UnityEngine;
 using UnityEngine.Networking;
 
-namespace StreetAct.Server
+namespace Novgov.Server
 {
     /// <summary>
     /// Orchestre UN match à la fois (voir README.md, "Portée V1"). Réutilise tel quel le moteur de
@@ -21,8 +21,25 @@ namespace StreetAct.Server
     {
         private const float PlanningSeconds = 60f;
         private const int SnapshotIntervalMs = 100;
+        private const int ZoneControlTurnCap = 20;
+        // Sans plafond, deux joueurs qui se contentent de se cacher chaque tour pouvaient bloquer
+        // indéfiniment l'unique emplacement de match du serveur (une seule partie à la fois, voir
+        // "Portée V1" en tête de classe) — le Deathmatch avait ce plafond en Zone de Contrôle mais
+        // pas ici.
+        private const int DeathmatchTurnCap = 60;
+        private const int MaxOrderPathNodes = 200;
 
-        private readonly List<PlayerConnection> waiting = new List<PlayerConnection>();
+        private string currentMatchMode = "deathmatch";
+
+        // Connexions authentifiées mais dont on n'a pas encore reçu "join_matchmaking" (donc dont
+        // on ne connaît pas encore le mode voulu).
+        private readonly List<PlayerConnection> pendingMode = new List<PlayerConnection>();
+
+        // Une file d'attente séparée par mode : deux joueurs ne sont appariés que s'ils ont
+        // demandé le même mode.
+        private readonly List<PlayerConnection> waitingDeathmatch = new List<PlayerConnection>();
+        private readonly List<PlayerConnection> waitingZoneControl = new List<PlayerConnection>();
+
         private bool matchInProgress = false;
 
         private void Start()
@@ -46,21 +63,95 @@ namespace StreetAct.Server
         {
             while (GameServerBootstrap.AuthenticatedConnections.TryDequeue(out PlayerConnection conn))
             {
-                waiting.Add(conn);
-                Debug.Log($"[MatchSessionManager] Joueur en file d'attente : {conn.UserId} ({waiting.Count} en attente)");
+                pendingMode.Add(conn);
+            }
+
+            // Lire "join_matchmaking" pour connaître le mode voulu, puis basculer la connexion
+            // dans la file du mode correspondant. Par rétrocompatibilité (client plus ancien sans
+            // champ "mode"), une valeur absente/vide vaut "deathmatch".
+            for (int i = pendingMode.Count - 1; i >= 0; i--)
+            {
+                PlayerConnection conn = pendingMode[i];
+                while (conn.TryDequeueMessage(out NetMessage msg))
+                {
+                    if (msg.type != "join_matchmaking") continue;
+                    conn.Mode = string.IsNullOrEmpty(msg.mode) ? "deathmatch" : msg.mode;
+                    var targetList = conn.Mode == "zone_control" ? waitingZoneControl : waitingDeathmatch;
+                    targetList.Add(conn);
+                    pendingMode.RemoveAt(i);
+                    Debug.Log($"[MatchSessionManager] Joueur en file d'attente ({conn.Mode}) : {conn.UserId} ({targetList.Count} en attente)");
+                    break;
+                }
             }
 
             // Nettoyer les connexions perdues avant même d'avoir rejoint un match.
-            waiting.RemoveAll(c => c.IsDisconnected);
+            pendingMode.RemoveAll(c => c.IsDisconnected);
+            waitingDeathmatch.RemoveAll(c => c.IsDisconnected);
+            waitingZoneControl.RemoveAll(c => c.IsDisconnected);
 
-            if (!matchInProgress && waiting.Count >= 2)
+            if (!matchInProgress)
             {
-                PlayerConnection p1 = waiting[0];
-                PlayerConnection p2 = waiting[1];
-                waiting.RemoveRange(0, 2);
-                matchInProgress = true;
-                StartCoroutine(RunMatch(p1, p2));
+                TryStartMatch(waitingDeathmatch);
+                if (!matchInProgress) TryStartMatch(waitingZoneControl);
             }
+        }
+
+        private void TryStartMatch(List<PlayerConnection> queue)
+        {
+            if (queue.Count < 2) return;
+            PlayerConnection p1 = queue[0];
+            PlayerConnection p2 = queue[1];
+            queue.RemoveRange(0, 2);
+            matchInProgress = true;
+            StartCoroutine(RunMatchGuarded(p1, p2));
+        }
+
+        /// <summary>
+        /// Enveloppe RunMatch() pour qu'une exception non prévue (message client malformé,
+        /// coordonnée invalide, etc.) ne laisse jamais matchInProgress bloqué à "true" pour
+        /// toujours — vu qu'un seul match tourne à la fois (voir "Portée V1"), une exception
+        /// non rattrapée y bloquait le serveur en entier, silencieusement, sans crash ni
+        /// redémarrage Docker possible. `yield return` n'est pas autorisé dans un bloc
+        /// try/catch en C#, d'où ce pompage manuel de l'énumérateur plutôt qu'un try/catch
+        /// direct autour du corps de RunMatch.
+        /// </summary>
+        private IEnumerator RunMatchGuarded(PlayerConnection p1, PlayerConnection p2)
+        {
+            IEnumerator inner = RunMatch(p1, p2);
+            while (true)
+            {
+                // "yield break"/"yield return" ne sont pas autorisés à l'intérieur d'un bloc
+                // catch (ni d'un try qui a un catch) en C# — on capture juste l'échec ici et on
+                // gère l'arrêt du match APRÈS le try/catch, en dehors de ces blocs.
+                bool moved = false;
+                bool crashed = false;
+                try
+                {
+                    moved = inner.MoveNext();
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"[MatchSessionManager] Exception non gérée pendant un match — abandon en match nul pour ne pas bloquer le serveur : {e}");
+                    crashed = true;
+                }
+
+                if (crashed)
+                {
+                    AbortMatchSafely(p1);
+                    AbortMatchSafely(p2);
+                    matchInProgress = false;
+                    yield break;
+                }
+
+                if (!moved) yield break;
+                yield return inner.Current;
+            }
+        }
+
+        private static void AbortMatchSafely(PlayerConnection p)
+        {
+            try { if (!p.IsDisconnected) p.Send(new NetMessage { type = "match_over", winner_team = 0 }); } catch { }
+            try { p.Close(); } catch { }
         }
 
         private IEnumerator RunMatch(PlayerConnection p1, PlayerConnection p2)
@@ -68,6 +159,8 @@ namespace StreetAct.Server
             string matchId = Guid.NewGuid().ToString();
             p1.TeamId = 1;
             p2.TeamId = 2;
+            string mode = string.IsNullOrEmpty(p1.Mode) ? "deathmatch" : p1.Mode;
+            currentMatchMode = mode;
 
             yield return FetchUsername(p1);
             yield return FetchUsername(p2);
@@ -84,14 +177,20 @@ namespace StreetAct.Server
             UnitSpawnerUI.Instance.AutoDeployBattlefield();
             yield return null;
 
+            if (mode == "zone_control")
+            {
+                CaptureZone zone = CaptureZone.Instance != null ? CaptureZone.Instance : CaptureZone.CreateAtMapCenter();
+                zone.ResetProgress();
+            }
+
             // Les deux camps sont pilotés par de vrais joueurs : TacticalAIPlanner ne les touchera
             // que si isGhosted passe à true (voir TacticalAIPlanner.cs, guard assoupli).
             foreach (var unit in UnitAI.AllLivingUnits) unit.isPlayerControlled = true;
 
-            p1.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 1, opponent_username = p2.Username });
-            p2.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 2, opponent_username = p1.Username });
+            p1.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 1, opponent_username = p2.Username, mode = mode });
+            p2.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 2, opponent_username = p1.Username, mode = mode });
 
-            yield return CreateMatchRecord(matchId, p1, p2);
+            yield return CreateMatchRecord(matchId, p1, p2, mode);
 
             int turnNumber = 1;
             bool matchOver = false;
@@ -116,15 +215,44 @@ namespace StreetAct.Server
                 if (team1Alive == 0 || team2Alive == 0)
                 {
                     matchOver = true;
-                    winnerTeam = team1Alive == 0 ? 2 : 1;
+                    // Anéantissement mutuel (les deux équipes à 0) = match nul, pas une victoire par défaut.
+                    winnerTeam = (team1Alive == 0 && team2Alive == 0) ? 0 : (team1Alive == 0 ? 2 : 1);
+                }
+                else if (currentMatchMode == "zone_control")
+                {
+                    int zoneWinner = CaptureZone.Instance != null ? CaptureZone.Instance.GetWinningTeamIfComplete() : 0;
+                    if (zoneWinner != 0)
+                    {
+                        matchOver = true;
+                        winnerTeam = zoneWinner;
+                    }
+                    else if (turnNumber >= ZoneControlTurnCap)
+                    {
+                        matchOver = true;
+                        float p1Progress = CaptureZone.Instance != null ? CaptureZone.Instance.ProgressTeam1 : 0f;
+                        float p2Progress = CaptureZone.Instance != null ? CaptureZone.Instance.ProgressTeam2 : 0f;
+                        winnerTeam = Mathf.Approximately(p1Progress, p2Progress) ? 0 : (p1Progress > p2Progress ? 1 : 2);
+                    }
+                }
+                else if (turnNumber >= DeathmatchTurnCap)
+                {
+                    // Départage par nombre d'unités vivantes, puis par total de points de vie
+                    // restants ; égalité parfaite sur les deux critères = match nul.
+                    matchOver = true;
+                    int team1Health = UnitAI.AllLivingUnits.Where(u => u.teamID == 1).Sum(u => u.health);
+                    int team2Health = UnitAI.AllLivingUnits.Where(u => u.teamID == 2).Sum(u => u.health);
+                    if (team1Alive != team2Alive) winnerTeam = team1Alive > team2Alive ? 1 : 2;
+                    else if (team1Health != team2Health) winnerTeam = team1Health > team2Health ? 1 : 2;
+                    else winnerTeam = 0;
                 }
 
                 turnNumber++;
             }
 
-            var overMsg = new NetMessage { type = "match_over", winner_team = winnerTeam };
-            if (!p1.IsDisconnected) p1.Send(overMsg);
-            if (!p2.IsDisconnected) p2.Send(overMsg);
+            yield return UpdateRatings(p1, p2, winnerTeam);
+
+            if (!p1.IsDisconnected) p1.Send(new NetMessage { type = "match_over", winner_team = winnerTeam, your_new_rating = p1.NewRating, rating_delta = p1.RatingDelta });
+            if (!p2.IsDisconnected) p2.Send(new NetMessage { type = "match_over", winner_team = winnerTeam, your_new_rating = p2.NewRating, rating_delta = p2.RatingDelta });
 
             yield return CloseMatchRecord(matchId, winnerTeam);
 
@@ -223,9 +351,20 @@ namespace StreetAct.Server
 
                 unit.ClearTacticalPath();
                 if (order.path == null) continue;
+                // Un client modifié pourrait soumettre un chemin de milliers de points (toujours
+                // sous la limite de 8 Mo du protocole) pour faire tourner la simulation de
+                // mouvement en boucle inutilement, ou des coordonnées NaN/Infinity/une valeur
+                // d'action hors de l'enum pour déclencher un comportement indéfini plus loin dans
+                // TacticalPathManager/NavMesh — on rejette silencieusement ce qui est invalide
+                // plutôt que de faire confiance au client.
+                if (order.path.Length > MaxOrderPathNodes) continue;
 
                 foreach (var node in order.path)
                 {
+                    if (float.IsNaN(node.x) || float.IsNaN(node.y) || float.IsNaN(node.z)) continue;
+                    if (float.IsInfinity(node.x) || float.IsInfinity(node.y) || float.IsInfinity(node.z)) continue;
+                    if (!Enum.IsDefined(typeof(TacticalPathManager.NodeAction), node.action)) continue;
+
                     unit.AddTacticalNode(new TacticalPathManager.TacticalNode
                     {
                         position = new Vector3(node.x, node.y, node.z),
@@ -317,7 +456,15 @@ namespace StreetAct.Server
                     shooting = u.IsShootingNow
                 };
             }
-            return new Snapshot { t = t, units = states };
+            float zoneProgress1 = 0f, zoneProgress2 = 0f;
+            if (currentMatchMode == "zone_control" && CaptureZone.Instance != null)
+            {
+                CaptureZone.Instance.Tick();
+                zoneProgress1 = CaptureZone.Instance.ProgressTeam1;
+                zoneProgress2 = CaptureZone.Instance.ProgressTeam2;
+            }
+
+            return new Snapshot { t = t, units = states, zone_progress_team1 = zoneProgress1, zone_progress_team2 = zoneProgress2 };
         }
 
         // =====================================================================
@@ -351,10 +498,10 @@ namespace StreetAct.Server
             }
         }
 
-        private IEnumerator CreateMatchRecord(string matchId, PlayerConnection p1, PlayerConnection p2)
+        private IEnumerator CreateMatchRecord(string matchId, PlayerConnection p1, PlayerConnection p2, string mode)
         {
             string nowIso = DateTime.UtcNow.ToString("o");
-            string matchJson = "{\"id\":\"" + matchId + "\",\"status\":\"active\",\"started_at\":\"" + nowIso + "\"}";
+            string matchJson = "{\"id\":\"" + matchId + "\",\"status\":\"active\",\"mode\":\"" + mode + "\",\"started_at\":\"" + nowIso + "\"}";
             yield return PostgrestPost("/matches", matchJson);
 
             string participantsJson = "[" +
@@ -403,5 +550,68 @@ namespace StreetAct.Server
 
         [Serializable] private class UsernameEntry { public string username; }
         [Serializable] private class UsernameQueryResult { public UsernameEntry[] items; }
+
+        // =====================================================================
+        // Classement ELO — profiles.rating existe déjà (schema.sql), jamais mis à jour avant.
+        // =====================================================================
+        private const float EloKFactor = 32f;
+
+        private IEnumerator UpdateRatings(PlayerConnection p1, PlayerConnection p2, int winnerTeam)
+        {
+            string url = $"{GameServerBootstrap.RestUrl}/profiles?id=in.({p1.UserId},{p2.UserId})&select=id,rating";
+            using var req = UnityWebRequest.Get(url);
+            req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
+            req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+            yield return req.SendWebRequest();
+
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning($"[MatchSessionManager] Lecture des ratings échouée : {req.error}");
+                yield break;
+            }
+
+            int rating1 = 1000, rating2 = 1000;
+            try
+            {
+                string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                var parsed = JsonUtility.FromJson<RatingQueryResult>(wrapped);
+                if (parsed?.items != null)
+                {
+                    foreach (var entry in parsed.items)
+                    {
+                        if (entry.id == p1.UserId) rating1 = entry.rating;
+                        else if (entry.id == p2.UserId) rating2 = entry.rating;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MatchSessionManager] Parsing ratings échoué : {ex.Message}");
+                yield break;
+            }
+
+            // winnerTeam == 0 : match nul (anéantissement mutuel ou double déconnexion) -> 0.5 partout.
+            float score1 = winnerTeam == 0 ? 0.5f : (winnerTeam == p1.TeamId ? 1f : 0f);
+            float score2 = winnerTeam == 0 ? 0.5f : (winnerTeam == p2.TeamId ? 1f : 0f);
+
+            float expected1 = 1f / (1f + Mathf.Pow(10f, (rating2 - rating1) / 400f));
+            float expected2 = 1f / (1f + Mathf.Pow(10f, (rating1 - rating2) / 400f));
+
+            int newRating1 = Mathf.RoundToInt(rating1 + EloKFactor * (score1 - expected1));
+            int newRating2 = Mathf.RoundToInt(rating2 + EloKFactor * (score2 - expected2));
+
+            p1.NewRating = newRating1;
+            p1.RatingDelta = newRating1 - rating1;
+            p2.NewRating = newRating2;
+            p2.RatingDelta = newRating2 - rating2;
+
+            yield return PostgrestPatch($"/profiles?id=eq.{p1.UserId}", "{\"rating\":" + newRating1 + "}");
+            yield return PostgrestPatch($"/profiles?id=eq.{p2.UserId}", "{\"rating\":" + newRating2 + "}");
+
+            Debug.Log($"[MatchSessionManager] Ratings mis à jour : {p1.UserId} {rating1}->{newRating1}, {p2.UserId} {rating2}->{newRating2}");
+        }
+
+        [Serializable] private class RatingEntry { public string id; public int rating; }
+        [Serializable] private class RatingQueryResult { public RatingEntry[] items; }
     }
 }

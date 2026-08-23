@@ -1,4 +1,4 @@
--- Schéma applicatif StreetAct.
+-- Schéma applicatif Novgov.
 -- Prérequis : image "supabase/postgres" (déjà fournie dans docker-compose.yml), qui crée
 -- automatiquement le schéma "auth" (table auth.users) et les rôles anon/authenticated/
 -- service_role/supabase_auth_admin/authenticator. Ce fichier n'ajoute que le schéma "public".
@@ -23,7 +23,19 @@ create policy "Un profil est visible par tous les joueurs authentifiés"
 create policy "Un joueur ne modifie que son propre profil"
     on public.profiles for update
     to authenticated
-    using (auth.uid() = id);
+    using (auth.uid() = id)
+    with check (auth.uid() = id);
+
+-- RLS protège la LIGNE (quel profil), pas les COLONNES à l'intérieur de cette ligne. Le rôle
+-- "authenticated" reçoit "update" sur TOUTES les colonnes de TOUTES les tables via
+-- bootstrap-db.sh ("grant select, insert, update, delete on all tables in schema public to
+-- authenticated"), donc sans la restriction ci-dessous, la policy au-dessus n'empêchait pas un
+-- joueur connecté d'écrire son propre "rating" directement via PostgREST
+-- (PATCH /profiles?id=eq.<son-id> {"rating": 99999}), contournant entièrement le calcul ELO
+-- serveur (MatchSessionManager.UpdateRatings). Seul "username" reste modifiable par le joueur ;
+-- "rating" ne peut plus être écrit que par service_role (le serveur de jeu).
+revoke update on public.profiles from authenticated;
+grant update (username) on public.profiles to authenticated;
 
 -- Création automatique du profil à l'inscription
 create function public.handle_new_user()
@@ -47,6 +59,7 @@ create type public.match_status as enum ('waiting', 'active', 'finished', 'abort
 create table public.matches (
     id uuid primary key default gen_random_uuid(),
     status public.match_status not null default 'waiting',
+    mode text not null default 'deathmatch',  -- 'deathmatch' ou 'zone_control'
     map_seed text,
     gps_latitude double precision,
     gps_longitude double precision,

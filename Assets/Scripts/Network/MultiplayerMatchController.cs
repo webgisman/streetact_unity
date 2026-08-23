@@ -1,11 +1,12 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using StreetAct.Auth;
+using Novgov.Auth;
 using UnityEngine;
 using UnityEngine.AI;
+using UnityEngine.UIElements;
 
-namespace StreetAct.Network
+namespace Novgov.Network
 {
     /// <summary>
     /// Orchestration complète du mode multijoueur côté client : login/inscription, matchmaking,
@@ -13,11 +14,22 @@ namespace StreetAct.Network
     /// Assets/_ServerDocs/multiplayer/05-client-integration.md pour le contexte d'intégration.
     /// Le mode solo (TacticalAIPlanner local) n'est jamais impacté : voir le garde
     /// "MultiplayerMatchController.IsActive" ajouté dans TacticalPathManager.LancerExecutionTour().
+    ///
+    /// UI en UI Toolkit (voir Assets/Scripts/UI/UIScreenManager.cs) — chaque état a un écran UXML
+    /// sous Resources/UI/, câblé une fois dans BindUI() plutôt que redessiné en OnGUI chaque frame.
     /// </summary>
     public class MultiplayerMatchController : MonoBehaviour
     {
         public static MultiplayerMatchController Instance { get; private set; }
         public static bool IsActive { get; private set; }
+
+        /// <summary>
+        /// Vrai dès que l'écran multijoueur (login/mode/matchmaking/HUD/fin de partie) occupe l'écran
+        /// — utilisé par UnitSpawnerUI pour ne pas ré-afficher son propre dock de déploiement solo
+        /// par-dessus (les deux systèmes d'UI Toolkit sont indépendants et se raffraîchissent chacun
+        /// dans leur propre Update(), donc sans ce garde ils se ré-affichent en boucle l'un sur l'autre).
+        /// </summary>
+        public static bool IsFlowActive { get; private set; }
 
         public static MultiplayerMatchController EnsureInstance()
         {
@@ -30,8 +42,10 @@ namespace StreetAct.Network
             return Instance;
         }
 
-        private enum UiState { Hidden, Login, SignUp, Connecting, Matchmaking, InMatch, MatchOver }
+        private enum UiState { Hidden, ModeSelect, Login, SignUp, Connecting, Matchmaking, InMatch, MatchOver }
         private UiState uiState = UiState.Hidden;
+
+        private string selectedMode = "deathmatch";
 
         private string emailField = "";
         private string passwordField = "";
@@ -39,27 +53,68 @@ namespace StreetAct.Network
         private string statusMessage = "";
 
         private int localTeamId = 0;
+        private string currentMode = "deathmatch";
+        private float zoneProgressTeam1 = 0f;
+        private float zoneProgressTeam2 = 0f;
         private int currentTurnNumber = 1;
         private int lastServerSecondsRemaining = -1;
         private string ghostBannerText = "";
         private float ghostBannerTimer = 0f;
-        private string matchOverText = "";
+
+        // Références UI Toolkit mises en cache une fois dans BindUI().
+        private VisualElement authRoot, waitingRoot, hudRoot, matchOverRoot;
+        private Label authTitleLabel, authStatusLabel, waitingStatusLabel;
+        private TextField emailFieldEl, passwordFieldEl, usernameFieldEl;
+        private VisualElement usernameContainer;
+        private Button submitButton, toggleModeButton;
+        private Label teamBanner, phaseLabel, timerLabel, ghostBannerLabel, resultLabel, ratingLabel;
+        private VisualElement zoneBarContainer, zoneFillTeam1, zoneFillTeam2;
+        private bool uiBound = false;
 
         private void Awake()
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
+#if !UNITY_SERVER
+            BindUI();
+#endif
         }
 
         private void Update()
         {
-            if (ghostBannerTimer > 0f) ghostBannerTimer -= Time.deltaTime;
+            if (ghostBannerTimer > 0f)
+            {
+                ghostBannerTimer -= Time.deltaTime;
+                if (ghostBannerTimer <= 0f && ghostBannerLabel != null) ghostBannerLabel.style.display = DisplayStyle.None;
+            }
+
+            if (uiState == UiState.Connecting || uiState == UiState.Matchmaking)
+            {
+                if (waitingStatusLabel != null) waitingStatusLabel.text = statusMessage;
+            }
+            else if (uiState == UiState.InMatch)
+            {
+                RefreshHudDynamicFields();
+            }
         }
 
-        public void BeginLoginFlow()
+        public async void BeginLoginFlow()
         {
-            uiState = UiState.Login;
+            if (SupabaseAuthClient.HasSavedSession())
+            {
+                statusMessage = "Reconnexion...";
+                SetUiState(UiState.Connecting);
+                var (ok, _) = await SupabaseAuthClient.TryRestoreSession();
+                if (ok)
+                {
+                    SetUiState(UiState.ModeSelect);
+                    return;
+                }
+                // Session sauvegardée invalide/expirée (ex: > 30 jours) — retour au formulaire normal.
+            }
+
             statusMessage = "";
+            SetUiState(UiState.Login);
         }
 
         // =====================================================================
@@ -69,29 +124,29 @@ namespace StreetAct.Network
         private async void HandleSignIn()
         {
             statusMessage = "Connexion en cours...";
-            uiState = UiState.Connecting;
+            SetUiState(UiState.Connecting);
             var (ok, error) = await SupabaseAuthClient.SignIn(emailField, passwordField);
             if (!ok)
             {
                 statusMessage = "Échec : " + error;
-                uiState = UiState.Login;
+                SetUiState(UiState.Login);
                 return;
             }
-            ConnectToGameServer();
+            SetUiState(UiState.ModeSelect);
         }
 
         private async void HandleSignUp()
         {
             statusMessage = "Création du compte...";
-            uiState = UiState.Connecting;
+            SetUiState(UiState.Connecting);
             var (ok, error) = await SupabaseAuthClient.SignUp(emailField, passwordField, usernameField);
             if (!ok)
             {
                 statusMessage = "Échec : " + error;
-                uiState = UiState.SignUp;
+                SetUiState(UiState.SignUp);
                 return;
             }
-            ConnectToGameServer();
+            SetUiState(UiState.ModeSelect);
         }
 
         private void ConnectToGameServer()
@@ -109,10 +164,10 @@ namespace StreetAct.Network
             client.OnMessage += HandleServerMessage;
             client.OnDisconnected += HandleServerDisconnected;
             client.Connect(SupabaseAuthClient.CurrentSession.access_token);
-            client.Send(new NetMessage { type = "join_matchmaking" });
+            client.Send(new NetMessage { type = "join_matchmaking", mode = selectedMode });
 
-            uiState = UiState.Matchmaking;
             statusMessage = "Recherche d'adversaire...";
+            SetUiState(UiState.Matchmaking);
         }
 
         private void HandleServerDisconnected(string reason)
@@ -120,7 +175,7 @@ namespace StreetAct.Network
             if (uiState == UiState.InMatch || uiState == UiState.Matchmaking)
             {
                 statusMessage = "Connexion au serveur perdue (" + reason + ").";
-                uiState = UiState.Login;
+                SetUiState(UiState.Login);
                 IsActive = false;
             }
         }
@@ -144,6 +199,9 @@ namespace StreetAct.Network
         private void OnMatchFound(NetMessage msg)
         {
             localTeamId = msg.team_id;
+            currentMode = string.IsNullOrEmpty(msg.mode) ? "deathmatch" : msg.mode;
+            zoneProgressTeam1 = 0f;
+            zoneProgressTeam2 = 0f;
             currentTurnNumber = 1;
             statusMessage = $"Adversaire trouvé : {msg.opponent_username}";
 
@@ -166,9 +224,10 @@ namespace StreetAct.Network
             }
 
             IsActive = true;
-            uiState = UiState.InMatch;
             if (TacticalPathManager.Instance != null)
                 TacticalPathManager.Instance.phaseActuelle = TacticalPathManager.GamePhase.Planification;
+            MusicManager.SetGameplayVolume();
+            SetUiState(UiState.InMatch);
         }
 
         private void OnOpponentGhosted(NetMessage msg)
@@ -177,15 +236,26 @@ namespace StreetAct.Network
                 ? "Vous étiez absent — l'IA a joué votre tour à votre place."
                 : "Adversaire absent — IA de secours active pour son camp.";
             ghostBannerTimer = 4f;
+            if (ghostBannerLabel != null)
+            {
+                ghostBannerLabel.text = "🤖 " + ghostBannerText;
+                ghostBannerLabel.style.display = DisplayStyle.Flex;
+            }
         }
 
         private void OnMatchOver(NetMessage msg)
         {
             IsActive = false;
-            uiState = UiState.MatchOver;
-            matchOverText = msg.winner_team == 0 ? "Partie interrompue."
+            string resultText = msg.winner_team == 0 ? "Partie interrompue."
                 : msg.winner_team == localTeamId ? "🏆 VICTOIRE !"
                 : "💀 DÉFAITE.";
+            string ratingText = msg.your_new_rating > 0
+                ? $"Classement : {msg.your_new_rating} ({(msg.rating_delta >= 0 ? "+" : "")}{msg.rating_delta})"
+                : "";
+
+            if (resultLabel != null) resultLabel.text = resultText;
+            if (ratingLabel != null) ratingLabel.text = ratingText;
+            SetUiState(UiState.MatchOver);
         }
 
         /// <summary>
@@ -244,6 +314,8 @@ namespace StreetAct.Network
                     unit.SetNetworkAnimState(state.shooting, moveSpeed);
                     if (state.dead) unit.ApplyNetworkDeath();
                 }
+                zoneProgressTeam1 = snap.zone_progress_team1;
+                zoneProgressTeam2 = snap.zone_progress_team2;
                 yield return new WaitForSeconds(intervalSec);
             }
 
@@ -260,163 +332,136 @@ namespace StreetAct.Network
         }
 
         // =====================================================================
-        // UI (IMGUI, cohérent avec le reste du projet — voir GameManagerUI/UnitSpawnerUI)
+        // UI Toolkit — câblage une fois, puis mise à jour ciblée des champs qui changent.
         // =====================================================================
 
-        void OnGUI()
+#if !UNITY_SERVER
+        private void BindUI()
         {
-#if UNITY_SERVER
-            return;
-#else
-            switch (uiState)
+            if (uiBound) return;
+            if (UIScreenManager.Instance == null)
+            {
+                Debug.LogError("[MultiplayerMatchController] UIScreenManager.Instance introuvable — UIBootstrap ne s'est-il pas exécuté avant cette scène ?");
+                return;
+            }
+            uiBound = true;
+
+            VisualElement modeSelectRoot = UIScreenManager.Instance.GetScreen("ModeSelect");
+            modeSelectRoot.Q<Button>("btn-deathmatch").clicked += () => { selectedMode = "deathmatch"; ConnectToGameServer(); };
+            modeSelectRoot.Q<Button>("btn-zone-control").clicked += () => { selectedMode = "zone_control"; ConnectToGameServer(); };
+
+            authRoot = UIScreenManager.Instance.GetScreen("Auth");
+            authTitleLabel = authRoot.Q<Label>("title-label");
+            emailFieldEl = authRoot.Q<TextField>("email-field");
+            passwordFieldEl = authRoot.Q<TextField>("password-field");
+            usernameContainer = authRoot.Q<VisualElement>("username-container");
+            usernameFieldEl = authRoot.Q<TextField>("username-field");
+            submitButton = authRoot.Q<Button>("submit-button");
+            toggleModeButton = authRoot.Q<Button>("toggle-mode-button");
+            authStatusLabel = authRoot.Q<Label>("status-label");
+
+            emailFieldEl.RegisterValueChangedCallback(evt => emailField = evt.newValue);
+            passwordFieldEl.RegisterValueChangedCallback(evt => passwordField = evt.newValue);
+            usernameFieldEl.RegisterValueChangedCallback(evt => usernameField = evt.newValue);
+            authRoot.Q<Toggle>("show-password-toggle").RegisterValueChangedCallback(evt => passwordFieldEl.isPasswordField = !evt.newValue);
+            submitButton.clicked += () => { if (uiState == UiState.SignUp) HandleSignUp(); else HandleSignIn(); };
+            toggleModeButton.clicked += () =>
+            {
+                statusMessage = "";
+                SetUiState(uiState == UiState.SignUp ? UiState.Login : UiState.SignUp);
+            };
+
+            waitingRoot = UIScreenManager.Instance.GetScreen("Waiting");
+            waitingStatusLabel = waitingRoot.Q<Label>("status-label");
+
+            hudRoot = UIScreenManager.Instance.GetScreen("InMatchHud");
+            teamBanner = hudRoot.Q<Label>("team-banner");
+            phaseLabel = hudRoot.Q<Label>("phase-label");
+            timerLabel = hudRoot.Q<Label>("timer-label");
+            ghostBannerLabel = hudRoot.Q<Label>("ghost-banner");
+            zoneBarContainer = hudRoot.Q<VisualElement>("zone-bar-container");
+            zoneFillTeam1 = hudRoot.Q<VisualElement>("zone-fill-team1");
+            zoneFillTeam2 = hudRoot.Q<VisualElement>("zone-fill-team2");
+
+            matchOverRoot = UIScreenManager.Instance.GetScreen("MatchOver");
+            resultLabel = matchOverRoot.Q<Label>("result-label");
+            ratingLabel = matchOverRoot.Q<Label>("rating-label");
+            matchOverRoot.Q<Button>("menu-button").clicked += () =>
+            {
+                SetUiState(UiState.Hidden);
+                UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
+            };
+            matchOverRoot.Q<Button>("leaderboard-button").clicked += () => LeaderboardController.Show();
+        }
+
+        private void SetUiState(UiState newState)
+        {
+            uiState = newState;
+            IsFlowActive = newState != UiState.Hidden;
+            switch (newState)
             {
                 case UiState.Login:
                 case UiState.SignUp:
-                    DrawAuthScreen();
+                    RefreshAuthScreen();
+                    UIScreenManager.Instance.Show("Auth");
+                    break;
+                case UiState.ModeSelect:
+                    UIScreenManager.Instance.Show("ModeSelect");
                     break;
                 case UiState.Connecting:
                 case UiState.Matchmaking:
-                    DrawWaitingScreen();
+                    waitingStatusLabel.text = statusMessage;
+                    UIScreenManager.Instance.Show("Waiting");
                     break;
                 case UiState.InMatch:
-                    DrawInMatchHud();
+                    RefreshHudStaticFields();
+                    UIScreenManager.Instance.Show("InMatchHud");
                     break;
                 case UiState.MatchOver:
-                    DrawMatchOverScreen();
+                    UIScreenManager.Instance.Show("MatchOver");
+                    break;
+                case UiState.Hidden:
+                    UIScreenManager.Instance.HideAll();
                     break;
             }
-#endif
         }
 
-#if !UNITY_SERVER
-        private void DrawAuthScreen()
+        private void RefreshAuthScreen()
         {
-            float uiScale = Mathf.Clamp(Screen.width / 450f, 1.35f, 2.2f);
-            Matrix4x4 origMat = GUI.matrix;
-            GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
-
-            float virtualW = Screen.width / uiScale;
-            float virtualH = Screen.height / uiScale;
             bool isSignUp = uiState == UiState.SignUp;
-
-            float w = Mathf.Min(360f, virtualW - 30f);
-            float h = isSignUp ? 320f : 260f;
-            float x = (virtualW - w) * 0.5f;
-            float y = (virtualH - h) * 0.5f;
-
-            GUI.depth = -200;
-            GUIStyle titleStyle = new GUIStyle(GUI.skin.box) { fontSize = 15, fontStyle = FontStyle.Bold };
-            titleStyle.normal.textColor = Color.white;
-            GUI.Box(new Rect(x, y, w, h), isSignUp ? "⚔️ CRÉER UN COMPTE" : "⚔️ CONNEXION MULTIJOUEUR", titleStyle);
-
-            float fy = y + 40;
-            GUI.Label(new Rect(x + 15, fy, w - 30, 20), "Email :");
-            emailField = GUI.TextField(new Rect(x + 15, fy + 20, w - 30, 30), emailField);
-
-            fy += 58;
-            GUI.Label(new Rect(x + 15, fy, w - 30, 20), "Mot de passe :");
-            passwordField = GUI.PasswordField(new Rect(x + 15, fy + 20, w - 30, 30), passwordField, '*');
-
-            fy += 58;
-            if (isSignUp)
-            {
-                GUI.Label(new Rect(x + 15, fy, w - 30, 20), "Pseudo :");
-                usernameField = GUI.TextField(new Rect(x + 15, fy + 20, w - 30, 30), usernameField);
-                fy += 58;
-            }
-
-            GUIStyle btnStyle = new GUIStyle(GUI.skin.button) { fontSize = 13, fontStyle = FontStyle.Bold };
-            if (GUI.Button(new Rect(x + 15, fy, w - 30, 40), isSignUp ? "Créer le compte" : "Se connecter", btnStyle))
-            {
-                if (isSignUp) HandleSignUp(); else HandleSignIn();
-            }
-
-            fy += 46;
-            GUIStyle linkStyle = new GUIStyle(GUI.skin.button) { fontSize = 11 };
-            if (GUI.Button(new Rect(x + 15, fy, w - 30, 28), isSignUp ? "J'ai déjà un compte" : "Créer un compte", linkStyle))
-            {
-                uiState = isSignUp ? UiState.Login : UiState.SignUp;
-                statusMessage = "";
-            }
-
-            if (!string.IsNullOrEmpty(statusMessage))
-            {
-                GUIStyle msgStyle = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = 11 };
-                msgStyle.normal.textColor = Color.yellow;
-                GUI.Label(new Rect(x, y + h + 6, w, 40), statusMessage, msgStyle);
-            }
-
-            GUI.matrix = origMat;
+            authTitleLabel.text = isSignUp ? "⚔️ CRÉER UN COMPTE" : "⚔️ CONNEXION MULTIJOUEUR";
+            usernameContainer.style.display = isSignUp ? DisplayStyle.Flex : DisplayStyle.None;
+            submitButton.text = isSignUp ? "Créer le compte" : "Se connecter";
+            toggleModeButton.text = isSignUp ? "J'ai déjà un compte" : "Pas encore de compte ? Créer un compte";
+            authStatusLabel.text = statusMessage;
         }
 
-        private void DrawWaitingScreen()
+        private void RefreshHudStaticFields()
         {
-            float uiScale = Mathf.Clamp(Screen.width / 450f, 1.35f, 2.2f);
-            Matrix4x4 origMat = GUI.matrix;
-            GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
-
-            float virtualW = Screen.width / uiScale;
-            float virtualH = Screen.height / uiScale;
-
-            GUIStyle style = new GUIStyle(GUI.skin.box) { fontSize = 14, fontStyle = FontStyle.Bold };
-            style.normal.textColor = Color.cyan;
-            GUI.Box(new Rect(virtualW / 2 - 160, virtualH / 2 - 30, 320, 60), statusMessage, style);
-
-            GUI.matrix = origMat;
+            teamBanner.text = localTeamId == 2 ? "ÉQUIPE ROUGE" : "ÉQUIPE BLEUE";
+            teamBanner.RemoveFromClassList("team1-badge");
+            teamBanner.RemoveFromClassList("team2-badge");
+            teamBanner.AddToClassList(localTeamId == 2 ? "team2-badge" : "team1-badge");
+            zoneBarContainer.style.display = currentMode == "zone_control" ? DisplayStyle.Flex : DisplayStyle.None;
+            ghostBannerLabel.style.display = DisplayStyle.None;
         }
 
-        private void DrawInMatchHud()
+        private void RefreshHudDynamicFields()
         {
-            float uiScale = Mathf.Clamp(Screen.width / 450f, 1.35f, 2.2f);
-            Matrix4x4 origMat = GUI.matrix;
-            GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
+            timerLabel.text = lastServerSecondsRemaining >= 0 ? $"⏱️ {lastServerSecondsRemaining}s" : "";
+            timerLabel.style.color = lastServerSecondsRemaining <= 10 && lastServerSecondsRemaining >= 0
+                ? new StyleColor(Color.red) : new StyleColor(new Color(0.886f, 0.910f, 0.925f));
 
-            float virtualW = Screen.width / uiScale;
+            phaseLabel.text = !string.IsNullOrEmpty(statusMessage)
+                ? statusMessage
+                : (TacticalPathManager.Instance != null && TacticalPathManager.Instance.phaseActuelle == TacticalPathManager.GamePhase.Execution
+                    ? "EXÉCUTION" : "PLANIFICATION");
 
-            if (lastServerSecondsRemaining >= 0)
+            if (currentMode == "zone_control")
             {
-                GUIStyle timerStyle = new GUIStyle(GUI.skin.box) { fontSize = 13, fontStyle = FontStyle.Bold };
-                timerStyle.normal.textColor = lastServerSecondsRemaining <= 10 ? Color.red : Color.white;
-                GUI.Box(new Rect(virtualW - 130, 60, 115, 34), $"⏱️ {lastServerSecondsRemaining}s", timerStyle);
+                zoneFillTeam1.style.width = new StyleLength(Length.Percent(zoneProgressTeam1));
+                zoneFillTeam2.style.width = new StyleLength(Length.Percent(zoneProgressTeam2));
             }
-
-            if (!string.IsNullOrEmpty(statusMessage))
-            {
-                GUIStyle msgStyle = new GUIStyle(GUI.skin.box) { fontSize = 12 };
-                msgStyle.normal.textColor = Color.yellow;
-                GUI.Box(new Rect(virtualW / 2 - 150, 60, 300, 30), statusMessage, msgStyle);
-            }
-
-            if (ghostBannerTimer > 0f)
-            {
-                GUIStyle ghostStyle = new GUIStyle(GUI.skin.box) { fontSize = 12, fontStyle = FontStyle.Bold };
-                ghostStyle.normal.textColor = new Color(1f, 0.6f, 0.1f);
-                GUI.Box(new Rect(virtualW / 2 - 170, 96, 340, 34), "🤖 " + ghostBannerText, ghostStyle);
-            }
-
-            GUI.matrix = origMat;
-        }
-
-        private void DrawMatchOverScreen()
-        {
-            float uiScale = Mathf.Clamp(Screen.width / 450f, 1.35f, 2.2f);
-            Matrix4x4 origMat = GUI.matrix;
-            GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
-
-            float virtualW = Screen.width / uiScale;
-            float virtualH = Screen.height / uiScale;
-
-            GUIStyle style = new GUIStyle(GUI.skin.box) { fontSize = 20, fontStyle = FontStyle.Bold };
-            style.normal.textColor = Color.white;
-            GUI.Box(new Rect(virtualW / 2 - 150, virtualH / 2 - 60, 300, 80), matchOverText, style);
-
-            if (GUI.Button(new Rect(virtualW / 2 - 90, virtualH / 2 + 30, 180, 42), "Retour au menu"))
-            {
-                uiState = UiState.Hidden;
-                UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
-            }
-
-            GUI.matrix = origMat;
         }
 #endif
     }

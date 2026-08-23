@@ -4,7 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using UnityEngine;
 
-namespace StreetAct.Network
+namespace Novgov.Network
 {
     /// <summary>
     /// Enveloppe unique pour tous les messages du protocole (voir Assets/_ServerDocs/multiplayer/03-network-protocol.md).
@@ -19,6 +19,9 @@ namespace StreetAct.Network
         // auth
         public string access_token;
 
+        // join_matchmaking / match_found : "deathmatch" ou "zone_control"
+        public string mode;
+
         // match_found / opponent_ghosted / turn_timer / match_over
         public string match_id;
         public int team_id;
@@ -26,6 +29,10 @@ namespace StreetAct.Network
         public int seconds_remaining;
         public string reason;
         public int winner_team;
+
+        // match_over
+        public int your_new_rating;
+        public int rating_delta;
 
         // submit_turn
         public int turn_number;
@@ -55,6 +62,10 @@ namespace StreetAct.Network
     {
         public int t;
         public UnitState[] units;
+
+        // Mode "zone_control" uniquement — 0 à 100, absent (0/0) en mode deathmatch.
+        public float zone_progress_team1;
+        public float zone_progress_team2;
     }
 
     [Serializable]
@@ -84,13 +95,27 @@ namespace StreetAct.Network
         }
 
         /// <summary>
+        /// Taille max par défaut (gameplay, connexion déjà authentifiée) : les snapshots/ordres
+        /// tiennent largement dedans, voir 03-network-protocol.md.
+        /// </summary>
+        public const int DefaultMaxMessageSize = 8 * 1024 * 1024;
+
+        /// <summary>
         /// Bloque jusqu'à réception d'un message complet, ou lève une exception si la connexion est fermée.
         /// </summary>
-        public static NetMessage ReadMessage(NetworkStream stream)
+        /// <param name="maxLength">
+        /// Plafond appliqué à la longueur ANNONCÉE par l'en-tête, avant même de lire le corps —
+        /// pour le handshake pré-authentification, GameServerBootstrap passe une valeur bien plus
+        /// petite que la valeur par défaut : sans ça, n'importe quel socket non authentifié peut
+        /// annoncer jusqu'à 8 Mo et faire allouer ce buffer côté serveur avant d'envoyer le moindre
+        /// octet du corps, sans jamais se connecter réellement — quelques centaines de sockets
+        /// simultanés suffisent à épuiser la RAM du VPS avant toute vérification du JWT.
+        /// </param>
+        public static NetMessage ReadMessage(NetworkStream stream, int maxLength = DefaultMaxMessageSize)
         {
             byte[] header = ReadExact(stream, 4);
             int length = BitConverter.ToInt32(header, 0);
-            if (length <= 0 || length > 8 * 1024 * 1024)
+            if (length <= 0 || length > maxLength)
                 throw new IOException($"Taille de message invalide reçue : {length}");
 
             byte[] payload = ReadExact(stream, length);

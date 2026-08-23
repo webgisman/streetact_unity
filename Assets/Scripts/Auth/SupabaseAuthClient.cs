@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
 
-namespace StreetAct.Auth
+namespace Novgov.Auth
 {
     [Serializable]
     public class AuthUser
@@ -38,9 +38,25 @@ namespace StreetAct.Auth
     {
         // Ajuster ces deux valeurs pour pointer vers le déploiement réel.
         public static string BaseUrl = "https://novgov.com/auth/v1";
+        public static string RestBaseUrl = "https://novgov.com/rest/v1";
         public static string AnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg3NDM1NzMzLCJleHAiOjIxMDI3OTU3MzN9.m6TOUVAAMgJiEl2cL7BCbdBwV4BptF2K8JxZ3UNf4C0";
 
         public static AuthSession CurrentSession { get; private set; }
+
+        // Persistance locale du refresh_token pour éviter de retaper le mot de passe à chaque
+        // lancement de l'app — le mot de passe reste vérifié normalement par GoTrue à la
+        // première connexion, seule la ré-authentification silencieuse ultérieure est basée
+        // sur ce token (comme "rester connecté" dans n'importe quelle app mobile).
+        private const string RefreshTokenPrefKey = "streetact_refresh_token";
+
+        public static bool HasSavedSession() => PlayerPrefs.HasKey(RefreshTokenPrefKey);
+
+        public static Task<(bool ok, string error)> TryRestoreSession()
+        {
+            string saved = PlayerPrefs.GetString(RefreshTokenPrefKey, null);
+            if (string.IsNullOrEmpty(saved)) return Task.FromResult((false, "Aucune session enregistrée."));
+            return RefreshSession(saved);
+        }
 
         public static Task<(bool ok, string error)> SignUp(string email, string password, string username)
         {
@@ -65,6 +81,8 @@ namespace StreetAct.Auth
         public static void SignOut()
         {
             CurrentSession = null;
+            PlayerPrefs.DeleteKey(RefreshTokenPrefKey);
+            PlayerPrefs.Save();
         }
 
         private static string EscapeJson(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
@@ -105,6 +123,11 @@ namespace StreetAct.Auth
             try
             {
                 CurrentSession = JsonUtility.FromJson<AuthSession>(responseText);
+                if (!string.IsNullOrEmpty(CurrentSession.refresh_token))
+                {
+                    PlayerPrefs.SetString(RefreshTokenPrefKey, CurrentSession.refresh_token);
+                    PlayerPrefs.Save();
+                }
                 return (true, null);
             }
             catch (Exception ex)

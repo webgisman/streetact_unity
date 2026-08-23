@@ -3,10 +3,10 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
-using StreetAct.Network;
+using Novgov.Network;
 using UnityEngine;
 
-namespace StreetAct.Server
+namespace Novgov.Server
 {
     /// <summary>
     /// Point d'entrée du serveur de jeu headless. Ne s'exécute que dans un build "Dedicated Server"
@@ -47,7 +47,7 @@ namespace StreetAct.Server
 
             listener = new TcpListener(IPAddress.Any, port);
             listener.Start();
-            Debug.Log($"[GameServerBootstrap] Serveur de jeu StreetAct à l'écoute sur le port {port}.");
+            Debug.Log($"[GameServerBootstrap] Serveur de jeu Novgov à l'écoute sur le port {port}.");
 
             Thread acceptThread = new Thread(AcceptLoop) { IsBackground = true };
             acceptThread.Start();
@@ -81,7 +81,11 @@ namespace StreetAct.Server
             {
                 client.ReceiveTimeout = 10000;
                 NetworkStream stream = client.GetStream();
-                NetMessage first = NetFraming.ReadMessage(stream);
+                // 8 Ko est très généreux pour un message "auth" (JWT + enveloppe JSON) et empêche un
+                // socket non authentifié de faire allouer jusqu'à 8 Mo (la limite gameplay normale)
+                // rien qu'en annonçant une longueur bidon dans l'en-tête — voir NetFraming.ReadMessage.
+                const int MaxHandshakeMessageSize = 8 * 1024;
+                NetMessage first = NetFraming.ReadMessage(stream, MaxHandshakeMessageSize);
 
                 if (first.type != "auth")
                 {
