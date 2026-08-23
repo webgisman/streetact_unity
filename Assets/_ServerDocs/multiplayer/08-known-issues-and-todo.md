@@ -301,22 +301,40 @@ Restant à faire avant un build de diffusion large (pas bloquant pour continuer 
 - **Correction** : `stripEngineCode` mis à `0` dans `ProjectSettings/ProjectSettings.asset`. Coût :
   APK légèrement plus gros, mais tous les modules moteur restent intacts.
 
-### Bug de sélection tactile : piège du mode Placement
+### Bug de sélection tactile : deux causes cumulées
 
-- **Symptôme** : sur tablette, taper sur une unité déjà déployée ne la sélectionnait jamais — le
-  logcat confirmait qu'à chaque tap, `UnitSpawnerUI` **déployait une nouvelle unité** au lieu de
-  déclencher `TacticalPathManager.SelectionnerUnite()`.
-- **Cause** : `TacticalPathManager.Update()` (ligne ~121) retourne immédiatement tant que
-  `UnitSpawnerUI.IsPlacingUnit == true` — un mode "Placement" resté armé après un clic sur un
-  bouton du dock de déploiement (ex. "🛡️ Char Leopard 2") absorbe alors tous les taps suivants
-  pour déployer de nouvelles unités, sans jamais les transmettre à la sélection tant qu'on ne
-  l'annule pas explicitement.
-- **Correctifs** (`Assets/UnitSpawnerUI.cs`) :
-  1. Taper directement sur une unité déjà posée pendant que le mode Placement est actif annule
-     maintenant ce mode (au lieu de risquer de redéployer une unité par-dessus) — voir
-     `tappedOnExistingUnit` dans `HandlePlacementPreview()`.
-  2. La bannière "MODE PLACEMENT" du dock de déploiement est rendue beaucoup plus visible (voir
-     section UI ci-dessous) pour qu'on ne l'oublie plus active par erreur.
+Le symptôme ("impossible de sélectionner une unité sur appareil réel, marche dans l'Editor") avait
+en fait **deux causes distinctes**, trouvées l'une après l'autre en instrumentant le code avec des
+logs temporaires (`Debug.Log` ajoutés à chaque point de sortie de `TacticalPathManager.Update()`
+et dans `IsPointerOverOnGUI()`, retirés une fois le diagnostic confirmé) et en comparant avec le
+logcat en direct pendant que l'utilisateur reproduisait le bug sur son téléphone (`adb logcat`) :
+
+**Cause n°1 — piège du mode Placement.** `TacticalPathManager.Update()` retourne immédiatement
+tant que `UnitSpawnerUI.IsPlacingUnit == true` — un mode "Placement" resté armé après un clic sur
+un bouton du dock de déploiement (ex. "🛡️ Char Leopard 2") absorbe alors tous les taps suivants
+pour déployer de nouvelles unités, sans jamais les transmettre à la sélection tant qu'on ne
+l'annule pas explicitement. Correctifs (`Assets/UnitSpawnerUI.cs`) : taper directement sur une
+unité déjà posée pendant que ce mode est actif l'annule désormais (au lieu de risquer de
+redéployer une unité par-dessus, voir `tappedOnExistingUnit` dans `HandlePlacementPreview()`) ;
+bannière "MODE PLACEMENT" rendue beaucoup plus visible (voir section UI ci-dessous).
+
+**Cause n°2 — `IsPointerOverOnGUI()` bloquait presque tout tap, même hors mode Placement.** Cette
+méthode (`UnitSpawnerUI.cs`) sert à ignorer un tap qui tombe sur un bouton d'UI Toolkit plutôt que
+sur le monde 3D. Son implémentation faisait `panel.Pick(pos) != rootVisualElement` — mais
+`VisualElement.panel.Pick()` fait un **test géométrique pur qui ignore `picking-mode: Ignore`** :
+n'importe quel conteneur de mise en page plein écran (`flex-grow: 1`), même explicitement marqué
+`Ignore` en UXML et vide de tout contenu à cet endroit précis, est quand même renvoyé par `Pick()`
+dès qu'un écran `UIScreenManager` est actif — ce qui est **en permanence** le cas pendant une
+partie (`TacticalBottomBar`/`DeploymentDock` toujours affichés). Résultat : la toute première
+sélection après un chargement de carte fonctionnait (rien n'avait encore eu le temps d'être
+"Pické"), puis **tous les taps suivants sur une zone vide de l'écran étaient silencieusement
+ignorés**, y compris loin de tout bouton réel — d'où l'impression d'un bug intermittent et
+inexplicable. Confirmé en ajoutant un log listant l'écran `UIScreenManager` réellement affiché au
+moment du blocage (`DeploymentDock`, alors qu'aucun de ses boutons n'était visuellement sous le
+doigt) et le nom/type de l'élément renvoyé par `Pick()` (`name='root', type=VisualElement,
+classes=[]` — un pur conteneur de layout, pas un contrôle interactif).
+**Correction** : `IsPointerOverOnGUI()` ne bloque désormais que si l'élément trouvé est
+effectivement un `Button` (`picked is Button`), plus un simple conteneur plein écran.
 
 ### Refonte visuelle : menu d'action contextuel + dock de déploiement
 

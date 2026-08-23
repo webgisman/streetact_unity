@@ -794,9 +794,13 @@ public class UnitSpawnerUI : MonoBehaviour
         var uiDoc = UIScreenManager.Instance.GetComponent<UIDocument>();
         if (uiDoc == null || uiDoc.rootVisualElement?.panel == null) return false;
 
+        // panel.Pick() fait un test géométrique pur et ignore picking-mode: Ignore — un simple
+        // conteneur de mise en page plein écran (flex-grow: 1, sans classe, non interactif) est
+        // donc renvoyé même là où il n'y a visuellement rien. On ne bloque le tap que si
+        // l'élément touché est un vrai contrôle interactif (bouton), pas un conteneur vide.
         Vector2 panelPos = RuntimePanelUtils.ScreenToPanel(uiDoc.rootVisualElement.panel, screenPos);
         VisualElement picked = uiDoc.rootVisualElement.panel.Pick(panelPos);
-        return picked != null && picked != uiDoc.rootVisualElement;
+        return picked is Button;
     }
 #endif
 }
