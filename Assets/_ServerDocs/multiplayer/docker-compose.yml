@@ -87,7 +87,7 @@ services:
     environment:
       JWT_SECRET: ${JWT_SECRET}
       GAME_PORT: 7777
-      REST_URL: http://rest:3000
+      REST_URL: https://novgov.com/rest/v1
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
     ports:
       - "${GAME_SERVER_PORT}:7777"
