@@ -43,6 +43,13 @@ namespace StreetAct.Interaction
                          ?? Shader.Find("Universal Render Pipeline/Unlit")
                          ?? Shader.Find("Standard");
 
+            if (shader == null)
+            {
+                // Aucun shader disponible (build Dedicated Server) — la surbrillance est purement
+                // cosmétique, sans incidence sur la simulation, on l'ignore proprement.
+                return;
+            }
+
             highlightMaterial = new Material(shader);
             highlightMaterial.name = "Window_Highlight_Mat";
 

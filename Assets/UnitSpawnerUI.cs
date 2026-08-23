@@ -401,9 +401,9 @@ public class UnitSpawnerUI : MonoBehaviour
                 }
             }
 
-            if (gradTex != null)
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Unlit");
+            if (gradTex != null && shader != null)
             {
-                Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Unlit");
                 Material mat = new Material(shader);
                 mat.mainTexture = gradTex;
                 if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", gradTex);

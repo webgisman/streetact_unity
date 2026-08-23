@@ -82,6 +82,7 @@ public class RoadBarrier : MonoBehaviour
     private void ApplyTacticalMaterial()
     {
         Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null) return;
         Color teamColor = (teamID == 2) ? new Color(1f, 0.25f, 0.2f) : (teamID == 1 ? new Color(0.2f, 0.6f, 1f) : new Color(0.9f, 0.7f, 0.1f));
 
         foreach (Renderer r in GetComponentsInChildren<Renderer>())
@@ -104,10 +105,13 @@ public class RoadBarrier : MonoBehaviour
         healthBarBg.transform.localScale = new Vector3(2.0f, 0.25f, 1f);
 
         Shader unlitShader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
-        Material bgMat = new Material(unlitShader);
-        if (bgMat.HasProperty("_BaseColor")) bgMat.SetColor("_BaseColor", new Color(0f, 0f, 0f, 0.8f));
-        else bgMat.color = new Color(0f, 0f, 0f, 0.8f);
-        healthBarBg.GetComponent<Renderer>().material = bgMat;
+        if (unlitShader != null)
+        {
+            Material bgMat = new Material(unlitShader);
+            if (bgMat.HasProperty("_BaseColor")) bgMat.SetColor("_BaseColor", new Color(0f, 0f, 0f, 0.8f));
+            else bgMat.color = new Color(0f, 0f, 0f, 0.8f);
+            healthBarBg.GetComponent<Renderer>().material = bgMat;
+        }
 
         GameObject fg = GameObject.CreatePrimitive(PrimitiveType.Quad);
         fg.name = "Barrier_HealthBarFill";
@@ -116,11 +120,14 @@ public class RoadBarrier : MonoBehaviour
         fg.transform.localPosition = new Vector3(0, 0, -0.02f);
         fg.transform.localScale = Vector3.one;
 
-        Material fgMat = new Material(unlitShader);
-        Color fgCol = (teamID == 2) ? new Color(1f, 0.3f, 0.3f) : new Color(0.3f, 0.8f, 1f);
-        if (fgMat.HasProperty("_BaseColor")) fgMat.SetColor("_BaseColor", fgCol);
-        else fgMat.color = fgCol;
-        fg.GetComponent<Renderer>().material = fgMat;
+        if (unlitShader != null)
+        {
+            Material fgMat = new Material(unlitShader);
+            Color fgCol = (teamID == 2) ? new Color(1f, 0.3f, 0.3f) : new Color(0.3f, 0.8f, 1f);
+            if (fgMat.HasProperty("_BaseColor")) fgMat.SetColor("_BaseColor", fgCol);
+            else fgMat.color = fgCol;
+            fg.GetComponent<Renderer>().material = fgMat;
+        }
         healthBarFill = fg.transform;
     }
 
@@ -156,9 +163,12 @@ public class RoadBarrier : MonoBehaviour
         flash.transform.localScale = Vector3.one * 2.5f;
         Destroy(flash.GetComponent<Collider>());
         Shader unlit = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Transparent");
-        Material fMat = new Material(unlit);
-        fMat.color = new Color(1f, 0.6f, 0.1f, 0.8f);
-        flash.GetComponent<MeshRenderer>().sharedMaterial = fMat;
+        if (unlit != null)
+        {
+            Material fMat = new Material(unlit);
+            fMat.color = new Color(1f, 0.6f, 0.1f, 0.8f);
+            flash.GetComponent<MeshRenderer>().sharedMaterial = fMat;
+        }
         Destroy(flash, 0.25f);
 
         AllBarriers.Remove(this);

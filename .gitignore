@@ -5,6 +5,7 @@
 /[Bb]uilds/
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
+*_BurstDebugInformation_DoNotShip/
 
 # Identifiants serveur (VPS, Supabase, clé SSH) — ne JAMAIS committer, voir CREDENTIALS.md.
 /CREDENTIALS.md

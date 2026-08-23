@@ -205,7 +205,7 @@ public class DestructibleEnvironment : MonoBehaviour
         
         foreach (var r in renderers)
         {
-            if (r != null && !r.gameObject.name.Contains("Health"))
+            if (r != null && !r.gameObject.name.Contains("Health") && litOrUnlit != null)
             {
                 Material m = new Material(litOrUnlit);
                 Color rubbleColor = new Color(0.10f, 0.09f, 0.08f, 1f);

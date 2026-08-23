@@ -70,7 +70,7 @@ public class TacticalPathManager : MonoBehaviour
             lineRenderer = gameObject.AddComponent<LineRenderer>();
             lineRenderer.startWidth = 0.3f;
             lineRenderer.endWidth = 0.3f;
-            lineRenderer.material = new Material(Shader.Find("Sprites/Default"));
+            lineRenderer.material = SafeMaterialFactory.CreateUnlit(Color.cyan);
             lineRenderer.startColor = Color.cyan;
             lineRenderer.endColor = Color.blue;
         }

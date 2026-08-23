@@ -272,7 +272,14 @@ public class MapTileLoader : MonoBehaviour
                      ?? Shader.Find("Universal Render Pipeline/Unlit")
                      ?? Shader.Find("Standard")
                      ?? Shader.Find("Unlit/Texture");
-        
+
+        if (shader == null)
+        {
+            // Aucun shader disponible (build Dedicated Server) — la texture du sol est purement
+            // cosmétique, sans incidence sur la simulation, on l'ignore proprement.
+            return;
+        }
+
         Material mat = new Material(shader);
         mat.name = "OSM_Ground_Material";
         

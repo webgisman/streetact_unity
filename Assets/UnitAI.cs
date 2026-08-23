@@ -398,9 +398,9 @@ public partial class UnitAI : MonoBehaviour
                     }
                 }
 
-                if (gradTex != null)
+                Shader litShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Unlit");
+                if (gradTex != null && litShader != null)
                 {
-                    Shader litShader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Unlit");
                     Material mortarMat = new Material(litShader);
                     mortarMat.mainTexture = gradTex;
                     if (mortarMat.HasProperty("_BaseMap")) mortarMat.SetTexture("_BaseMap", gradTex);

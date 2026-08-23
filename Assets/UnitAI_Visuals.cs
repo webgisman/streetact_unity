@@ -30,8 +30,12 @@ public partial class UnitAI
         {
             if (cachedTankTracerMat == null)
             {
-                cachedTankTracerMat = new Material(Shader.Find("Sprites/Default") ?? Shader.Find("Universal Render Pipeline/Unlit"));
-                cachedTankTracerMat.color = new Color(1f, 0.5f, 0f);
+                Shader tracerShader = Shader.Find("Sprites/Default") ?? Shader.Find("Universal Render Pipeline/Unlit");
+                if (tracerShader != null)
+                {
+                    cachedTankTracerMat = new Material(tracerShader);
+                    cachedTankTracerMat.color = new Color(1f, 0.5f, 0f);
+                }
             }
             line.sharedMaterial = cachedTankTracerMat;
         }
@@ -39,8 +43,12 @@ public partial class UnitAI
         {
             if (cachedBulletTracerMat == null)
             {
-                cachedBulletTracerMat = new Material(Shader.Find("Sprites/Default") ?? Shader.Find("Universal Render Pipeline/Unlit"));
-                cachedBulletTracerMat.color = Color.yellow;
+                Shader tracerShader = Shader.Find("Sprites/Default") ?? Shader.Find("Universal Render Pipeline/Unlit");
+                if (tracerShader != null)
+                {
+                    cachedBulletTracerMat = new Material(tracerShader);
+                    cachedBulletTracerMat.color = Color.yellow;
+                }
             }
             line.sharedMaterial = cachedBulletTracerMat;
         }
@@ -90,7 +98,8 @@ public partial class UnitAI
         ParticleSystemRenderer renderer = ps.GetComponent<ParticleSystemRenderer>();
         if (cachedBloodMat == null)
         {
-            cachedBloodMat = new Material(Shader.Find("Sprites/Default") ?? Shader.Find("Universal Render Pipeline/Unlit"));
+            Shader bloodShader = Shader.Find("Sprites/Default") ?? Shader.Find("Universal Render Pipeline/Unlit");
+            if (bloodShader != null) cachedBloodMat = new Material(bloodShader);
         }
         renderer.sharedMaterial = cachedBloodMat;
         
@@ -137,7 +146,8 @@ public partial class UnitAI
         ParticleSystemRenderer renderer = ps.GetComponent<ParticleSystemRenderer>();
         if (cachedSparksMat == null)
         {
-            cachedSparksMat = new Material(Shader.Find("Sprites/Default") ?? Shader.Find("Universal Render Pipeline/Unlit"));
+            Shader sparksShader = Shader.Find("Sprites/Default") ?? Shader.Find("Universal Render Pipeline/Unlit");
+            if (sparksShader != null) cachedSparksMat = new Material(sparksShader);
         }
         renderer.sharedMaterial = cachedSparksMat;
 
@@ -255,10 +265,10 @@ public partial class UnitAI
         ParticleSystemRenderer renderer = ps.GetComponent<ParticleSystemRenderer>();
         if (cachedSmokeMat == null)
         {
-            Shader smokeShader = Shader.Find("Universal Render Pipeline/Particles/Unlit") 
-                              ?? Shader.Find("Legacy Shaders/Particles/Alpha Blended Premultiply") 
+            Shader smokeShader = Shader.Find("Universal Render Pipeline/Particles/Unlit")
+                              ?? Shader.Find("Legacy Shaders/Particles/Alpha Blended Premultiply")
                               ?? Shader.Find("Sprites/Default");
-            cachedSmokeMat = new Material(smokeShader);
+            if (smokeShader != null) cachedSmokeMat = new Material(smokeShader);
         }
         renderer.sharedMaterial = cachedSmokeMat;
         

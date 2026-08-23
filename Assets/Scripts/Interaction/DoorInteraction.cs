@@ -42,7 +42,14 @@ namespace StreetAct.Interaction
             Shader shader = Shader.Find("Universal Render Pipeline/Lit")
                          ?? Shader.Find("Universal Render Pipeline/Unlit")
                          ?? Shader.Find("Standard");
-            
+
+            if (shader == null)
+            {
+                // Aucun shader disponible (build Dedicated Server) — la surbrillance est purement
+                // cosmétique, sans incidence sur la simulation, on l'ignore proprement.
+                return;
+            }
+
             highlightMaterial = new Material(shader);
             highlightMaterial.name = "Door_Highlight_Mat";
             
