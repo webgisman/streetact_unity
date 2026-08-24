@@ -141,20 +141,20 @@ public class TacticalPathManager : MonoBehaviour
         bool wasPressed = false;
         bool wasReleased = false;
 
-        if (Mouse.current != null)
-        {
-            pointerPosition = Mouse.current.position.ReadValue();
-            isPointerActive = true;
-            wasPressed = Mouse.current.leftButton.wasPressedThisFrame;
-            wasReleased = Mouse.current.leftButton.wasReleasedThisFrame;
-        }
-        else if (Touchscreen.current != null && Touchscreen.current.touches.Count > 0)
+        if (Touchscreen.current != null && Touchscreen.current.touches.Count > 0)
         {
             var touch = Touchscreen.current.touches[0];
             pointerPosition = touch.position.ReadValue();
             isPointerActive = true;
             wasPressed = touch.press.wasPressedThisFrame;
             wasReleased = touch.press.wasReleasedThisFrame;
+        }
+        else if (Mouse.current != null)
+        {
+            pointerPosition = Mouse.current.position.ReadValue();
+            isPointerActive = true;
+            wasPressed = Mouse.current.leftButton.wasPressedThisFrame;
+            wasReleased = Mouse.current.leftButton.wasReleasedThisFrame;
         }
         else if (Pointer.current != null)
         {
