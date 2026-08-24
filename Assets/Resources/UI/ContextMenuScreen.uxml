@@ -1,12 +1,10 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <Style src="ContextMenuScreen.uss" />
-    <ui:VisualElement name="root" class="context-root">
-        <ui:VisualElement name="backdrop" class="context-backdrop" />
-        <ui:VisualElement name="menu-panel" class="context-panel" style="width: 88%; max-width: 420px;">
-            <ui:VisualElement class="context-panel__handle" />
-            <ui:Label name="menu-title" text="" class="context-title" />
-            <ui:VisualElement name="button-container" />
-            <ui:Button name="cancel-button" text="Annuler" class="context-cancel" />
+    <ui:VisualElement name="root" class="context-root" style="flex-grow: 1; width: 100%; height: 100%; justify-content: center; align-items: center; picking-mode: Ignore;">
+        <ui:VisualElement name="menu-panel" class="context-panel" style="picking-mode: Position;">
+            <ui:Label name="menu-title" text="ORDRE TACTIQUE" class="context-title" />
+            <ui:VisualElement name="button-container" style="flex-direction: column; margin-top: 10px; margin-bottom: 12px;" />
+            <ui:Button name="cancel-button" text="✕ FERMER" class="context-cancel-btn" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

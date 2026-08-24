@@ -1,36 +1,44 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <Style src="DeploymentDockScreen.uss" />
-    <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore;">
+    <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore; flex-direction: row; justify-content: flex-start;">
 
-        <ui:VisualElement style="position: absolute; left: 14px; top: 12px; picking-mode: Ignore;">
-            <ui:Button name="tab-button" text="🎖️ Déploiement" class="dock-tab-button" />
+        <ui:VisualElement style="position: absolute; left: 20px; bottom: 20px; flex-direction: column-reverse; align-items: flex-start; picking-mode: Ignore;">
+            <ui:Button name="tab-button" text="📦 DÉPLOIEMENT" class="dock-tab-button" />
 
-            <ui:VisualElement name="dock-panel" class="dock-panel" style="display: none; width: 320px; max-height: 620px; margin-top: 8px;">
-                <ui:Label text="QG : RENFORTS &amp; UNITÉS" class="dock-title" style="-unity-font-style: bold; font-size: 20px; margin-bottom: 8px;" />
-                <ui:Label name="effectifs-label" text="Effectifs : 0 / 12" class="dock-effectifs" style="margin-bottom: 10px; -unity-font-style: bold; white-space: normal;" />
-
-                <ui:VisualElement style="flex-direction: row; margin-bottom: 12px;">
-                    <ui:Button name="team1-button" text="Joueur (0)" class="dock-team-btn" style="flex-grow: 1; margin-right: 6px; white-space: normal;" />
-                    <ui:Button name="team2-button" text="IA (0)" class="dock-team-btn" style="flex-grow: 1; white-space: normal;" />
+            <ui:VisualElement name="dock-panel" class="dock-panel slide-in" style="display: none; width: 340px; max-height: 800px; margin-bottom: 15px;">
+                <ui:VisualElement style="flex-direction: row; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <ui:Label text="QG RENFORTS" class="dock-title" />
+                    <ui:Label name="effectifs-label" text="0 / 12" class="dock-effectifs" />
                 </ui:VisualElement>
 
-                <ui:ScrollView name="unit-scroll" style="flex-grow: 1;">
-                    <ui:Button name="btn-fantassin" text="🎖️ Fantassin (Fusil)" class="dock-unit-btn" style="margin-bottom: 7px; min-height: 50px; white-space: normal;" />
-                    <ui:Button name="btn-leopard" text="🛡️ Char Leopard 2 (Obus)" class="dock-unit-btn" style="margin-bottom: 7px; min-height: 50px; white-space: normal;" />
-                    <ui:Button name="btn-canon" text="💥 Véhicule Canon" class="dock-unit-btn" style="margin-bottom: 7px; min-height: 50px; white-space: normal;" />
-                    <ui:Button name="btn-mortier" text="🎯 Mortier Lourd (120m)" class="dock-unit-btn" style="margin-bottom: 7px; min-height: 50px; white-space: normal;" />
-                    <ui:Button name="btn-barricade" text="🚧 Barricade Routière" class="dock-unit-btn" style="margin-bottom: 12px; min-height: 50px; white-space: normal;" />
+                <ui:VisualElement style="flex-direction: row; margin-bottom: 16px;">
+                    <ui:Button name="team1-button" text="Joueur" class="dock-team-btn" style="flex-grow: 1; margin-right: 8px;" />
+                    <ui:Button name="team2-button" text="Ennemi" class="dock-team-btn" style="flex-grow: 1;" />
+                </ui:VisualElement>
 
-                    <ui:Button name="btn-ai-squad" text="🤖 ESCOUADE IA (Rouge)" class="dock-action-btn" style="color: rgb(255, 120, 100); margin-bottom: 7px; min-height: 48px; white-space: normal;" />
-                    <ui:Button name="btn-auto-deploy" text="⚡ DÉPLOIEMENT AUTO" class="dock-action-btn" style="color: rgb(255, 220, 60); margin-bottom: 7px; min-height: 48px; white-space: normal;" />
-                    <ui:Button name="btn-clear" text="🧹 Nettoyer le Terrain" class="dock-action-btn" style="color: rgb(200, 205, 215); min-height: 48px; white-space: normal;" />
+                <ui:ScrollView name="unit-scroll" style="flex-grow: 1; padding-right: 8px;">
+                    <ui:Label text="INFANTERIE" class="section-header" />
+                    <ui:Button name="btn-fantassin" text="🎖️ Fantassin (Fusil)" class="dock-unit-btn" />
+                    
+                    <ui:Label text="VÉHICULES LOURDS" class="section-header" />
+                    <ui:Button name="btn-leopard" text="🛡️ Char Leopard 2" class="dock-unit-btn" />
+                    <ui:Button name="btn-canon" text="💥 Véhicule Canon" class="dock-unit-btn" />
+                    <ui:Button name="btn-mortier" text="🎯 Mortier Lourd" class="dock-unit-btn" />
+                    
+                    <ui:Label text="DÉFENSES" class="section-header" />
+                    <ui:Button name="btn-barricade" text="🚧 Barricade Routière" class="dock-unit-btn" style="margin-bottom: 16px;" />
+
+                    <ui:VisualElement class="separator" />
+                    
+                    <ui:Button name="btn-ai-squad" text="🤖 ESCOUADE IA" class="dock-action-btn danger-btn" />
+                    <ui:Button name="btn-auto-deploy" text="⚡ DÉPLOIEMENT AUTO" class="dock-action-btn warning-btn" />
+                    <ui:Button name="btn-clear" text="🧹 NETTOYER TERRAIN" class="dock-action-btn secondary-btn" />
                 </ui:ScrollView>
             </ui:VisualElement>
         </ui:VisualElement>
 
-        <ui:Label name="placing-banner" text="" class="dock-placing-banner" style="display: none; align-self: center; margin-top: 10px; font-size: 18px; -unity-font-style: bold; white-space: normal; width: 70%; -unity-text-align: middle-center; picking-mode: Ignore;" />
-
-        <ui:Label name="status-message" text="" class="dock-status" style="display: none; align-self: center; margin-top: auto; margin-bottom: 24px; font-size: 16px; -unity-font-style: bold; color: rgb(255, 220, 60); white-space: normal; picking-mode: Ignore;" />
+        <ui:Label name="placing-banner" text="" class="dock-placing-banner" style="display: none; position: absolute; top: 10%; align-self: center; picking-mode: Ignore;" />
+        <ui:Label name="status-message" text="" class="dock-status" style="display: none; position: absolute; bottom: 20%; align-self: center; picking-mode: Ignore;" />
 
     </ui:VisualElement>
 </ui:UXML>

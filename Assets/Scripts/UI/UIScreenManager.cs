@@ -14,6 +14,10 @@ public class UIScreenManager : MonoBehaviour
 {
     public static UIScreenManager Instance { get; private set; }
 
+    /// <summary>Racine brute du UIDocument, indépendante du système d'écrans ci-dessous — utile
+    /// pour un overlay de diagnostic qui doit s'afficher même si le chargement d'un écran échoue.</summary>
+    public VisualElement RootVisualElement { get; private set; }
+
     private readonly Dictionary<string, VisualElement> screens = new Dictionary<string, VisualElement>();
 
     // Nom logique -> chemin Resources (sans extension) du UXML.
@@ -27,8 +31,8 @@ public class UIScreenManager : MonoBehaviour
         ("MatchOver", "UI/MatchOverScreen"),
         ("Leaderboard", "UI/LeaderboardScreen"),
         ("ActionViewBack", "UI/ActionViewBackScreen"),
-        ("DeploymentDock", "UI/DeploymentDockScreen"),
         ("TacticalBottomBar", "UI/TacticalBottomBarScreen"),
+        ("DeploymentDock", "UI/DeploymentDockScreen"),
         ("ContextMenu", "UI/ContextMenuScreen"),
     };
 
@@ -40,8 +44,10 @@ public class UIScreenManager : MonoBehaviour
 
         var document = GetComponent<UIDocument>();
         VisualElement root = document.rootVisualElement;
+        RootVisualElement = root;
         root.style.flexGrow = 1;
         root.pickingMode = PickingMode.Ignore; // laisse passer les clics vers la scène 3D là où aucun écran n'est actif
+        ApplySafeAreaPadding(root);
 
         foreach (var (name, resourcePath) in ScreenDefinitions)
         {
@@ -63,9 +69,44 @@ public class UIScreenManager : MonoBehaviour
             // l'écran (ex: DeploymentDock) n'occupe qu'un coin — chaque UXML gère déjà lui-même le
             // picking-mode de son propre contenu, ce wrapper ne doit jamais interférer.
             instance.pickingMode = PickingMode.Ignore;
+
+            // La propriété USS "picking-mode: Ignore;" déclarée dans le style inline de chaque
+            // UXML (sur son propre élément "root") ne s'applique pas de façon fiable — vérifié
+            // empiriquement : un clic continue de la trouver en PickingMode.Position malgré la
+            // déclaration USS. On le force donc ici en C#, qui n'a besoin d'aucun parsing de
+            // feuille de style pour être correct. Ne concerne QUE l'élément nommé "root" propre à
+            // l'écran (le contenu réel à l'intérieur gère son propre picking, ex: chaque Button).
+            VisualElement innerRoot = instance.Q<VisualElement>("root");
+            if (innerRoot != null) innerRoot.pickingMode = PickingMode.Ignore;
+
             root.Add(instance);
             screens[name] = instance;
         }
+    }
+
+    /// <summary>
+    /// Sur beaucoup d'appareils Android/iOS, une zone de l'écran n'est pas "sûre" (encoche caméra,
+    /// coins arrondis, barre de navigation gestuelle en bas) et peut recouvrir purement et
+    /// simplement des éléments ancrés en bord d'écran (ex: le bouton "Fin de tour" à 16px du bord
+    /// bas-droit) — invisible dans l'Éditeur, où cette zone n'existe pas, donc jamais repéré en dev.
+    /// On calcule l'inset une fois ici en POURCENTAGE de l'écran (jamais en pixels/points) : ça
+    /// évite toute conversion écran→panel dépendante du mode de scaling du PanelSettings, puisque
+    /// Screen.safeArea et Screen.width/height utilisent déjà le même repère.
+    /// </summary>
+    private static void ApplySafeAreaPadding(VisualElement root)
+    {
+        Rect safe = Screen.safeArea;
+        if (Screen.width <= 0 || Screen.height <= 0) return;
+
+        float leftPct = (safe.xMin / Screen.width) * 100f;
+        float rightPct = ((Screen.width - safe.xMax) / Screen.width) * 100f;
+        float bottomPct = (safe.yMin / Screen.height) * 100f;
+        float topPct = ((Screen.height - safe.yMax) / Screen.height) * 100f;
+
+        root.style.paddingLeft = new StyleLength(Length.Percent(leftPct));
+        root.style.paddingRight = new StyleLength(Length.Percent(rightPct));
+        root.style.paddingTop = new StyleLength(Length.Percent(topPct));
+        root.style.paddingBottom = new StyleLength(Length.Percent(bottomPct));
     }
 
     /// <summary>Renvoie la racine d'un écran pour que son contrôleur y fasse ses Query&lt;T&gt;() et bindings d'événements.</summary>

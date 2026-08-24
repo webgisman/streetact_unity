@@ -1,9 +1,9 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
-    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.85);">
+    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.85); picking-mode: Ignore;">
         <ui:VisualElement name="panel" class="panel" style="width: 65%; max-width: 640px;">
             <ui:Label text="CHOISIR UN MODE DE JEU" class="title" style="margin-bottom: 32px;" />
-            <ui:Button name="btn-deathmatch" text="💀 DEATHMATCH&#10;Éliminer l'équipe adverse" class="btn-team2" style="margin-bottom: 20px; height: 110px; white-space: normal;" />
-            <ui:Button name="btn-zone-control" text="🚩 ZONE DE CONTRÔLE&#10;Tenir la zone centrale" class="btn-team1" style="height: 110px; white-space: normal;" />
+            <ui:Button name="btn-deathmatch" text="💀 DEATHMATCH&#10;Éliminer l'équipe adverse" class="btn-team2" style="margin-bottom: 20px; min-height: 116px;" />
+            <ui:Button name="btn-zone-control" text="🚩 ZONE DE CONTRÔLE&#10;Tenir la zone centrale" class="btn-team1" style="min-height: 116px;" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

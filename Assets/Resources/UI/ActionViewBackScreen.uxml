@@ -1,8 +1,8 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore;">
         <ui:VisualElement style="flex-direction: row; justify-content: space-between; padding: 16px; picking-mode: Ignore;">
-            <ui:Button name="back-button" text="◀ VUE 2D (CARTE)" style="color: rgb(255, 242, 51); width: 220px; height: 56px;" />
-            <ui:Label name="focus-banner" text="" class="panel" style="display: none; color: rgb(70, 220, 255); font-size: 20px; -unity-font-style: bold; padding: 8px 20px; picking-mode: Ignore;" />
+            <ui:Button name="back-button" text="◀ VUE 2D (CARTE)" class="btn-secondary" style="min-width: 220px; min-height: 68px;" />
+            <ui:Label name="focus-banner" text="" class="panel" style="display: none; color: rgb(70, 220, 255); font-size: 26px; -unity-font-style: bold; padding: 8px 20px; picking-mode: Ignore;" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

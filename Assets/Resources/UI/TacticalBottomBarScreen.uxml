@@ -1,19 +1,66 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
-    <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore;">
+    <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore; width: 100%; height: 100%;">
 
-        <ui:VisualElement name="planification-group" style="flex-grow: 1; picking-mode: Ignore;">
-            <ui:Button name="end-turn-button" text="▶️ FIN TOUR" class="btn-primary" style="position: absolute; right: 16px; bottom: 16px; width: 150px; height: 56px;" />
+        <!-- PROFESSIONAL MILITARY DASHBOARD (155px height, clean 2-row layout) -->
+        <ui:VisualElement name="top-dashboard" style="position: absolute; top: 0; left: 0; right: 0; height: 155px; background-color: rgb(15, 15, 18); border-bottom-width: 3px; border-bottom-color: rgb(198, 150, 46); picking-mode: Position; flex-direction: row; justify-content: space-between; padding: 8px 14px;">
+            
+            <!-- Left/Center Main Column -->
+            <ui:VisualElement style="flex-grow: 1; flex-direction: column; justify-content: space-between; picking-mode: Ignore; margin-right: 15px;">
+                
+                <!-- Row 1: Squad Group Portraits (Left) + Notification Bell + End Turn (Right) -->
+                <ui:VisualElement style="flex-direction: row; justify-content: space-between; align-items: center; min-height: 56px; picking-mode: Ignore;">
+                    
+                    <!-- Squad Portraits -->
+                    <ui:VisualElement style="flex-direction: row; align-items: center; picking-mode: Ignore;">
+                        <ui:VisualElement name="squad-bar" style="flex-direction: row; align-items: center; picking-mode: Ignore;" />
+                    </ui:VisualElement>
 
-            <ui:VisualElement name="contextual-bar" style="display: none; position: absolute; left: 16px; bottom: 16px; flex-direction: row; picking-mode: Position;">
-                <ui:Button name="deselect-button" text="❌" style="width: 56px; height: 56px; color: rgb(255, 115, 115); margin-right: 6px;" />
-                <ui:Button name="undo-button" text="↩️ Annuler" style="width: 110px; height: 56px; color: rgb(255, 217, 51); margin-right: 6px;" />
-                <ui:Button name="view3d-button" text="🔍 VUE 3D" style="display: none; width: 130px; height: 56px; color: rgb(51, 242, 255);" />
+                    <!-- Top-Right Actions: Bell + End Turn -->
+                    <ui:VisualElement style="flex-direction: row; align-items: center; picking-mode: Ignore;">
+                        
+                        <ui:VisualElement name="planification-group" style="picking-mode: Ignore; margin-right: 12px;">
+                            <ui:VisualElement name="notif-bell-wrap" style="align-items: center;">
+                                <ui:Button name="notif-bell-button" text="🔔" style="width: 44px; height: 44px; border-radius: 22px; background-color: rgba(25, 25, 30, 0.9); color: white; font-size: 18px; border-width: 1px; border-color: rgba(255,255,255,0.15);" />
+                                <ui:Label name="notif-bell-badge" text="" class="notif-badge" style="display: none; position: absolute; top: -3px; right: -3px; background-color: red; border-radius: 10px; padding: 1px 5px; color: white; font-size: 10px; -unity-font-style: bold;" />
+                            </ui:VisualElement>
+                        </ui:VisualElement>
+
+                        <ui:VisualElement name="top-actions-row" style="flex-direction: row; align-items: center; picking-mode: Ignore;">
+                            <ui:Button name="end-turn-button" text="▶ FIN DE TOUR" style="height: 44px; min-width: 150px; padding: 0 16px; background-color: rgba(41, 128, 185, 0.95); border-color: rgb(52, 152, 219); border-width: 1px; border-radius: 6px; color: white; font-size: 15px; -unity-font-style: bold; letter-spacing: 0.5px;" />
+                        </ui:VisualElement>
+
+                        <!-- Execution Group -->
+                        <ui:VisualElement name="execution-group" style="display: none; flex-direction: row; align-items: center; picking-mode: Position;">
+                            <ui:Label name="execution-label" text="ACTION EN COURS..." style="background-color: rgba(20,20,25,0.95); border-radius: 6px; color: rgb(255, 217, 51); font-size: 14px; -unity-font-style: bold; padding: 8px 14px; border-width: 1px; border-color: rgba(255,217,51,0.3); margin-right: 8px;" />
+                            <ui:Button name="skip-button" text="Passer" style="height: 40px; padding: 0 12px; background-color: rgba(255,255,255,0.12); border-radius: 6px; color: white; font-size: 13px; -unity-font-style: bold;" />
+                        </ui:VisualElement>
+
+                    </ui:VisualElement>
+
+                </ui:VisualElement>
+
+                <!-- Row 2: Selected Unit Contextual Bar -->
+                <ui:VisualElement style="flex-direction: row; align-items: center; min-height: 52px; picking-mode: Ignore;">
+                    
+                    <ui:VisualElement name="contextual-bar" style="display: none; flex-direction: row; align-items: center; background-color: rgba(22, 24, 30, 0.95); border-color: rgba(255,255,255,0.12); border-width: 1px; border-radius: 6px; padding: 4px 12px;">
+                        <ui:VisualElement name="unit-info" style="flex-direction: column; margin-right: 14px; padding-right: 14px; border-right-width: 1px; border-right-color: rgba(255,255,255,0.15);">
+                            <ui:Label name="unit-name" text="UNITÉ SÉLECTIONNÉE" style="color: white; font-size: 13px; -unity-font-style: bold;" />
+                            <ui:Label name="unit-health" text="HP: 100/100" style="color: rgb(46, 204, 113); font-size: 12px; -unity-font-style: bold;" />
+                        </ui:VisualElement>
+
+                        <ui:Button name="action-move" text="📍 TRAJECTOIRE" style="height: 38px; padding: 0 10px; margin-right: 6px; background-color: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.15); border-radius: 5px; border-width: 1px; color: rgb(230,230,230); font-size: 13px; -unity-font-style: bold;" />
+                        <ui:Button name="view3d-button" text="🔍 VUE 3D" style="display: none; height: 38px; padding: 0 10px; margin-right: 6px; background-color: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.15); border-radius: 5px; border-width: 1px; color: rgb(230,230,230); font-size: 13px; -unity-font-style: bold;" />
+                        <ui:Button name="undo-button" text="↩ ANNULER" style="height: 38px; padding: 0 10px; margin-right: 6px; background-color: rgba(241, 196, 15, 0.12); border-color: rgba(241, 196, 15, 0.5); border-radius: 5px; border-width: 1px; color: rgb(241, 196, 15); font-size: 13px; -unity-font-style: bold;" />
+                        <ui:Button name="deselect-button" text="✕" style="height: 38px; width: 38px; background-color: rgba(231, 76, 60, 0.15); border-color: rgba(231, 76, 60, 0.5); border-radius: 5px; border-width: 1px; color: rgb(231, 76, 60); font-size: 15px; -unity-font-style: bold;" />
+                    </ui:VisualElement>
+
+                </ui:VisualElement>
+
             </ui:VisualElement>
-        </ui:VisualElement>
 
-        <ui:VisualElement name="execution-group" style="display: none; position: absolute; top: 16px; left: 16px; right: 16px; flex-direction: row; justify-content: space-between; picking-mode: Position;">
-            <ui:Label name="execution-label" text="ACTION EN COURS..." class="panel" style="color: rgb(255, 217, 51); font-size: 22px; -unity-font-style: bold; padding: 10px 24px;" />
-            <ui:Button name="skip-button" text="Passer" style="width: 120px; height: 46px;" />
+            <!-- Dedicated Right Column for Radar (155px width) -->
+            <ui:VisualElement style="width: 155px; height: 100%; picking-mode: Ignore;" />
+
         </ui:VisualElement>
 
     </ui:VisualElement>

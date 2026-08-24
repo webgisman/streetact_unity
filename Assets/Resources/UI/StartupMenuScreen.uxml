@@ -1,16 +1,14 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
-    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(4, 5, 6, 0.9);">
+    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(4, 5, 6, 0.9); picking-mode: Ignore;">
         <ui:VisualElement class="panel" style="width: 75%; max-width: 620px;">
             <ui:VisualElement style="width: 96px; height: 96px; align-self: center; margin-bottom: 12px; background-image: url(&apos;/Assets/Icon/NovgovIcon.png&apos;); -unity-background-scale-mode: scale-to-fit;" />
             <ui:Label text="⚔️ NOVGOV : CHAMP DE BATAILLE" class="title" style="margin-bottom: 24px; font-size: 30px;" />
 
-            <ui:Button name="btn-offline" text="🏙️ COMBAT URBAIN HORS-LIGNE&#10;Chargement immédiat" style="height: 90px; margin-bottom: 14px; white-space: normal; color: rgb(70, 220, 255);" />
-            <ui:Button name="btn-gps" text="🛰️ MA POSITION GPS RÉELLE&#10;Géolocalisation directe" style="height: 90px; margin-bottom: 14px; white-space: normal; color: rgb(80, 255, 110);" />
-            <ui:Button name="btn-multiplayer" text="⚔️ MULTIJOUEUR (PvP en ligne)" class="btn-primary" style="height: 70px; margin-bottom: 14px; color: rgb(255, 145, 40);" />
+            <ui:Button name="btn-offline" text="🏙️ COMBAT URBAIN HORS-LIGNE&#10;Chargement immédiat" class="btn-secondary" style="min-height: 96px; margin-bottom: 14px; white-space: normal;" />
+            <ui:Button name="btn-gps" text="🛰️ MA POSITION GPS RÉELLE&#10;Géolocalisation directe" class="btn-secondary" style="min-height: 96px; margin-bottom: 14px; white-space: normal;" />
+            <ui:Button name="btn-multiplayer" text="⚔️ MULTIJOUEUR (PvP en ligne)" class="btn-primary" style="min-height: 76px; margin-bottom: 14px; white-space: normal;" />
 
-            <ui:Label name="gps-status-label" text="" style="-unity-text-align: middle-center; color: rgb(255, 220, 80); font-size: 20px; margin-bottom: 14px; white-space: normal;" />
-
-            <ui:Button name="btn-play-current" text="▶️ JOUER (Terrain actuel)" style="height: 60px;" />
+            <ui:Label name="gps-status-label" text="" style="-unity-text-align: middle-center; color: rgb(255, 220, 80); font-size: 26px; margin-bottom: 14px; white-space: normal;" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

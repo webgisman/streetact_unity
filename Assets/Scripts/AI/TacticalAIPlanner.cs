@@ -26,7 +26,7 @@ public static class TacticalAIPlanner
         for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
         {
             UnitAI target = UnitAI.AllLivingUnits[i];
-            if (target != null && !target.isDead && target.isPlayerControlled && !target.isCamouflaged)
+            if (target != null && !target.isDead && target.isPlayerControlled && !target.isCamouflaged && target.teamID != unit.teamID)
             {
                 // Vérifier si le joueur est repéré par un éclaireur ou l'unité elle-même
                 if (UnitAI.IsUnitSpottedByTeam(target, unit.teamID))

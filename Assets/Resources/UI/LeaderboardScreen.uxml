@@ -1,5 +1,5 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
-    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.9);">
+    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.9); picking-mode: Ignore;">
         <ui:VisualElement class="panel" style="width: 80%; max-width: 640px; height: 70%;">
             <ui:Label text="🏆 CLASSEMENT" class="title" style="margin-bottom: 16px;" />
             <ui:Label name="loading-label" text="Chargement..." class="hint" />
