@@ -183,8 +183,8 @@ namespace Novgov.Server
                 zone.ResetProgress();
             }
 
-            // Les deux camps sont pilotés par de vrais joueurs : TacticalAIPlanner ne les touchera
-            // que si isGhosted passe à true (voir TacticalAIPlanner.cs, guard assoupli).
+            // Les deux camps sont pilotés par de vrais joueurs : TacticalAIPlanner ne les
+            // planifiera donc jamais (voir TacticalAIPlanner.cs, guard isPlayerControlled).
             foreach (var unit in UnitAI.AllLivingUnits) unit.isPlayerControlled = true;
 
             p1.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 1, opponent_username = p2.Username, mode = mode });
@@ -316,12 +316,9 @@ namespace Novgov.Server
 
             if (shouldGhost)
             {
-                foreach (var u in myUnits)
-                {
-                    u.isGhosted = true;
-                    u.ClearTacticalPath();
-                    TacticalAIPlanner.PlanTurnForUnit(u);
-                }
+                // Plus de substitut IA pour un joueur absent/déconnecté : ses unités gardent
+                // simplement une trajectoire vide et restent immobiles ce tour-ci.
+                foreach (var u in myUnits) u.ClearTacticalPath();
 
                 if (!opponent.IsDisconnected)
                 {
@@ -335,7 +332,6 @@ namespace Novgov.Server
             }
             else
             {
-                foreach (var u in myUnits) u.isGhosted = false;
                 ApplyOrdersToUnits(myUnits, conn.PendingOrders);
             }
         }
@@ -424,7 +420,6 @@ namespace Novgov.Server
             foreach (var unit in allUnits)
             {
                 unit.ResetOrderState();
-                unit.isGhosted = false;
             }
 
             var result = new NetMessage

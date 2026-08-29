@@ -81,11 +81,11 @@ public static class LeaderboardController
                 row.style.justifyContent = Justify.SpaceBetween;
                 row.style.paddingTop = 8; row.style.paddingBottom = 8;
                 row.style.borderBottomWidth = 1;
-                row.style.borderBottomColor = new StyleColor(new Color(0.227f, 0.290f, 0.329f));
+                row.style.borderBottomColor = new StyleColor(NovgovTheme.PanelBorderDim);
 
                 var rankLabel = new Label($"#{rank}");
                 rankLabel.style.width = 60;
-                rankLabel.style.color = new StyleColor(new Color(0.588f, 0.635f, 0.667f));
+                rankLabel.style.color = new StyleColor(rank == 1 ? NovgovTheme.Accent : NovgovTheme.TextDim);
 
                 var nameLabel = new Label(entry.username);
                 nameLabel.style.flexGrow = 1;

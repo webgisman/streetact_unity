@@ -19,8 +19,31 @@ public class UnitSpawnerUI : MonoBehaviour
     public int maxUnitsPerTeam = 12;
     public int selectedTeam = 1; // 1 = Joueur (Bleu), 2 = Ennemi (Rouge)
 
+    /// <summary>Mode "à deux sur le même appareil" (case à cocher du menu de démarrage, voir
+    /// GameManagerUI) : les DEUX équipes sont contrôlées manuellement, aucune IA n'agit pour
+    /// l'équipe 2 — chaque joueur se relaie sur l'appareil pour donner ses ordres à son camp
+    /// pendant la phase de Planification. Remis à false par défaut à chaque lancement (mode
+    /// normal solo vs IA), activé explicitement au clic sur MODE SOLO si la case est cochée.</summary>
+    public static bool HotseatMode = false;
+
+    // Les barricades n'ont pas de UnitAI (voir RoadBarrier), donc jamais comptées par
+    // GetTeamLivingUnitsCount/maxUnitsPerTeam ci-dessus — sans cette limite dédiée, un camp pouvait
+    // en poser un nombre illimité.
+    [Header("Stock Barricades")]
+    public int maxBarricadesPerTeam = 8;
+
     // État du Drag & Drop / Placement
     public static bool IsPlacingUnit = false;
+    // Marqué à Time.frameCount à chaque frame où HandlePlacementPreview traite une entrée —
+    // TacticalPathManager.HandlePointerInput lit AUSSI la souris dans son propre Update(), sur la
+    // MÊME frame. Un tap simple pose une unité puis appelle CancelPlacement() (IsPlacingUnit →
+    // false) ; si TacticalPathManager s'exécute ensuite dans cette même frame, son garde-fou
+    // `if (IsPlacingUnit) return;` ne voit plus que IsPlacingUnit est déjà retombé à false, et
+    // retraite ce même relâchement de clic comme un tap normal sur l'unité qui vient d'être posée
+    // (ex: ouvre le menu RETIRER d'une barricade fraîchement déployée). Ce marqueur, vérifié EN
+    // PLUS de IsPlacingUnit, ferme cette fenêtre de course indépendamment de l'ordre d'exécution
+    // des scripts.
+    public static int lastPlacementActionFrame = -1;
     private UnitType? activePlacingType = null;
     private GameObject previewRing;
     private Material previewMat;
@@ -52,16 +75,11 @@ public class UnitSpawnerUI : MonoBehaviour
         previewRing.GetComponent<MeshRenderer>().sharedMaterial = previewMat;
         previewRing.SetActive(false);
 
-        StartCoroutine(AutoSpawnInitialUnitsRoutine());
-    }
-
-    private System.Collections.IEnumerator AutoSpawnInitialUnitsRoutine()
-    {
-        yield return new WaitForSeconds(0.8f);
-        if (GetTotalLivingUnitsCount() == 0)
-        {
-            AutoDeployBattlefield();
-        }
+        // Pas de déploiement automatique au lancement : le joueur choisit lui-même où placer
+        // chaque unité via le dock "QG Renforts" (voir HandlePlacementPreview, qui vérifie déjà
+        // qu'on ne pose jamais un char/canon sur un toit). L'ancien auto-spawn plaçait les deux
+        // camps sur des points calculés par plus-proche-NavMesh, sans cette vérification —
+        // d'où des unités qui apparaissaient parfois à l'intérieur des bâtiments générés.
     }
 
     void Update()
@@ -95,6 +113,14 @@ public class UnitSpawnerUI : MonoBehaviour
 
     private void HandlePlacementPreview()
     {
+        // Voir le commentaire sur lastPlacementActionFrame : marqué ici, avant toute autre chose,
+        // pour couvrir tous les types d'unité traités ci-dessous, barricades comprises — MÊME
+        // méthode de placement que les autres (un tap = un point testé), pas de glisser : une
+        // barricade n'est qu'un type d'unité de plus ici, avec une seule différence de
+        // comportement une fois le point validé (voir plus bas, propose un menu au lieu de poser
+        // immédiatement, et reste en mode placement pour enchaîner la suivante).
+        lastPlacementActionFrame = Time.frameCount;
+
         try
         {
             Vector2 pointerPos = Vector2.zero;
@@ -213,36 +239,64 @@ public class UnitSpawnerUI : MonoBehaviour
                     // Ignorer si on a glissé pour bouger la caméra (plus de 45 pixels)
                     if (dragDist < 45f)
                     {
-                        // Ignorer les clics sur le bouton d'annulation en haut à gauche
-                        Vector2 guiPos = new Vector2(pointerPos.x, Screen.height - pointerPos.y);
-                        float uiScale = Mathf.Clamp(Screen.width / 480f, 1.35f, 2.2f);
-                        Rect cancelBtnRect = new Rect(15 * uiScale, 15 * uiScale, 230 * uiScale, 44 * uiScale);
-                        
-                        if (!cancelBtnRect.Contains(guiPos))
+                        if (tappedOnExistingUnit)
                         {
-                            if (tappedOnExistingUnit)
+                            // On ne redéploie jamais une unité par-dessus une autre déjà posée :
+                            // on annule le placement pour que le prochain tap serve à la sélectionner.
+                            CancelPlacement();
+                            ShowMessage("Emplacement occupé — placement annulé. Retape sur l'unité pour la sélectionner.", 2.5f);
+                        }
+                        else if (isValid && activePlacingType.HasValue && activePlacingType.Value == UnitType.BarricadeRoutiere)
+                        {
+                            if (RemainingBarricadeStock(selectedTeam) <= 0)
                             {
-                                // On ne redéploie jamais une unité par-dessus une autre déjà posée :
-                                // on annule le placement pour que le prochain tap serve à la sélectionner.
-                                CancelPlacement();
-                                ShowMessage("Emplacement occupé — placement annulé. Retape sur l'unité pour la sélectionner.", 2.5f);
+                                ShowMessage($"Nombre insuffisant : stock de barricades épuisé ({maxBarricadesPerTeam} max par camp) !", 2.5f);
                             }
-                            else if (isValid && activePlacingType.HasValue)
+                            else if (!lastPlacedBarricadeAnchor.HasValue)
                             {
-                                Debug.Log($"<color=lime>[UnitSpawnerUI] 🚀 DÉPLOIEMENT : {activePlacingType.Value} en position {navHit.position} pour équipe {selectedTeam} !</color>");
-                                SpawnUnitAt(activePlacingType.Value, navHit.position, selectedTeam);
-                                CancelPlacement();
-#if UNITY_ANDROID || UNITY_IOS
-                                if (Application.isMobilePlatform) Handheld.Vibrate();
-#endif
+                                // Toute première barricade de cette session : posée DIRECTEMENT,
+                                // exactement comme n'importe quelle autre unité — aucun menu, aucun
+                                // calcul de trajectoire. Reste en mode placement (contrairement aux
+                                // autres types) pour permettre une extension à partir d'ici.
+                                Debug.Log($"<color=lime>[UnitSpawnerUI] 🚀 Barricade posée en {navHit.position} pour équipe {selectedTeam} !</color>");
+                                SpawnUnitAt(UnitType.BarricadeRoutiere, navHit.position, selectedTeam);
+                                lastPlacedBarricadeAnchor = navHit.position;
                             }
                             else
                             {
-                                string errMsg = (isHeavyUnit && isBuildingOrRoof)
-                                    ? "⚠️ Les véhicules et canons doivent être placés sur la rue, pas sur les toits !"
-                                    : "Emplacement hors-carte ! Touchez une rue pour déployer l'unité.";
-                                ShowMessage(errMsg, 2.5f);
+                                // Extension : ce tap prolonge la ligne depuis la dernière barricade
+                                // posée. Calcule le trajet entre les deux, en évitant les bâtiments,
+                                // dans la limite du stock restant — SEULEMENT dans ce cas le menu de
+                                // confirmation s'affiche (voir ShowBarricadeExtensionMenu).
+                                List<Vector3> extension = ComputeBarricadeExtensionPositions(lastPlacedBarricadeAnchor.Value, navHit.position, BARRICADE_SPACING, RemainingBarricadeStock(selectedTeam));
+                                if (extension.Count == 0)
+                                {
+                                    ShowMessage("Nombre insuffisant ou aucun emplacement faisable pour cette extension (bâtiments sur le trajet) — retape ailleurs.", 2.5f);
+                                }
+                                else
+                                {
+                                    pendingBarricadeExtension = extension;
+#if !UNITY_SERVER
+                                    TacticalPathManager.Instance?.ShowBarricadeExtensionMenu(extension.Count);
+#endif
+                                }
                             }
+                        }
+                        else if (isValid && activePlacingType.HasValue)
+                        {
+                            Debug.Log($"<color=lime>[UnitSpawnerUI] 🚀 DÉPLOIEMENT : {activePlacingType.Value} en position {navHit.position} pour équipe {selectedTeam} !</color>");
+                            SpawnUnitAt(activePlacingType.Value, navHit.position, selectedTeam);
+                            CancelPlacement();
+#if UNITY_ANDROID || UNITY_IOS
+                            if (Application.isMobilePlatform) Handheld.Vibrate();
+#endif
+                        }
+                        else
+                        {
+                            string errMsg = (isHeavyUnit && isBuildingOrRoof)
+                                ? "Les véhicules et canons doivent être placés sur la rue, pas sur les toits !"
+                                : "Emplacement hors-carte ! Touchez une rue pour déployer l'unité.";
+                            ShowMessage(errMsg, 2.5f);
                         }
                     }
                 }
@@ -252,6 +306,97 @@ public class UnitSpawnerUI : MonoBehaviour
         {
             Debug.LogError($"[UnitSpawnerUI Placement Error] {ex.Message}\n{ex.StackTrace}");
         }
+    }
+
+    // Espacement approximatif d'une barricade posée (voir échelle x1.3 dans SpawnUnitAt).
+    private const float BARRICADE_SPACING = 3.5f;
+
+    // Position de la DERNIÈRE barricade posée pendant cette session de placement — null tant
+    // qu'aucune n'a encore été posée. La toute première barricade se pose directement, comme
+    // n'importe quelle autre unité (voir HandlePlacementPreview) : aucun menu, aucun calcul de
+    // trajectoire. Ce n'est qu'à partir de la DEUXIÈME barricade (une "extension" de la première)
+    // que le trajet entre cette ancre et le nouveau point tapé est calculé, avec vérification de
+    // faisabilité (évite les bâtiments) et de stock ; le menu ne s'affiche QUE pour cette
+    // confirmation d'extension, jamais pour un simple premier placement.
+    private Vector3? lastPlacedBarricadeAnchor = null;
+
+    // Trajet d'extension calculé, PAS ENCORE posé — en attente du menu DÉPLOYER/ANNULER (voir
+    // TacticalPathManager.ShowBarricadeExtensionMenu).
+    private List<Vector3> pendingBarricadeExtension = null;
+
+    /// <summary>DÉPLOYER : pose réellement les barricades de l'extension proposée, avance l'ancre
+    /// jusqu'au bout de ce tracé (pour permettre d'enchaîner une NOUVELLE extension à partir de
+    /// là), et reste en mode placement.</summary>
+    public void ConfirmPendingBarricadeExtension()
+    {
+        if (pendingBarricadeExtension == null) return;
+        int count = pendingBarricadeExtension.Count;
+        foreach (var p in pendingBarricadeExtension)
+        {
+            SpawnUnitAt(UnitType.BarricadeRoutiere, p, selectedTeam);
+        }
+        lastPlacedBarricadeAnchor = pendingBarricadeExtension[count - 1];
+        pendingBarricadeExtension = null;
+        ShowMessage($"{count} barricade(s) ajoutée(s) le long du tracé !", 2.5f);
+    }
+
+    /// <summary>ANNULER : abandonne CETTE extension proposée sans rien poser, garde l'ancre
+    /// existante et reste en mode placement pour que le joueur retape un autre point.</summary>
+    public void CancelPendingBarricadeExtension()
+    {
+        pendingBarricadeExtension = null;
+    }
+
+    /// <summary>Rue/NavMesh valide, pas sur un bâtiment ou un toit — même principe que le test de
+    /// faisabilité du tap direct dans HandlePlacementPreview (raycast vertical + collider
+    /// réellement touché, pas BuildingStructure.FindBuildingAt dont l'empreinte 2D déborde souvent
+    /// sur la rue adjacente), réappliqué ici à CHAQUE point intermédiaire d'une extension : le
+    /// trajet entre l'ancre et le point tapé peut très bien longer un bâtiment sur une partie de
+    /// son parcours sans que les deux bouts ne soient concernés.</summary>
+    private bool TryFindFeasibleBarricadeSpot(Vector3 worldPos, out Vector3 result)
+    {
+        result = worldPos;
+        if (!NavMesh.SamplePosition(worldPos, out NavMeshHit navHit, 3.0f, NavMesh.AllAreas)) return false;
+        if (Mathf.Abs(worldPos.y - navHit.position.y) > 2.5f) return false;
+
+        if (Physics.Raycast(navHit.position + Vector3.up * 5f, Vector3.down, out RaycastHit downHit, 10f))
+        {
+            if (downHit.collider != null)
+            {
+                bool isBuildingOrRoof = downHit.collider.GetComponentInParent<BuildingStructure>() != null ||
+                                        downHit.collider.name.ToLower().Contains("building") ||
+                                        downHit.collider.name.ToLower().Contains("roof") ||
+                                        downHit.point.y > 1.8f;
+                if (isBuildingOrRoof) return false;
+            }
+        }
+
+        result = navHit.position;
+        return true;
+    }
+
+    /// <summary>Échantillonne les points d'une extension entre l'ancre (DÉJÀ posée, donc exclue —
+    /// la boucle part de i=1) et le nouveau point tapé, ne retient que ceux réellement faisables,
+    /// et s'arrête dès que maxCount (stock restant) est atteint.</summary>
+    private List<Vector3> ComputeBarricadeExtensionPositions(Vector3 anchor, Vector3 target, float spacing, int maxCount)
+    {
+        var results = new List<Vector3>();
+        if (maxCount <= 0) return results;
+
+        float totalDist = Vector3.Distance(anchor, target);
+        int steps = Mathf.Max(1, Mathf.RoundToInt(totalDist / spacing));
+        Vector3 lastAccepted = anchor;
+
+        for (int i = 1; i <= steps && results.Count < maxCount; i++)
+        {
+            float t = (float)i / steps;
+            Vector3 candidate = Vector3.Lerp(anchor, target, t);
+            if (!TryFindFeasibleBarricadeSpot(candidate, out Vector3 feasible)) continue;
+            if (Vector3.Distance(lastAccepted, feasible) < spacing * 0.6f) continue;
+            results.Add(feasible);
+            lastAccepted = feasible;
+        }
+        return results;
     }
 
     public void StartPlacingUnit(UnitType type)
@@ -264,14 +409,27 @@ public class UnitSpawnerUI : MonoBehaviour
             return;
         }
 
+        if (type == UnitType.BarricadeRoutiere && RemainingBarricadeStock(selectedTeam) <= 0)
+        {
+            ShowMessage($"Stock de barricades épuisé ({maxBarricadesPerTeam} max par camp) !", 3.0f);
+            return;
+        }
+
         activePlacingType = type;
         IsPlacingUnit = true;
         isPanelOpen = false; // Ferme le dock pour libérer tout l'écran tactile
         ignorePlacementTime = Time.time + 0.35f; // Délai anti-misfire
         isPlacementPointerDown = false;
-        
-        string unitName = (type == UnitType.CharLeopard) ? "Char Leopard 2" : (type == UnitType.VehiculeCanon ? "Véhicule Canon" : (type == UnitType.Mortier ? "Mortier" : "Fantassin"));
-        ShowMessage($"📍 Touchez une rue pour déployer : {unitName}", 4.0f);
+
+        if (type == UnitType.BarricadeRoutiere)
+        {
+            ShowMessage($"Touchez une rue pour poser une barricade ({RemainingBarricadeStock(selectedTeam)} restantes) — retapez pour en aligner d'autres à la suite.", 4.0f);
+        }
+        else
+        {
+            string unitName = (type == UnitType.CharLeopard) ? "Char Leopard 2" : (type == UnitType.VehiculeCanon ? "Véhicule Canon" : (type == UnitType.Mortier ? "Mortier" : "Fantassin"));
+            ShowMessage($"Touchez une rue pour déployer : {unitName}", 4.0f);
+        }
         AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateHoverSound(), Camera.main.transform.position);
     }
 
@@ -279,7 +437,14 @@ public class UnitSpawnerUI : MonoBehaviour
     {
         IsPlacingUnit = false;
         activePlacingType = null;
+        lastPlacedBarricadeAnchor = null;
+        pendingBarricadeExtension = null;
         if (previewRing != null) previewRing.SetActive(false);
+        // Si l'annulation vient d'ailleurs que le bouton ANNULER du menu DÉPLOYER lui-même (clic
+        // droit, Échap, bouton DÉPLOIEMENT) — sans ça la fenêtre resterait affichée, orpheline.
+#if !UNITY_SERVER
+        TacticalPathManager.Instance?.CloseBarricadeDeployMenuIfOpen();
+#endif
     }
 
     public void SpawnUnitAt(UnitType type, Vector3 position, int team)
@@ -432,6 +597,12 @@ public class UnitSpawnerUI : MonoBehaviour
         }
         else if (type == UnitType.BarricadeRoutiere)
         {
+            if (RemainingBarricadeStock(team) <= 0)
+            {
+                ShowMessage($"Stock de barricades épuisé ({maxBarricadesPerTeam} max par camp) !", 2.5f);
+                return;
+            }
+
             GameObject barrierPrefab = Resources.Load<GameObject>("Road_barrier");
             if (barrierPrefab != null)
             {
@@ -452,7 +623,7 @@ public class UnitSpawnerUI : MonoBehaviour
             // Son de pose de barricade
             AudioClip clickClip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
             if (clickClip != null) AudioSource.PlayClipAtPoint(clickClip, Camera.main.transform.position, 0.8f);
-            ShowMessage($"🚧 Barricade routière déployée avec succès !", 2.0f);
+            ShowMessage($"Barricade routière déployée avec succès !", 2.0f);
             return;
         }
 
@@ -470,7 +641,11 @@ public class UnitSpawnerUI : MonoBehaviour
             if (unitAI == null) unitAI = newUnitObj.AddComponent<UnitAI>();
 
             unitAI.teamID = team;
-            unitAI.isPlayerControlled = (team == 1);
+            // En hotseat (second joueur humain sur ce même appareil, voir HotseatMode), l'équipe 2
+            // est AUSSI contrôlée manuellement — TacticalAIPlanner ignore déjà toute unité
+            // isPlayerControlled quel que soit son équipe (voir PlanifierTourIA), donc ce seul
+            // indicateur suffit à faire sauter l'IA pour ce camp sans toucher au reste du code.
+            unitAI.isPlayerControlled = (team == 1) || HotseatMode;
             unitAI.teamAssignedBySpawner = true;
             unitAI.isDead = false;
 
@@ -545,7 +720,7 @@ public class UnitSpawnerUI : MonoBehaviour
             // Son de confirmation de déploiement
             AudioClip confirmClip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
             if (confirmClip != null) AudioSource.PlayClipAtPoint(confirmClip, Camera.main.transform.position, 0.8f);
-            ShowMessage($"✅ {newUnitObj.name} déployé avec succès !", 2.0f);
+            ShowMessage($"{newUnitObj.name} déployé avec succès !", 2.0f);
         }
     }
 
@@ -589,6 +764,19 @@ public class UnitSpawnerUI : MonoBehaviour
         }
         return count;
     }
+
+    public int CountBarricadesForTeam(int team)
+    {
+        int count = 0;
+        for (int i = 0; i < RoadBarrier.AllBarriers.Count; i++)
+        {
+            RoadBarrier b = RoadBarrier.AllBarriers[i];
+            if (b != null && b.teamID == team) count++;
+        }
+        return count;
+    }
+
+    public int RemainingBarricadeStock(int team) => Mathf.Max(0, maxBarricadesPerTeam - CountBarricadesForTeam(team));
 
     /// <summary>
     /// Échantillonne plusieurs points de NavMesh autour de "desired" (le point visé lui-même, puis
@@ -644,7 +832,7 @@ public class UnitSpawnerUI : MonoBehaviour
         SpawnUnitAt(UnitType.Mortier, enemyBase + new Vector3(-6f, 0, 5f), 2);
         SpawnUnitAt(UnitType.BarricadeRoutiere, enemyBase + new Vector3(0f, 0, -8f), 2);
 
-        ShowMessage("🤖 [IA] Escouade ennemie complète déployée sur le champ de bataille !", 3.5f);
+        ShowMessage("[IA] Escouade ennemie complète déployée sur le champ de bataille !", 3.5f);
         AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
     }
 
@@ -666,7 +854,7 @@ public class UnitSpawnerUI : MonoBehaviour
 
         // Camp Ennemi IA (Nord-Est)
         SpawnEnemyWave();
-        ShowMessage("⚡ Champ de bataille prêt : Escouades Joueur & IA déployées !", 3.5f);
+        ShowMessage("Champ de bataille prêt : Escouades Joueur & IA déployées !", 3.5f);
     }
 
     private void ShowMessage(string msg, float duration)
@@ -678,7 +866,7 @@ public class UnitSpawnerUI : MonoBehaviour
 #if !UNITY_SERVER
     private VisualElement dockPanel;
     private Button tabButton, team1Button, team2Button;
-    private Label effectifsLabel, placingBanner, statusMessageLabel;
+    private Label effectifsLabel, placingBanner, statusMessageLabel, tabButtonLabel;
     private bool deploymentUiBound = false;
 
     private void BindDeploymentUI()
@@ -688,46 +876,67 @@ public class UnitSpawnerUI : MonoBehaviour
             Debug.LogError("[UnitSpawnerUI] UIScreenManager.Instance introuvable — UIBootstrap ne s'est-il pas exécuté avant cette scène ?");
             return;
         }
-        deploymentUiBound = true;
 
-        VisualElement root = UIScreenManager.Instance.GetScreen("DeploymentDock");
-        tabButton = root.Q<Button>("tab-button");
-        dockPanel = root.Q<VisualElement>("dock-panel");
-        effectifsLabel = root.Q<Label>("effectifs-label");
-        team1Button = root.Q<Button>("team1-button");
-        team2Button = root.Q<Button>("team2-button");
-        placingBanner = root.Q<Label>("placing-banner");
-        statusMessageLabel = root.Q<Label>("status-message");
-
-        tabButton.clicked += () =>
+        // Protégé par un try/catch (comme TacticalPathManager.BindTacticalUI) : sans lui, un seul
+        // élément introuvable dans le UXML (ex: tout juste ajouté, Éditeur pas encore réimporté)
+        // levait une exception qui coupait net TOUS les bindings suivants dans cette méthode —
+        // Fantassin/Char/Canon/Mortier/Barricade compris, pas seulement le bouton concerné.
+        try
         {
-            lastUIClickTime = Time.time;
-            if (IsPlacingUnit)
+            VisualElement root = UIScreenManager.Instance.GetScreen("DeploymentDock");
+            tabButton = root.Q<Button>("tab-button");
+            tabButtonLabel = root.Q<Label>("tab-button-label");
+            if (tabButtonLabel == null)
             {
-                CancelPlacement();
-                ShowMessage("Placement annulé.", 1.5f);
+                // N'interrompt PAS le binding (contrairement à un null-deref immédiat) — mais sans
+                // ce garde-fou, RefreshDeploymentDockUI() (jamais protégée par un try/catch, appelée
+                // chaque frame depuis Update) plantait silencieusement sur tabButtonLabel.text à
+                // CHAQUE frame dès que ce champ était introuvable, coupant tout le reste de la
+                // méthode (dockPanel, effectifs, bannière...) — pas seulement l'étiquette du bouton.
+                Debug.LogError("[UnitSpawnerUI] Label 'tab-button-label' introuvable dans DeploymentDockScreen.uxml (le bouton DÉPLOIEMENT ne pourra pas afficher son texte) — relance l'Éditeur/Play Mode pour forcer une réimportation du UXML.");
             }
-            else
+            dockPanel = root.Q<VisualElement>("dock-panel");
+            effectifsLabel = root.Q<Label>("effectifs-label");
+            team1Button = root.Q<Button>("team1-button");
+            team2Button = root.Q<Button>("team2-button");
+            placingBanner = root.Q<Label>("placing-banner");
+            statusMessageLabel = root.Q<Label>("status-message");
+
+            tabButton.clicked += () =>
             {
-                isPanelOpen = !isPanelOpen;
-            }
-            AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-        };
+                lastUIClickTime = Time.time;
+                if (IsPlacingUnit)
+                {
+                    CancelPlacement();
+                    ShowMessage("Placement annulé.", 1.5f);
+                }
+                else
+                {
+                    isPanelOpen = !isPanelOpen;
+                }
+                AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+            };
 
-        team1Button.clicked += () => { lastUIClickTime = Time.time; selectedTeam = 1; AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position); };
-        team2Button.clicked += () => { lastUIClickTime = Time.time; selectedTeam = 2; AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position); };
+            team1Button.clicked += () => { lastUIClickTime = Time.time; selectedTeam = 1; AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position); };
+            team2Button.clicked += () => { lastUIClickTime = Time.time; selectedTeam = 2; AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position); };
 
-        root.Q<Button>("btn-fantassin").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.Fantassin); };
-        root.Q<Button>("btn-leopard").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.CharLeopard); };
-        root.Q<Button>("btn-canon").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.VehiculeCanon); };
-        root.Q<Button>("btn-mortier").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.Mortier); };
-        root.Q<Button>("btn-barricade").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.BarricadeRoutiere); };
-        root.Q<Button>("btn-ai-squad").clicked += () => { lastUIClickTime = Time.time; SpawnEnemyWave(); };
-        root.Q<Button>("btn-auto-deploy").clicked += () => { lastUIClickTime = Time.time; AutoDeployBattlefield(); };
-        root.Q<Button>("btn-clear").clicked += () => { lastUIClickTime = Time.time; ClearAllUnits(); };
+            root.Q<Button>("btn-fantassin").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.Fantassin); };
+            root.Q<Button>("btn-leopard").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.CharLeopard); };
+            root.Q<Button>("btn-canon").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.VehiculeCanon); };
+            root.Q<Button>("btn-mortier").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.Mortier); };
+            root.Q<Button>("btn-barricade").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.BarricadeRoutiere); };
+            root.Q<Button>("btn-ai-squad").clicked += () => { lastUIClickTime = Time.time; SpawnEnemyWave(); };
+            root.Q<Button>("btn-auto-deploy").clicked += () => { lastUIClickTime = Time.time; AutoDeployBattlefield(); };
+            root.Q<Button>("btn-clear").clicked += () => { lastUIClickTime = Time.time; ClearAllUnits(); };
 
-        // Pas de SetVisible(true) ici : RefreshDeploymentDockUI() (appelé chaque frame depuis
-        // Update) décide seul de la visibilité dès la première frame, startup menu inclus.
+            // Pas de SetVisible(true) ici : RefreshDeploymentDockUI() (appelé chaque frame depuis
+            // Update) décide seul de la visibilité dès la première frame, startup menu inclus.
+            deploymentUiBound = true;
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError($"[UnitSpawnerUI] BindDeploymentUI() a levé une exception : {ex.GetType().Name} — {ex.Message}");
+        }
     }
 
     /// <summary>Remplace l'ancien OnGUI() — met à jour l'affichage sans reconstruire l'UI chaque frame.</summary>
@@ -757,6 +966,7 @@ public class UnitSpawnerUI : MonoBehaviour
         // menu de démarrage dans l'arbre UI Toolkit et intercepte silencieusement tous les taps
         // destinés à ses boutons.
         if (GameManagerUI.Instance != null && GameManagerUI.Instance.IsStartupSelectionActive) hidden = true;
+        if (TacticalPathManager.IsSoloGameOver) hidden = true;
 
         UIScreenManager.Instance.SetVisible("DeploymentDock", !hidden);
         if (hidden) return;
@@ -764,25 +974,36 @@ public class UnitSpawnerUI : MonoBehaviour
         int playerUnits = GetTeamLivingUnitsCount(1);
         int enemyUnits = GetTeamLivingUnitsCount(2);
 
-        tabButton.text = IsPlacingUnit ? "❌ Annuler Placement" : (isPanelOpen ? "▲ Fermer Menu" : $"📦 DÉPLOIEMENT ({playerUnits} vs {enemyUnits})");
+        if (tabButtonLabel != null)
+        {
+            tabButtonLabel.text = IsPlacingUnit ? "Annuler Placement" : (isPanelOpen ? "Fermer Menu" : $"DÉPLOIEMENT ({playerUnits} vs {enemyUnits})");
+        }
         dockPanel.style.display = isPanelOpen ? DisplayStyle.Flex : DisplayStyle.None;
 
         if (isPanelOpen)
         {
             int currentTeamCount = (selectedTeam == 1) ? playerUnits : enemyUnits;
             effectifsLabel.text = $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}";
-            effectifsLabel.style.color = new StyleColor(currentTeamCount >= maxUnitsPerTeam ? Color.red : new Color(0.15f, 0.85f, 1f));
+            effectifsLabel.style.color = new StyleColor(currentTeamCount >= maxUnitsPerTeam ? NovgovTheme.Danger : NovgovTheme.Info);
 
-            team1Button.text = (selectedTeam == 1) ? $"🔵 Joueur ({playerUnits})" : $"Joueur ({playerUnits})";
-            team2Button.text = (selectedTeam == 2) ? $"🔴 IA ({enemyUnits})" : $"IA ({enemyUnits})";
+            team1Button.text = $"Joueur ({playerUnits})";
+            team2Button.text = $"IA ({enemyUnits})";
             team1Button.EnableInClassList("dock-team-btn--active-p1", selectedTeam == 1);
             team2Button.EnableInClassList("dock-team-btn--active-p2", selectedTeam == 2);
         }
 
-        if (IsPlacingUnit && activePlacingType.HasValue)
+        if (pendingBarricadeExtension != null)
         {
-            placingBanner.text = $"MODE PLACEMENT : {activePlacingType.Value}\n[Touchez la rue] Poser | [Annuler]";
-            placingBanner.style.color = new StyleColor(selectedTeam == 1 ? new Color(0.15f, 0.85f, 1f) : Color.red);
+            // Le menu DÉPLOYER/ANNULER de TacticalPathManager (voir ShowBarricadeExtensionMenu)
+            // communique déjà l'état en attente — cette bannière ferait doublon par-dessus.
+            placingBanner.style.display = DisplayStyle.None;
+        }
+        else if (IsPlacingUnit && activePlacingType.HasValue)
+        {
+            placingBanner.text = (activePlacingType.Value == UnitType.BarricadeRoutiere)
+                ? $"MODE PLACEMENT : Barricade ({RemainingBarricadeStock(selectedTeam)} restantes)\n[Touchez la rue] Poser | [Annuler]"
+                : $"MODE PLACEMENT : {activePlacingType.Value}\n[Touchez la rue] Poser | [Annuler]";
+            placingBanner.style.color = new StyleColor(selectedTeam == 1 ? NovgovTheme.TeamPlayer : NovgovTheme.TeamEnemy);
             placingBanner.style.display = DisplayStyle.Flex;
         }
         else
@@ -801,12 +1022,24 @@ public class UnitSpawnerUI : MonoBehaviour
         }
     }
 
+#endif
+
     /// <summary>
     /// Remplace l'ancien test par Rect codées en dur : s'appuie sur le picking natif d'UI Toolkit,
     /// donc reste correct même si la mise en page de l'UI change.
+    /// Déclarée EN DEHORS du bloc #if !UNITY_SERVER (contrairement au reste du binding UI ci-
+    /// dessus) : elle est appelée depuis TacticalCamera.cs et TacticalPathManager_Input.cs sans
+    /// garde de compilation — un build où UNITY_SERVER est défini (ex: sous-cible Dedicated
+    /// Server active par erreur, voir ServerBuildScript.cs) faisait alors échouer TOUTE la
+    /// compilation avec "IsPointerOverOnGUI n'existe pas", pas seulement empêcher ce test de
+    /// fonctionner. Le corps reste conditionnel : côté serveur, il n'y a de toute façon aucun
+    /// UIDocument/panel UI Toolkit à interroger, donc "jamais sur l'UI" est la bonne réponse.
     /// </summary>
     public bool IsPointerOverOnGUI(Vector2 screenPos)
     {
+#if UNITY_SERVER
+        return false;
+#else
         if (Time.time - lastUIClickTime < 0.3f) return true;
 
         // 1. Protection du radar tactique (TacticalRadarUI, dessiné en OnGUI — donc invisible au
@@ -846,6 +1079,6 @@ public class UnitSpawnerUI : MonoBehaviour
             picked = picked.parent;
         }
         return false;
-    }
 #endif
+    }
 }

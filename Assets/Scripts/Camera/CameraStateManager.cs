@@ -166,6 +166,14 @@ public class CameraStateManager : MonoBehaviour
             actionViewUiBound = true;
             var root = UIScreenManager.Instance.GetScreen("ActionViewBack");
             root.Q<UnityEngine.UIElements.Button>("back-button").clicked += ReturnTo2DView;
+
+            // Fin de tour reste joignable sans quitter la vue 3D — s'applique à toutes les unités,
+            // pas seulement à celle actuellement suivie ici (voir TacticalPathManager.LancerExecutionTour).
+            var endTurn3DBtn = root.Q<UnityEngine.UIElements.Button>("end-turn-button-3d");
+            if (endTurn3DBtn != null)
+            {
+                endTurn3DBtn.clicked += () => TacticalPathManager.Instance?.LancerExecutionTour();
+            }
         }
 
         UIScreenManager.Instance.SetVisible("ActionViewBack", newState == CameraState.Action);
@@ -175,7 +183,7 @@ public class CameraStateManager : MonoBehaviour
             var banner = UIScreenManager.Instance.GetScreen("ActionViewBack").Q<UnityEngine.UIElements.Label>("focus-banner");
             if (focusedUnit != null)
             {
-                banner.text = $"🔍 ACTION 3D : {focusedUnit.name.ToUpper()}";
+                banner.text = $"ACTION 3D : {focusedUnit.name.ToUpper()}";
                 banner.style.display = UnityEngine.UIElements.DisplayStyle.Flex;
             }
             else

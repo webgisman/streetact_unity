@@ -1,5 +1,30 @@
 # Intégration côté client Unity
 
+**Ce document décrit le PLAN initial, écrit avant l'implémentation.** L'implémentation réelle a
+pris quelques raccourcis différents une fois en pratique — voir le code directement pour la
+vérité (`Assets/Scripts/Network/MultiplayerMatchController.cs`) :
+- Pas de `LoginUI.cs`/`MatchmakingUI.cs` séparés : **une seule classe**,
+  `MultiplayerMatchController`, gère auth + sélection de mode + attente + HUD de match + fin de
+  partie, chacun via un écran `UIScreenManager` dédié (`Auth`, `ModeSelect`, `Waiting`,
+  `InMatchHud`, `MatchOver`) — pas d'IMGUI/`ProceduralIconFactory`, tout en UI Toolkit (UXML/USS),
+  comme le reste du projet aujourd'hui (l'UI est passée d'IMGUI à UI Toolkit après l'écriture de
+  ce document).
+- L'écran de démarrage (`GameManagerUI`) n'a **que 2 boutons** : "MODE SOLO" (avec un interrupteur
+  Hotseat pour jouer à 2 sur le même appareil) et "MODE CAMPAGNE MULTIJOUEUR" (qui enchaîne GPS
+  puis login/matchmaking) — pas 3 boutons séparés comme envisagé initialement.
+- Le "rejeu" des événements serveur s'appelle `MultiplayerMatchController.PlaySnapshotsCoroutine`
+  (pas `LireTurnResultCoroutine` sur `TacticalPathManager`) et l'envoi des ordres se fait via
+  `MultiplayerMatchController.SubmitLocalTurn()`, appelée depuis
+  `TacticalPathManager.LancerExecutionTour()` quand `MultiplayerMatchController.IsActive` est vrai
+  — l'intention ci-dessous ("attendre le message turn_result... nouvelle coroutine") est bien ce
+  qui a été fait, juste avec ces noms réels.
+- Le déploiement automatique et symétrique décrit plus bas a bien été retenu tel quel
+  (`UnitSpawnerUI.AutoDeployBattlefield()`).
+
+Le reste de ce document (flux cible, répartition des responsabilités serveur/client) reste une
+bonne description de l'intention et de ce qui a effectivement été construit — seuls les noms de
+fichiers/classes ci-dessus ont changé en pratique.
+
 ## Ce qui change dans le flux existant
 
 Aujourd'hui (`GameManagerUI.OnGUI`) : au lancement, l'écran "STREETACT : CHAMP DE BATAILLE"

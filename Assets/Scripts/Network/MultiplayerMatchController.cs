@@ -4,7 +4,9 @@ using System.Linq;
 using Novgov.Auth;
 using UnityEngine;
 using UnityEngine.AI;
+#if !UNITY_SERVER
 using UnityEngine.UIElements;
+#endif
 
 namespace Novgov.Network
 {
@@ -17,6 +19,16 @@ namespace Novgov.Network
     ///
     /// UI en UI Toolkit (voir Assets/Scripts/UI/UIScreenManager.cs) — chaque état a un écran UXML
     /// sous Resources/UI/, câblé une fois dans BindUI() plutôt que redessiné en OnGUI chaque frame.
+    ///
+    /// Tout ce fichier, hormis les membres statiques et SubmitLocalTurn() ci-dessous, est englobé
+    /// dans #if !UNITY_SERVER : cette classe représente exclusivement le flux CLIENT réagissant aux
+    /// messages d'un serveur distant (le serveur autoritaire, lui, a sa propre logique dans
+    /// Assets/Scripts/Server/MatchSessionManager.cs) — rien ici n'a de raison de tourner sur un
+    /// build Dedicated Server. Avant ce garde, un build où UNITY_SERVER se retrouvait défini (ex:
+    /// sous-cible Server restée active par erreur dans les réglages de l'Éditeur, voir
+    /// ServerBuildScript.cs) faisait échouer TOUTE la compilation : Update()/BeginLoginFlow/
+    /// HandleSignIn/etc. appelaient SetUiState/RefreshHudDynamicFields (déclarées plus bas, dans un
+    /// bloc #if !UNITY_SERVER déjà existant) sans être elles-mêmes gardées.
     /// </summary>
     public class MultiplayerMatchController : MonoBehaviour
     {
@@ -42,6 +54,7 @@ namespace Novgov.Network
             return Instance;
         }
 
+#if !UNITY_SERVER
         private enum UiState { Hidden, ModeSelect, Login, SignUp, Connecting, Matchmaking, InMatch, MatchOver }
         private UiState uiState = UiState.Hidden;
 
@@ -75,9 +88,7 @@ namespace Novgov.Network
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
-#if !UNITY_SERVER
             BindUI();
-#endif
         }
 
         private void Update()
@@ -233,12 +244,12 @@ namespace Novgov.Network
         private void OnOpponentGhosted(NetMessage msg)
         {
             ghostBannerText = msg.team_id == localTeamId
-                ? "Vous étiez absent — l'IA a joué votre tour à votre place."
-                : "Adversaire absent — IA de secours active pour son camp.";
+                ? "Vous étiez absent — vos unités sont restées immobiles ce tour-ci."
+                : "Adversaire absent — ses unités sont restées immobiles ce tour-ci.";
             ghostBannerTimer = 4f;
             if (ghostBannerLabel != null)
             {
-                ghostBannerLabel.text = "🤖 " + ghostBannerText;
+                ghostBannerLabel.text = ghostBannerText;
                 ghostBannerLabel.style.display = DisplayStyle.Flex;
             }
         }
@@ -247,8 +258,8 @@ namespace Novgov.Network
         {
             IsActive = false;
             string resultText = msg.winner_team == 0 ? "Partie interrompue."
-                : msg.winner_team == localTeamId ? "🏆 VICTOIRE !"
-                : "💀 DÉFAITE.";
+                : msg.winner_team == localTeamId ? "VICTOIRE !"
+                : "DÉFAITE.";
             string ratingText = msg.your_new_rating > 0
                 ? $"Classement : {msg.your_new_rating} ({(msg.rating_delta >= 0 ? "+" : "")}{msg.rating_delta})"
                 : "";
@@ -256,34 +267,6 @@ namespace Novgov.Network
             if (resultLabel != null) resultLabel.text = resultText;
             if (ratingLabel != null) ratingLabel.text = ratingText;
             SetUiState(UiState.MatchOver);
-        }
-
-        /// <summary>
-        /// Appelé par TacticalPathManager.LancerExecutionTour() quand IsActive est vrai — envoie les
-        /// ordres du joueur local au serveur au lieu d'exécuter une simulation locale.
-        /// </summary>
-        public void SubmitLocalTurn()
-        {
-            var myUnits = UnitAI.AllLivingUnits.Where(u => u.teamID == localTeamId).ToList();
-            var orders = new List<UnitOrder>();
-
-            foreach (var unit in myUnits)
-            {
-                if (unit.tacticalPath.Count == 0) continue;
-                var pathNodes = unit.tacticalPath
-                    .Select(n => new PathNode { x = n.position.x, y = n.position.y, z = n.position.z, action = (int)n.action })
-                    .ToArray();
-                orders.Add(new UnitOrder { unit_id = unit.gameObject.name, path = pathNodes });
-            }
-
-            GameServerClient.Instance.Send(new NetMessage
-            {
-                type = "submit_turn",
-                turn_number = currentTurnNumber,
-                orders = orders.ToArray()
-            });
-
-            statusMessage = "Ordres envoyés — en attente de l'adversaire...";
         }
 
         private IEnumerator PlaySnapshotsCoroutine(NetMessage msg)
@@ -335,7 +318,6 @@ namespace Novgov.Network
         // UI Toolkit — câblage une fois, puis mise à jour ciblée des champs qui changent.
         // =====================================================================
 
-#if !UNITY_SERVER
         private void BindUI()
         {
             if (uiBound) return;
@@ -370,6 +352,20 @@ namespace Novgov.Network
                 statusMessage = "";
                 SetUiState(uiState == UiState.SignUp ? UiState.Login : UiState.SignUp);
             };
+
+            Button authBackButton = authRoot.Q<Button>("back-button");
+            if (authBackButton != null)
+            {
+                authBackButton.clicked += () =>
+                {
+                    SetUiState(UiState.Hidden);
+                    GameManagerUI.Instance?.ReturnToStartupMenu();
+                };
+            }
+            else
+            {
+                Debug.LogError("[MultiplayerMatchController] Bouton 'back-button' introuvable dans AuthScreen.uxml — le retour depuis Connexion/Création de compte restera inopérant.");
+            }
 
             waitingRoot = UIScreenManager.Instance.GetScreen("Waiting");
             waitingStatusLabel = waitingRoot.Q<Label>("status-label");
@@ -429,7 +425,7 @@ namespace Novgov.Network
         private void RefreshAuthScreen()
         {
             bool isSignUp = uiState == UiState.SignUp;
-            authTitleLabel.text = isSignUp ? "⚔️ CRÉER UN COMPTE" : "⚔️ CONNEXION MULTIJOUEUR";
+            authTitleLabel.text = isSignUp ? "CRÉER UN COMPTE" : "CONNEXION MULTIJOUEUR";
             usernameContainer.style.display = isSignUp ? DisplayStyle.Flex : DisplayStyle.None;
             submitButton.text = isSignUp ? "Créer le compte" : "Se connecter";
             toggleModeButton.text = isSignUp ? "J'ai déjà un compte" : "Pas encore de compte ? Créer un compte";
@@ -464,5 +460,37 @@ namespace Novgov.Network
             }
         }
 #endif
+
+        /// <summary>
+        /// Appelé par TacticalPathManager.LancerExecutionTour() quand IsActive est vrai — envoie les
+        /// ordres du joueur local au serveur au lieu d'exécuter une simulation locale. Déclarée EN
+        /// DEHORS du bloc #if !UNITY_SERVER ci-dessus (contrairement au reste de la classe) : son
+        /// appelant n'est lui-même pas gardé, et son corps ne dépend d'aucun type UI Toolkit.
+        /// </summary>
+        public void SubmitLocalTurn()
+        {
+#if !UNITY_SERVER
+            var myUnits = UnitAI.AllLivingUnits.Where(u => u.teamID == localTeamId).ToList();
+            var orders = new List<UnitOrder>();
+
+            foreach (var unit in myUnits)
+            {
+                if (unit.tacticalPath.Count == 0) continue;
+                var pathNodes = unit.tacticalPath
+                    .Select(n => new PathNode { x = n.position.x, y = n.position.y, z = n.position.z, action = (int)n.action })
+                    .ToArray();
+                orders.Add(new UnitOrder { unit_id = unit.gameObject.name, path = pathNodes });
+            }
+
+            GameServerClient.Instance.Send(new NetMessage
+            {
+                type = "submit_turn",
+                turn_number = currentTurnNumber,
+                orders = orders.ToArray()
+            });
+
+            statusMessage = "Ordres envoyés — en attente de l'adversaire...";
+#endif
+        }
     }
 }

@@ -1,5 +1,13 @@
 # Déploiement sur le VPS Hetzner
 
+**État (2026-08-29) : ce runbook est fait — le VPS (`novgov.com`, `54.36.100.151`) fait tourner
+la stack complète (`db`/`auth`/`rest`/`game-server`/`nginx`), en production. Voir
+`CREDENTIALS.md` (local, gitignored) pour les identifiants d'accès actuels.** Les sections 1 à 9
+ci-dessous restent la référence de comment ce déploiement initial a été fait (utile pour un futur
+second VPS, ou en cas de reconstruction complète). Voir §10 (ajoutée le 2026-08-29) pour la
+procédure réellement utilisée pour **mettre à jour** le binaire du serveur de jeu sur un VPS déjà
+déployé, sans toucher au reste de la stack.
+
 Ce document sera suivi étape par étape quand tu me donneras l'IP, l'utilisateur SSH et le
 chemin vers ta clé privée. Chaque étape est vérifiable avant de passer à la suivante — en
 particulier les règles de pare-feu, pour ne jamais te couper l'accès SSH par erreur.
@@ -139,6 +147,45 @@ docker compose exec -T db pg_dump -U postgres postgres | gzip > /opt/backups/str
 ```
 
 À automatiser via une tâche cron sur l'hôte une fois la stack stable.
+
+---
+
+## 10. Mettre à jour le binaire `game-server` sur un VPS déjà déployé (procédure réelle, 2026-08-29)
+
+Une fois la stack initiale en place (§6), voici la procédure réellement utilisée pour déployer une
+nouvelle version du serveur de jeu Unity **sans toucher** aux 4 autres conteneurs (`db`, `auth`,
+`rest`, `nginx`) :
+
+```bash
+# 1. Depuis la machine de build, après un ServerBuildScript.BuildLinuxServer réussi
+#    (voir 04-unity-headless-server.md) :
+scp -i ~/.ssh/streetact_vps \
+    build/LinuxServer/StreetActServer.x86_64 \
+    build/LinuxServer/UnityPlayer.so \
+    ubuntu@<ip>:/opt/streetact/game-server/
+scp -i ~/.ssh/streetact_vps -r \
+    build/LinuxServer/StreetActServer_Data \
+    ubuntu@<ip>:/opt/streetact/game-server/
+
+# 2. Sur le VPS : reconstruire et redémarrer UNIQUEMENT ce conteneur
+ssh -i ~/.ssh/streetact_vps ubuntu@<ip>
+cd /opt/streetact
+docker compose build game-server
+docker compose up -d game-server   # recrée seulement game-server, les 4 autres ne bougent pas
+
+# 3. Vérification
+docker compose logs --tail=60 game-server   # doit montrer "à l'écoute sur le port 7777"
+nc -zv localhost 7777
+```
+
+**Point d'attention** : `docker compose build game-server` copie `StreetActServer_Data`,
+`StreetActServer.x86_64` et `UnityPlayer.so` depuis `/opt/streetact/game-server/` (le contexte de
+build, voir le `Dockerfile` à côté) — donc bien transférer les 3 avant de builder, sinon l'image
+reconstruite embarque encore l'ancien binaire silencieusement.
+
+Pendant les quelques secondes de `docker compose up -d game-server`, toute partie en cours sur ce
+serveur est interrompue (pas de bascule à chaud) — à faire hors d'une partie active, ou en
+prévenant les joueurs testant en même temps.
 
 ---
 

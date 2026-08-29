@@ -1,10 +1,22 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <Style src="ContextMenuScreen.uss" />
-    <ui:VisualElement name="root" class="context-root" style="flex-grow: 1; width: 100%; height: 100%; justify-content: center; align-items: center; picking-mode: Ignore;">
+    <ui:VisualElement name="root" class="context-root" style="flex-grow: 1; width: 100%; height: 100%; justify-content: flex-end; align-items: center; padding-bottom: 4%; picking-mode: Ignore;">
         <ui:VisualElement name="menu-panel" class="context-panel" style="picking-mode: Position;">
             <ui:Label name="menu-title" text="ORDRE TACTIQUE" class="context-title" />
             <ui:VisualElement name="button-container" style="flex-direction: column; margin-top: 10px; margin-bottom: 12px;" />
-            <ui:Button name="cancel-button" text="✕ FERMER" class="context-cancel-btn" />
+
+            <!-- Pied du menu : ANNULER referme sans rien changer (pour retaper un autre endroit) ;
+                 TERMINÉ verrouille l'option surlignée ci-dessus dans la trajectoire de l'unité —
+                 désactivé (grisé) tant qu'aucune option n'a été choisie. -->
+            <ui:VisualElement name="menu-footer-row" style="flex-direction: row;">
+                <ui:Button name="cancel-button" class="context-cancel-btn btn-with-icon" style="flex-grow: 1; flex-basis: 0; margin-right: 8px; justify-content: center;">
+                    <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/close.png'); -unity-background-image-tint-color: rgb(224, 110, 96); margin-right: 8px;" />
+                    <ui:Label text="ANNULER" style="font-size: 20px; color: rgb(224, 110, 96);" />
+                </ui:Button>
+                <ui:Button name="confirm-button" class="context-confirm-btn" style="flex-grow: 1; flex-basis: 0; justify-content: center;">
+                    <ui:Label text="TERMINÉ" style="font-size: 20px; color: var(--color-accent-text);" />
+                </ui:Button>
+            </ui:VisualElement>
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

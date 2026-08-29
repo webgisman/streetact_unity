@@ -23,12 +23,15 @@ public class UIScreenManager : MonoBehaviour
     // Nom logique -> chemin Resources (sans extension) du UXML.
     private static readonly (string name, string resourcePath)[] ScreenDefinitions =
     {
+        ("Loading", "UI/LoadingScreen"),
+        ("Error", "UI/ErrorScreen"),
         ("StartupMenu", "UI/StartupMenuScreen"),
         ("ModeSelect", "UI/ModeSelectScreen"),
         ("Auth", "UI/AuthScreen"),
         ("Waiting", "UI/WaitingScreen"),
         ("InMatchHud", "UI/InMatchHudScreen"),
         ("MatchOver", "UI/MatchOverScreen"),
+        ("GameOver", "UI/GameOverScreen"),
         ("Leaderboard", "UI/LeaderboardScreen"),
         ("ActionViewBack", "UI/ActionViewBackScreen"),
         ("TacticalBottomBar", "UI/TacticalBottomBarScreen"),

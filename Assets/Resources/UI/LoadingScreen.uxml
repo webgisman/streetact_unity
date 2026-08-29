@@ -1,0 +1,7 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.92); picking-mode: Ignore;">
+        <ui:VisualElement class="panel" style="align-items: center; width: 60%; max-width: 460px;">
+            <ui:Label text="CHARGEMENT DU SECTEUR..." class="subtitle" style="color: rgb(232, 222, 196);" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

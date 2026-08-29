@@ -17,7 +17,7 @@
             </ui:VisualElement>
         </ui:VisualElement>
 
-        <ui:Label name="ghost-banner" text="" class="panel" style="display: none; align-self: center; margin-top: 16px; color: rgb(198, 150, 46); font-size: 26px; -unity-font-style: bold; picking-mode: Ignore;" />
+        <ui:Label name="ghost-banner" text="" class="panel" style="display: none; align-self: center; margin-top: 16px; color: var(--color-accent); font-size: 26px; -unity-font-style: bold; picking-mode: Ignore;" />
 
     </ui:VisualElement>
 </ui:UXML>

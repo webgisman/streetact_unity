@@ -21,13 +21,6 @@ public partial class UnitAI : MonoBehaviour
     public bool isSelected = false; // Permet de savoir si le joueur planifie pour cette unité
     public float maxMovementPerTurn = 50f;
 
-    /// <summary>
-    /// Multijoueur uniquement : true quand le joueur propriétaire de cette unité est absent/déconnecté
-    /// ce tour-ci. Autorise TacticalAIPlanner à planifier ses ordres malgré isPlayerControlled = true
-    /// (voir Assets/Scripts/AI/TacticalAIPlanner.cs et Assets/_ServerDocs/multiplayer/04-unity-headless-server.md).
-    /// </summary>
-    public bool isGhosted = false;
-
     [Header("Combat")]
     public int health = 100;
     public float maxHealth = 100f;

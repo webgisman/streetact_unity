@@ -2,37 +2,64 @@
     <Style src="DeploymentDockScreen.uss" />
     <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore; flex-direction: row; justify-content: flex-start;">
 
-        <ui:VisualElement style="position: absolute; left: 20px; bottom: 20px; flex-direction: column-reverse; align-items: flex-start; picking-mode: Ignore;">
-            <ui:Button name="tab-button" text="📦 DÉPLOIEMENT" class="dock-tab-button" />
+        <ui:VisualElement style="position: absolute; left: 4%; top: 0; bottom: 3%; width: 60%; max-width: 380px; flex-direction: column-reverse; align-items: flex-start; picking-mode: Ignore;">
+            <ui:Button name="tab-button" class="dock-tab-button btn-with-icon" style="width: 100%; justify-content: center;">
+                <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/crate.png'); -unity-background-image-tint-color: var(--color-accent-text);" />
+                <ui:Label name="tab-button-label" text="DÉPLOIEMENT" />
+            </ui:Button>
 
-            <ui:VisualElement name="dock-panel" class="dock-panel slide-in" style="display: none; width: 340px; max-height: 800px; margin-bottom: 15px;">
-                <ui:VisualElement style="flex-direction: row; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <ui:VisualElement name="dock-panel" class="dock-panel slide-in" style="display: none; width: 100%; max-height: 85%; margin-bottom: 3%;">
+                <ui:VisualElement style="flex-direction: row; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <ui:Label text="QG RENFORTS" class="dock-title" />
                     <ui:Label name="effectifs-label" text="0 / 12" class="dock-effectifs" />
                 </ui:VisualElement>
 
-                <ui:VisualElement style="flex-direction: row; margin-bottom: 16px;">
-                    <ui:Button name="team1-button" text="Joueur" class="dock-team-btn" style="flex-grow: 1; margin-right: 8px;" />
+                <ui:VisualElement style="flex-direction: row; margin-bottom: 10px;">
+                    <ui:Button name="team1-button" text="Joueur" class="dock-team-btn" style="flex-grow: 1; margin-right: 6px;" />
                     <ui:Button name="team2-button" text="Ennemi" class="dock-team-btn" style="flex-grow: 1;" />
                 </ui:VisualElement>
 
-                <ui:ScrollView name="unit-scroll" style="flex-grow: 1; padding-right: 8px;">
+                <ui:ScrollView name="unit-scroll" style="flex-grow: 1; min-height: 0; padding-right: 8px;">
                     <ui:Label text="INFANTERIE" class="section-header" />
-                    <ui:Button name="btn-fantassin" text="🎖️ Fantassin (Fusil)" class="dock-unit-btn" />
-                    
+                    <ui:Button name="btn-fantassin" class="dock-unit-btn">
+                        <ui:VisualElement class="dock-unit-icon" style="background-image: url('/Assets/UI/Icons/medal.png');" />
+                        <ui:Label text="Fantassin (Fusil)" />
+                    </ui:Button>
+
                     <ui:Label text="VÉHICULES LOURDS" class="section-header" />
-                    <ui:Button name="btn-leopard" text="🛡️ Char Leopard 2" class="dock-unit-btn" />
-                    <ui:Button name="btn-canon" text="💥 Véhicule Canon" class="dock-unit-btn" />
-                    <ui:Button name="btn-mortier" text="🎯 Mortier Lourd" class="dock-unit-btn" />
-                    
+                    <ui:Button name="btn-leopard" class="dock-unit-btn">
+                        <ui:VisualElement class="dock-unit-icon" style="background-image: url('/Assets/UI/Icons/shield.png');" />
+                        <ui:Label text="Char Leopard 2" />
+                    </ui:Button>
+                    <ui:Button name="btn-canon" class="dock-unit-btn">
+                        <ui:VisualElement class="dock-unit-icon" style="background-image: url('/Assets/UI/Icons/explosion.png');" />
+                        <ui:Label text="Véhicule Canon" />
+                    </ui:Button>
+                    <ui:Button name="btn-mortier" class="dock-unit-btn">
+                        <ui:VisualElement class="dock-unit-icon" style="background-image: url('/Assets/UI/Icons/crosshair.png');" />
+                        <ui:Label text="Mortier Lourd" />
+                    </ui:Button>
+
                     <ui:Label text="DÉFENSES" class="section-header" />
-                    <ui:Button name="btn-barricade" text="🚧 Barricade Routière" class="dock-unit-btn" style="margin-bottom: 16px;" />
+                    <ui:Button name="btn-barricade" class="dock-unit-btn" style="margin-bottom: 10px;">
+                        <ui:VisualElement class="dock-unit-icon" style="background-image: url('/Assets/UI/Icons/barrier.png');" />
+                        <ui:Label text="Barricade Routière" />
+                    </ui:Button>
 
                     <ui:VisualElement class="separator" />
-                    
-                    <ui:Button name="btn-ai-squad" text="🤖 ESCOUADE IA" class="dock-action-btn danger-btn" />
-                    <ui:Button name="btn-auto-deploy" text="⚡ DÉPLOIEMENT AUTO" class="dock-action-btn warning-btn" />
-                    <ui:Button name="btn-clear" text="🧹 NETTOYER TERRAIN" class="dock-action-btn secondary-btn" />
+
+                    <ui:Button name="btn-ai-squad" class="dock-action-btn danger-btn btn-with-icon" style="justify-content: center;">
+                        <ui:VisualElement class="icon" style="width: 16px; height: 16px; background-image: url('/Assets/UI/Icons/robot.png'); -unity-background-image-tint-color: rgb(224, 110, 96); margin-right: 6px;" />
+                        <ui:Label text="ESCOUADE IA" />
+                    </ui:Button>
+                    <ui:Button name="btn-auto-deploy" class="dock-action-btn warning-btn btn-with-icon" style="justify-content: center;">
+                        <ui:VisualElement class="icon" style="width: 16px; height: 16px; background-image: url('/Assets/UI/Icons/lightning.png'); -unity-background-image-tint-color: var(--color-accent); margin-right: 6px;" />
+                        <ui:Label text="DÉPLOIEMENT AUTO" />
+                    </ui:Button>
+                    <ui:Button name="btn-clear" class="dock-action-btn secondary-btn btn-with-icon" style="justify-content: center;">
+                        <ui:VisualElement class="icon" style="width: 16px; height: 16px; background-image: url('/Assets/UI/Icons/broom.png'); -unity-background-image-tint-color: var(--color-text-dim); margin-right: 6px;" />
+                        <ui:Label text="NETTOYER TERRAIN" />
+                    </ui:Button>
                 </ui:ScrollView>
             </ui:VisualElement>
         </ui:VisualElement>

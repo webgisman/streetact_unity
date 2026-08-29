@@ -8,19 +8,20 @@ using UnityEngine;
 /// client/serveur dans le code" — une seule scène partagée, du code isolé par #if UNITY_SERVER
 /// là où c'était nécessaire, pas de scène serveur séparée).
 ///
-/// IMPORTANT — build Standalone classique, PAS le sous-cible "Dedicated Server" :
-/// `StandaloneBuildSubtarget.Server` provoque, de façon reproductible sur ce projet précis, des
-/// erreurs de compilation CS0121 "ambiguous method" dans des packages Unity (InputSystem, TMP,
-/// Collections) sans rapport avec le code du projet — piste explorée en détail (cache Bee
-/// projet ET global, PackageCache, réimport complet, résolution de version de com.unity.collections,
-/// retrait de com.unity.multiplayer.center) sans résolution fiable. On construit donc un Standalone
-/// Linux64 ordinaire, lancé ensuite avec "-batchmode -nographics" au runtime (voir Dockerfile) —
-/// c'est l'approche standard utilisée pour les serveurs headless Unity avant même l'existence du
-/// sous-cible officiel "Dedicated Server", et elle fonctionne nativement puisque tout le code
-/// gameplay tourne indépendamment du rendu. Conséquence : UNITY_SERVER n'est jamais défini, donc
-/// les gardes #if UNITY_SERVER ajoutés dans GameManagerUI/UnitSpawnerUI/TacticalPathManager ne
-/// s'activent pas — sans incidence : IMGUI ne plante pas en -nographics, il ne fait juste rien
-/// d'utile visuellement, ce qui est exactement le comportement voulu côté serveur.
+/// Sous-cible "Dedicated Server" (StandaloneBuildSubtarget.Server), et non plus un Standalone
+/// classique : sur CETTE machine, seul le module "Linux Dedicated Server Build Support" est
+/// réellement et complètement installé (vérifié en listant Editor/Data/PlaybackEngines/
+/// LinuxStandaloneSupport/Variations — les 4 variantes linux64_server_{development,nondevelopment}
+/// _{mono,il2cpp} sont complètes avec LinuxPlayer/UnityPlayer.so, alors que
+/// linux64_player_development_mono n'est qu'un fragment sans binaire jouable, et qu'il n'existe
+/// aucune variante "player_nondevelopment" du tout — le module "Linux Build Support" desktop n'a
+/// jamais été installé sur cet Éditeur, seul celui du serveur dédié l'a été). Un ancien essai avait
+/// écarté ce sous-cible à cause d'erreurs CS0121 "ambiguous method" (InputSystem/TMP/Collections)
+/// qui ne se sont PAS reproduites lors des essais les plus récents : elles semblent avoir été liées
+/// à un état de cache transitoire de cette session-là plutôt qu'à ce sous-cible en lui-même.
+/// Ce choix définit UNITY_SERVER, dont dépendent les gardes #if UNITY_SERVER / #if !UNITY_SERVER
+/// du projet (GameManagerUI/UnitSpawnerUI/TacticalPathManager/MultiplayerMatchController) pour
+/// exclure tout code UI Toolkit clientonly de la compilation serveur.
 ///
 /// Utilisation en ligne de commande :
 ///   Unity.exe -batchmode -nographics -quit -buildTarget Linux64 -projectPath "<chemin du projet>" -executeMethod ServerBuildScript.BuildLinuxServer -logFile build_server.log
@@ -43,11 +44,17 @@ public static class ServerBuildScript
             return;
         }
 
+        // Forcé explicitement (ce réglage d'Éditeur est persistant d'une session à l'autre) pour
+        // garantir que BuildPipeline.BuildPlayer() utilise bien la sous-cible Dedicated Server,
+        // quel que soit l'état hérité de la session précédente.
+        UnityEditor.EditorUserBuildSettings.standaloneBuildSubtarget = UnityEditor.StandaloneBuildSubtarget.Server;
+
         var options = new BuildPlayerOptions
         {
             scenes = scenes,
             locationPathName = outputPath,
             target = BuildTarget.StandaloneLinux64,
+            subtarget = (int)UnityEditor.StandaloneBuildSubtarget.Server,
             options = BuildOptions.None
         };
 

@@ -80,19 +80,25 @@ public class TacticalRadarUI : MonoBehaviour
 
     private void CreateRadarTextures()
     {
-        // 1. Fond semi-transparent sombre avec teinte verte militaire
+        // Chrome du radar recoloré en kaki/laiton pour matcher le thème "commando" du reste de
+        // l'UI (Assets/UI/Theme.tss) — auparavant un néon vert/cyan cyberpunk sans rapport avec
+        // le reste du HUD. Les couleurs des contacts (allié/ennemi) reprennent volontairement les
+        // mêmes teintes bleu/rouge que --color-team1/--color-team2 dans Theme.tss : c'est la même
+        // logique d'identité joueur/ennemi qu'ailleurs dans l'UI, pas une palette radar à part.
+
+        // 1. Fond semi-transparent sombre kaki (proche de --color-bg-dark)
         radarBgTex = new Texture2D(1, 1);
-        radarBgTex.SetPixel(0, 0, new Color(0.01f, 0.06f, 0.03f, 0.88f));
+        radarBgTex.SetPixel(0, 0, new Color(0.078f, 0.071f, 0.047f, 0.9f));
         radarBgTex.Apply();
 
-        // 2. Bordure néon vert cybernétique
+        // 2. Bordure laiton (--color-accent)
         borderTex = new Texture2D(1, 1);
-        borderTex.SetPixel(0, 0, new Color(0.1f, 0.95f, 0.45f, 1f));
+        borderTex.SetPixel(0, 0, new Color(0.776f, 0.588f, 0.180f, 1f));
         borderTex.Apply();
 
         // 3. Réticule et axes
         gridLineTex = new Texture2D(1, 1);
-        gridLineTex.SetPixel(0, 0, new Color(0.1f, 0.8f, 0.35f, 0.35f));
+        gridLineTex.SetPixel(0, 0, new Color(0.776f, 0.588f, 0.180f, 0.3f));
         gridLineTex.Apply();
 
         // 4. Cercles concentriques de distance (Texture procédurale circulaire 128x128)
@@ -108,21 +114,21 @@ public class TacticalRadarUI : MonoBehaviour
                 bool onOuter = Mathf.Abs(dist - 62) < 1.2f;
 
                 if (onOuter)
-                    circleRingTex.SetPixel(x, y, new Color(0.15f, 0.95f, 0.45f, 0.6f));
+                    circleRingTex.SetPixel(x, y, new Color(0.776f, 0.588f, 0.180f, 0.6f));
                 else if (onRing1 || onRing2)
-                    circleRingTex.SetPixel(x, y, new Color(0.1f, 0.7f, 0.3f, 0.25f));
+                    circleRingTex.SetPixel(x, y, new Color(0.776f, 0.588f, 0.180f, 0.22f));
                 else
                     circleRingTex.SetPixel(x, y, Color.clear);
             }
         }
         circleRingTex.Apply();
 
-        // 5. Faisceau de balayage sonar (Ligne verte luminescente)
+        // 5. Faisceau de balayage sonar (laiton clair)
         sweepBeamTex = new Texture2D(1, 1);
-        sweepBeamTex.SetPixel(0, 0, new Color(0.2f, 1f, 0.5f, 0.75f));
+        sweepBeamTex.SetPixel(0, 0, new Color(0.871f, 0.682f, 0.282f, 0.75f));
         sweepBeamTex.Apply();
 
-        // 6. Blip Allié Tactique (Disque haute définition Neon Cyan avec lueur douce)
+        // 6. Blip Allié Tactique (bleu --color-team1, même identité que les badges d'équipe)
         allyBlipTex = new Texture2D(32, 32);
         for (int y = 0; y < 32; y++)
         {
@@ -136,12 +142,12 @@ public class TacticalRadarUI : MonoBehaviour
                 else if (dist < 9.5f)
                 {
                     float alpha = Mathf.SmoothStep(1f, 0f, (dist - 4.5f) / 5f);
-                    allyBlipTex.SetPixel(x, y, new Color(0f, 0.9f, 1f, alpha));
+                    allyBlipTex.SetPixel(x, y, new Color(0.282f, 0.502f, 0.659f, alpha));
                 }
                 else if (dist < 15.5f)
                 {
                     float glow = Mathf.SmoothStep(0.5f, 0f, (dist - 9.5f) / 6f);
-                    allyBlipTex.SetPixel(x, y, new Color(0f, 0.6f, 1f, glow * 0.4f));
+                    allyBlipTex.SetPixel(x, y, new Color(0.282f, 0.502f, 0.659f, glow * 0.4f));
                 }
                 else
                 {
@@ -151,7 +157,7 @@ public class TacticalRadarUI : MonoBehaviour
         }
         allyBlipTex.Apply();
 
-        // 7. Blip Ennemi Tactique (Disque Rubis contrasté avec cœur éclatant)
+        // 7. Blip Ennemi Tactique (rouge --color-team2, même identité que les badges d'équipe)
         enemyBlipTex = new Texture2D(32, 32);
         for (int y = 0; y < 32; y++)
         {
@@ -165,12 +171,12 @@ public class TacticalRadarUI : MonoBehaviour
                 else if (dist < 10.0f)
                 {
                     float alpha = Mathf.SmoothStep(1f, 0f, (dist - 4.5f) / 5.5f);
-                    enemyBlipTex.SetPixel(x, y, new Color(1f, 0.12f, 0.2f, alpha));
+                    enemyBlipTex.SetPixel(x, y, new Color(0.737f, 0.243f, 0.188f, alpha));
                 }
                 else if (dist < 15.5f)
                 {
                     float glow = Mathf.SmoothStep(0.6f, 0f, (dist - 10f) / 5.5f);
-                    enemyBlipTex.SetPixel(x, y, new Color(1f, 0.1f, 0.1f, glow * 0.4f));
+                    enemyBlipTex.SetPixel(x, y, new Color(0.737f, 0.243f, 0.188f, glow * 0.4f));
                 }
                 else
                 {
@@ -180,17 +186,17 @@ public class TacticalRadarUI : MonoBehaviour
         }
         enemyBlipTex.Apply();
 
-        // 8. Onde sonore d'attaque
+        // 8. Onde sonore d'attaque (laiton clair, --color-accent-hover)
         pingTex = new Texture2D(1, 1);
-        pingTex.SetPixel(0, 0, new Color(1f, 0.4f, 0.1f, 0.9f));
+        pingTex.SetPixel(0, 0, new Color(0.871f, 0.682f, 0.282f, 0.9f));
         pingTex.Apply();
 
-        // 9. Point central
+        // 9. Point central (laiton clair)
         centerDotTex = new Texture2D(1, 1);
-        centerDotTex.SetPixel(0, 0, new Color(1f, 0.95f, 0.25f, 1f));
+        centerDotTex.SetPixel(0, 0, new Color(0.871f, 0.682f, 0.282f, 1f));
         centerDotTex.Apply();
 
-        // 10. Réticule et anneau de sélection d'unité (Or & Cyan fluorescent 32x32)
+        // 10. Réticule et anneau de sélection d'unité (laiton, --color-accent)
         selectedBlipRingTex = new Texture2D(32, 32);
         for (int y = 0; y < 32; y++)
         {
@@ -202,11 +208,11 @@ public class TacticalRadarUI : MonoBehaviour
 
                 if (onRing || isCrosshair)
                 {
-                    selectedBlipRingTex.SetPixel(x, y, new Color(1f, 0.9f, 0.15f, 0.95f));
+                    selectedBlipRingTex.SetPixel(x, y, new Color(0.871f, 0.682f, 0.282f, 0.95f));
                 }
                 else if (Mathf.Abs(dist - 11.5f) < 2.5f)
                 {
-                    selectedBlipRingTex.SetPixel(x, y, new Color(1f, 0.8f, 0.1f, 0.4f));
+                    selectedBlipRingTex.SetPixel(x, y, new Color(0.776f, 0.588f, 0.180f, 0.4f));
                 }
                 else
                 {
@@ -302,7 +308,7 @@ public class TacticalRadarUI : MonoBehaviour
         headerStyle.fontSize = 9;
         headerStyle.fontStyle = FontStyle.Bold;
         headerStyle.alignment = TextAnchor.UpperCenter;
-        headerStyle.normal.textColor = new Color(0.25f, 1f, 0.5f, 1f);
+        headerStyle.normal.textColor = new Color(0.871f, 0.682f, 0.282f, 1f);
         GUI.Label(new Rect(rX, rY + 2, radarSize, 14), "RADAR 90M", headerStyle);
 
         Vector2 center = new Vector2(rX + radarSize * 0.5f, rY + radarSize * 0.5f + 2f);
@@ -430,7 +436,7 @@ public class TacticalRadarUI : MonoBehaviour
         footerStyle.fontStyle = FontStyle.Bold;
         footerStyle.alignment = TextAnchor.MiddleCenter;
         footerStyle.normal.textColor = Color.white;
-        string statusText = $"🔵 ALLIÉS: {allyCount}  |  🔴 CONTACTS: {enemyDetectedCount}";
+        string statusText = $"ALLIÉS: {allyCount}  |  CONTACTS: {enemyDetectedCount}";
         GUI.Label(new Rect(rX, rY + radarSize + 2f, radarSize, 18), statusText, footerStyle);
 
         GUI.matrix = origMat;

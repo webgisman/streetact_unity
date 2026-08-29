@@ -2,8 +2,20 @@
     <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.85); picking-mode: Ignore;">
         <ui:VisualElement name="panel" class="panel" style="width: 65%; max-width: 640px;">
             <ui:Label text="CHOISIR UN MODE DE JEU" class="title" style="margin-bottom: 32px;" />
-            <ui:Button name="btn-deathmatch" text="💀 DEATHMATCH&#10;Éliminer l'équipe adverse" class="btn-team2" style="margin-bottom: 20px; min-height: 116px;" />
-            <ui:Button name="btn-zone-control" text="🚩 ZONE DE CONTRÔLE&#10;Tenir la zone centrale" class="btn-team1" style="min-height: 116px;" />
+            <ui:Button name="btn-deathmatch" class="btn-team2 btn-with-icon" style="margin-bottom: 20px; min-height: 116px;">
+                <ui:VisualElement class="icon icon-lg" style="background-image: url('/Assets/UI/Icons/skull.png');" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="DEATHMATCH" />
+                    <ui:Label text="Éliminer l'équipe adverse" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
+            <ui:Button name="btn-zone-control" class="btn-team1 btn-with-icon" style="min-height: 116px;">
+                <ui:VisualElement class="icon icon-lg" style="background-image: url('/Assets/UI/Icons/flag.png');" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="ZONE DE CONTRÔLE" />
+                    <ui:Label text="Tenir la zone centrale" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

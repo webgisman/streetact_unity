@@ -176,9 +176,16 @@ public class CityGenerator : MonoBehaviour
                 
                 // --- CRITIQUE --- Désactiver temporairement les unités pour NE PAS les "cuire" dans le NavMesh
                 UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Include);
+                // On retient qui était RÉELLEMENT actif avant ce masquage temporaire : les unités
+                // placées à la main dans la scène (Unite_1/2, Leopard_1/2, canon-vehicle_1/2) sont
+                // désactivées par défaut pour servir uniquement de modèle au déploiement manuel — un
+                // ré-activation en masse ici les faisait réapparaître sur le champ de bataille à
+                // chaque génération de carte, quel que soit leur état d'origine dans la scène.
+                bool[] wasActive = new bool[allUnits.Length];
+                for (int i = 0; i < allUnits.Length; i++) wasActive[i] = allUnits[i] != null && allUnits[i].gameObject.activeSelf;
                 foreach(var unit in allUnits) { if (unit != null) unit.gameObject.SetActive(false); }
                 yield return null; // Laisser 1 frame à Unity pour désactiver les colliders
-                
+
                 // Vider les anciennes données pour forcer un rebake propre
                 surface.RemoveData();
                 surface.collectObjects = CollectObjects.All;
@@ -193,14 +200,14 @@ public class CityGenerator : MonoBehaviour
                     TacticalStreamingManager.Instance.RegisterAllBuildings();
                 }
 
-                // 4. LÂCHER LES CHIENS ! On notifie les unités qu'elles peuvent enfin bouger.
-                foreach(var unit in allUnits) { if (unit != null) unit.gameObject.SetActive(true); }
+                // 4. LÂCHER LES CHIENS ! On ne réactive que celles qui étaient déjà actives avant.
+                for (int i = 0; i < allUnits.Length; i++) { if (allUnits[i] != null && wasActive[i]) allUnits[i].gameObject.SetActive(true); }
                 yield return null; // Laisser 1 frame pour la réactivation
-                
+
                 Debug.Log($"[CityGenerator] Notifying {allUnits.Length} UnitAIs that NavMesh is ready.");
                 foreach (var unit in allUnits)
                 {
-                    if (unit != null) unit.OnNavMeshReady();
+                    if (unit != null && unit.gameObject.activeSelf) unit.OnNavMeshReady();
                 }
                 
                 GameManagerUI.OptimizeSceneMaterials();
@@ -270,9 +277,15 @@ public class CityGenerator : MonoBehaviour
         if (surface == null) surface = gameObject.AddComponent<NavMeshSurface>();
         
         UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Include);
+        // Voir le commentaire équivalent plus haut dans ce fichier : on ne réactive que les unités
+        // qui étaient déjà actives avant ce masquage temporaire, sinon les unités pré-placées dans
+        // la scène (désactivées par défaut, servant de modèle au déploiement manuel) réapparaissent
+        // automatiquement sur la carte à chaque chargement.
+        bool[] wasActive = new bool[allUnits.Length];
+        for (int i = 0; i < allUnits.Length; i++) wasActive[i] = allUnits[i] != null && allUnits[i].gameObject.activeSelf;
         foreach(var unit in allUnits) { if (unit != null) unit.gameObject.SetActive(false); }
         yield return null;
-        
+
         surface.RemoveData();
         surface.collectObjects = CollectObjects.All;
         surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
@@ -285,10 +298,10 @@ public class CityGenerator : MonoBehaviour
             TacticalStreamingManager.Instance.RegisterAllBuildings();
         }
 
-        foreach(var unit in allUnits) { if (unit != null) unit.gameObject.SetActive(true); }
+        for (int i = 0; i < allUnits.Length; i++) { if (allUnits[i] != null && wasActive[i]) allUnits[i].gameObject.SetActive(true); }
         yield return null;
-        
-        foreach (var unit in allUnits) { if (unit != null) unit.OnNavMeshReady(); }
+
+        foreach (var unit in allUnits) { if (unit != null && unit.gameObject.activeSelf) unit.OnNavMeshReady(); }
         
         if (GameManagerUI.Instance != null) GameManagerUI.Instance.HideLoading();
     }

@@ -3,7 +3,10 @@
         <ui:VisualElement class="panel" style="width: 70%; max-width: 500px; align-items: center;">
             <ui:Label name="result-label" text="" class="title" style="margin-bottom: 12px;" />
             <ui:Label name="rating-label" text="" class="subtitle" style="margin-bottom: 24px;" />
-            <ui:Button name="leaderboard-button" text="🏆 Classement" style="width: 100%; margin-bottom: 12px;" />
+            <ui:Button name="leaderboard-button" class="btn-secondary btn-with-icon" style="width: 100%; margin-bottom: 12px; justify-content: center;">
+                <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/trophy.png'); margin-right: 8px;" />
+                <ui:Label text="Classement" />
+            </ui:Button>
             <ui:Button name="menu-button" text="Retour au menu" class="btn-primary" style="width: 100%;" />
         </ui:VisualElement>
     </ui:VisualElement>

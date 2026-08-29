@@ -24,10 +24,13 @@
     --color-team1: rgb(72, 128, 168);
     --color-team2: rgb(188, 62, 48);
 
-    /* CTA unique de toute l'UI — laiton/or, jamais réutilisé ailleurs. */
-    --color-accent: rgb(198, 150, 46);
-    --color-accent-hover: rgb(222, 174, 72);
-    --color-accent-text: rgb(28, 19, 4);
+    /* CTA unique de toute l'UI — rouge signal, jamais réutilisé ailleurs. Plus saturé/vif que
+       --color-danger (rouge sourd déjà utilisé pour l'annulation/erreur) pour rester distinguable :
+       celui-ci est "action principale", l'autre "attention/danger". --color-accent-text est CLAIR
+       (pas sombre comme avant le passage du laiton au rouge) pour rester lisible sur ce fond. */
+    --color-accent: rgb(176, 48, 40);
+    --color-accent-hover: rgb(204, 74, 62);
+    --color-accent-text: rgb(246, 228, 220);
 
     --color-danger: rgb(150, 42, 32);
     --color-danger-hover: rgb(180, 60, 46);
@@ -38,12 +41,21 @@
     --color-glass-fill: rgba(232, 222, 196, 0.14);
     --color-glass-fill-hover: rgba(232, 222, 196, 0.22);
     --color-glass-fill-active: rgba(232, 222, 196, 0.30);
-    --color-glass-border: rgba(198, 150, 46, 0.55);
+    --color-glass-border: rgba(176, 48, 40, 0.55);
 
     --bevel-light: rgba(255, 246, 220, 0.4);
     --bevel-light-soft: rgba(255, 246, 220, 0.22);
     --bevel-dark: rgba(0, 0, 0, 0.4);
     --bevel-dark-soft: rgba(0, 0, 0, 0.28);
+
+    /* Couleur d'accompagnement pour les actions "info / observation" (guetter, surveiller...)
+       dans le menu contextuel tactique — remplace le cyan néon utilisé auparavant au coup par
+       coup dans TacticalPathManager, pour rester dans la même famille sourde que le reste du thème. */
+    --color-info: rgb(90, 130, 152);
+    --color-info-hover: rgb(112, 156, 180);
+
+    --font-head: url("/Assets/Fonts/BlackOpsOne-Regular.ttf");
+    --font-body: url("/Assets/Fonts/Oswald-Variable.ttf");
 }
 
 /* white-space: normal en base, ici et sur Button ci-dessous : par défaut, UI Toolkit NE fait PAS
@@ -53,13 +65,15 @@
 Label {
     color: var(--color-text);
     -unity-font-style: normal;
+    -unity-font-definition: var(--font-body);
     font-size: 34px;
     white-space: normal;
 }
 
 .title {
-    font-size: 44px;
-    -unity-font-style: bold;
+    font-size: 40px;
+    -unity-font-style: normal;
+    -unity-font-definition: var(--font-head);
     color: var(--color-accent);
     -unity-text-align: middle-center;
     letter-spacing: 2px;
@@ -107,6 +121,7 @@ Button {
     border-radius: 2px;
     color: var(--color-text);
     font-size: 32px;
+    -unity-font-definition: var(--font-body);
     -unity-font-style: bold;
     letter-spacing: 1px;
     padding: 16px;
@@ -115,6 +130,68 @@ Button {
     -unity-text-align: middle-center;
     transition-property: background-color, border-color, scale;
     transition-duration: 0.1s;
+}
+
+/* --- Icônes vectorielles plates (Assets/UI/Icons/*.png, silhouette blanche + tint-color) ---
+   Remplacent les emoji (rendu non fiable sur Android une fois une police custom assignée,
+   celle-ci n'ayant pas de glyphes emoji de repli). Un bouton à icône n'utilise plus l'attribut
+   "text" : il contient explicitement un VisualElement.icon puis un Label. */
+.icon {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    background-color: transparent;
+    -unity-background-scale-mode: scale-to-fit;
+    -unity-background-image-tint-color: var(--color-text);
+}
+
+.icon-sm {
+    width: 22px;
+    height: 22px;
+}
+
+.icon-lg {
+    width: 48px;
+    height: 48px;
+}
+
+Button.btn-with-icon {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    -unity-text-align: middle-left;
+}
+
+/* Sélecteurs descendants (espace) plutôt que combinateur enfant ">" : UI Toolkit USS ne
+   supporte de façon fiable que la relation descendante, pas le combinateur enfant direct. */
+Button.btn-with-icon .icon {
+    margin-right: 14px;
+}
+
+Button.btn-with-icon .btn-text-col {
+    flex-direction: column;
+    flex-grow: 1;
+    align-items: flex-start;
+}
+
+Button.btn-with-icon .btn-text-col Label {
+    white-space: normal;
+    -unity-text-align: middle-left;
+}
+
+/* Bouton carré ne contenant qu'une icône (cloche, fermer, passer...) — remplace l'ancien
+   Button.btn-icon pensé pour un unique glyphe emoji centré par sa taille de police. */
+Button.btn-icon-only {
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.btn-subtitle {
+    font-size: 20px;
+    color: var(--color-text-dim);
+    -unity-font-style: normal;
+    margin-top: 2px;
 }
 
 Button:hover {
@@ -160,7 +237,7 @@ Button.btn-primary:hover {
 }
 
 Button.btn-primary:active {
-    background-color: rgb(172, 128, 36);
+    background-color: rgb(120, 30, 24);
 }
 
 /* Actions secondaires "réelles" (Annuler, Vue 3D, Retour...) : fond plein

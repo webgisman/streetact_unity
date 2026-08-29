@@ -1,75 +1,88 @@
-/* Tactical Centered Dialog / Context Menu Styles */
+/* Menu contextuel tactique — même variante "glass" que le dock de déploiement, pilotée par
+   Theme.tss. Le bleu/rouge "flat UI" au survol est remplacé par le laiton d'accent unique du
+   thème, et la couleur de la bordure gauche de chaque action vient des constantes exposées côté
+   C# (NovgovTheme) qui reprennent exactement --color-success / --color-info / --color-accent /
+   --color-danger ci-contre — même langage, une seule source par côté. */
+
 .context-root {
     flex-grow: 1;
     width: 100%;
     height: 100%;
-    justify-content: center;
+    justify-content: flex-end;
     align-items: center;
+    padding-bottom: 4%;
     picking-mode: Ignore;
 }
 
 .context-panel {
-    background-color: rgba(14, 16, 22, 0.98);
-    border-color: rgba(198, 150, 46, 0.5);
-    border-width: 2px;
-    border-top-width: 4px;
-    border-top-color: rgb(212, 160, 23);
-    border-radius: 10px;
-    padding: 16px 20px;
-    min-width: 320px;
-    max-width: 460px;
+    background-color: rgba(20, 18, 12, 0.97);
+    border-color: var(--color-panel-border-dim);
+    border-width: 1px;
+    border-top-width: 3px;
+    border-top-color: var(--color-accent);
+    border-radius: 2px;
+    padding: 18px 22px;
+    width: 92%;
+    max-width: 640px;
     picking-mode: Position;
 }
 
 .context-title {
-    color: rgb(255, 220, 100);
-    font-size: 15px;
+    color: var(--color-accent);
+    font-size: 22px;
     -unity-font-style: bold;
     letter-spacing: 1px;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     -unity-text-align: middle-center;
-    padding-bottom: 8px;
+    padding-bottom: 10px;
     border-bottom-width: 1px;
-    border-bottom-color: rgba(255, 255, 255, 0.12);
+    border-bottom-color: var(--color-panel-border-dim);
 }
 
 .context-button {
     flex-direction: row;
     align-items: center;
-    background-color: rgba(255, 255, 255, 0.06);
-    border-radius: 6px;
+    background-color: var(--color-glass-fill);
+    border-radius: 2px;
     border-width: 1px;
-    border-color: rgba(255, 255, 255, 0.12);
-    border-left-width: 4px;
-    padding: 10px 14px;
-    margin-bottom: 8px;
-    min-height: 46px;
-    color: rgb(245, 245, 245);
-    font-size: 15px;
+    border-color: var(--color-panel-border-dim);
+    border-left-width: 6px;
+    padding: 14px 18px;
+    margin-bottom: 10px;
+    min-height: 64px;
+    color: var(--color-text);
+    font-size: 26px;
     -unity-font-style: bold;
     -unity-text-align: middle-left;
     transition-duration: 0.15s;
 }
 
 .context-button:hover {
-    background-color: rgba(41, 128, 185, 0.35);
-    border-color: rgb(52, 152, 219);
-    color: white;
+    background-color: var(--color-glass-fill-hover);
+    border-color: var(--color-accent);
 }
 
 .context-button:active {
-    background-color: rgba(41, 128, 185, 0.6);
+    background-color: var(--color-glass-fill-active);
     scale: 0.98;
 }
 
+/* Option "proposée" par un tap — pas encore appliquée à la trajectoire tant que TERMINÉ n'a pas
+   été pressé (voir ShowContextMenu). Persiste indépendamment du survol/de l'appui ci-dessus. */
+.context-button-selected {
+    background-color: var(--color-glass-fill-active);
+    border-color: var(--color-accent);
+    border-width: 2px;
+}
+
 .context-cancel-btn {
-    height: 42px;
-    background-color: rgba(231, 76, 60, 0.15);
-    border-color: rgba(231, 76, 60, 0.5);
+    height: 60px;
+    background-color: rgba(150, 42, 32, 0.15);
+    border-color: var(--color-danger);
     border-width: 1px;
-    border-radius: 6px;
-    color: rgb(240, 130, 120);
-    font-size: 14px;
+    border-radius: 2px;
+    color: rgb(224, 110, 96);
+    font-size: 20px;
     -unity-font-style: bold;
     -unity-text-align: middle-center;
     letter-spacing: 1px;
@@ -78,13 +91,38 @@
 }
 
 .context-cancel-btn:hover {
-    background-color: rgba(231, 76, 60, 0.35);
-    border-color: rgb(231, 76, 60);
-    color: white;
+    background-color: rgba(150, 42, 32, 0.35);
+    border-color: var(--color-danger-hover);
+    color: var(--color-text);
 }
 
 .context-cancel-btn:active {
-    background-color: rgba(231, 76, 60, 0.6);
+    background-color: rgba(150, 42, 32, 0.55);
     scale: 0.98;
 }
 
+/* CTA de validation du menu (verrouille l'option surlignée dans la trajectoire de l'unité) —
+   grisé automatiquement (voir Button:disabled dans Theme.tss) tant qu'aucune option n'est choisie. */
+.context-confirm-btn {
+    height: 60px;
+    background-color: var(--color-accent);
+    border-color: var(--color-accent-hover);
+    border-width: 1px;
+    border-radius: 2px;
+    color: var(--color-accent-text);
+    font-size: 20px;
+    -unity-font-style: bold;
+    -unity-text-align: middle-center;
+    letter-spacing: 1px;
+    transition-duration: 0.15s;
+    margin-top: 4px;
+}
+
+.context-confirm-btn:hover {
+    background-color: var(--color-accent-hover);
+}
+
+.context-confirm-btn:active {
+    background-color: rgb(120, 30, 24);
+    scale: 0.98;
+}

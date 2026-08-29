@@ -1,8 +1,14 @@
 # Novgov Multijoueur — Documentation de déploiement
 
 Ce dossier contient toute la documentation et les fichiers de configuration nécessaires pour
-transformer Novgov (actuellement un jeu solo Joueur vs IA) en un jeu **multijoueur PvP
-asynchrone à tour par tour**, hébergé sur un VPS Hetzner via Docker.
+transformer Novgov (un jeu solo Joueur vs IA, **toujours disponible tel quel** — le multijoueur
+est un mode additionnel, pas un remplacement) en un jeu **multijoueur PvP asynchrone à tour par
+tour**, hébergé sur un VPS Hetzner via Docker.
+
+**État (2026-08-29) : déployé et vérifié en direct sur `novgov.com`** — stack Docker complète
+live (Postgres/GoTrue/PostgREST/serveur de jeu/Nginx), build headless Linux du serveur de jeu
+fonctionnel. Voir [08-known-issues-and-todo.md](08-known-issues-and-todo.md) section 9 pour le
+détail de cette étape et ce qu'il reste (surtout : tester depuis un vrai build Android, doc 07).
 
 **Ne PAS build/importer ce dossier dans le jeu.** Il contient uniquement de la doc et des
 fichiers de config serveur (yml, sql, conf) — Unity les ignore au build.
@@ -27,9 +33,9 @@ fichiers de config serveur (yml, sql, conf) — Unity les ignore au build.
 9. [06-security-checklist.md](06-security-checklist.md) — UFW/Docker, secrets, RLS.
 10. [07-test-plan-2-phones.md](07-test-plan-2-phones.md) — plan de test final avec 2 téléphones.
 11. [08-known-issues-and-todo.md](08-known-issues-and-todo.md) — **à lire en premier en reprenant
-    ce chantier** : état exact de ce qui est fait/pas fait, détail complet du blocage actuel (le
-    build Linux headless ne compile pas en ligne de commande — piste de résolution recommandée
-    incluse), et tout le travail restant jusqu'au test à 2 téléphones.
+    ce chantier** : état exact de ce qui est fait/pas fait (le build Linux headless compile et
+    tourne désormais réellement, déployé sur le VPS — section 9), et tout le travail restant
+    jusqu'au test à 2 téléphones.
 
 ## Identifiants
 
@@ -48,15 +54,14 @@ Ces choix sont expliqués en détail dans les documents dédiés, mais voici le 
 | Moteur de résolution | **Unity Headless** (pas de réécriture en Go/Node) | Le combat utilise déjà NavMesh + Physics.RaycastAll pour la ligne de vue (`UnitAI_Combat.cs`, `TacticalAIPlanner.cs`). Réimplémenter cette logique ailleurs serait un gros travail inutile. |
 | Système Ghost/IA | **Réutilisation de `TacticalAIPlanner.PlanTurnForUnit()`** | C'est littéralement le planificateur déjà utilisé pour l'équipe ennemie IA. Un joueur absent = ses unités basculent temporairement en mode "planifiées par l'IA" au lieu d'attendre une intention humaine. |
 | Auth | Supabase GoTrue self-hosted, appelé en direct par le client via `UnityWebRequest` | Pas besoin du SDK C# officiel (souvent en retard) — l'API REST de GoTrue est simple et stable. |
-| Accès DB | Le serveur Unity headless se connecte à Postgres en direct (port 5432, réseau Docker interne uniquement), le client ne parle JAMAIS à Postgres directement | Le client ne fait confiance à rien ; seul le serveur écrit les résultats de combat. PostgREST sert uniquement à des lectures non critiques (historique de parties, profil) si besoin plus tard. |
+| Accès DB | **Décision finale (différente de l'intention initiale ci-contre) : le serveur Unity headless écrit via PostgREST** (`UnityWebRequest` + `SERVICE_ROLE_KEY`, contourne RLS), pas de connexion Postgres directe — voir [04-unity-headless-server.md](04-unity-headless-server.md). Le client, lui, ne parle bien JAMAIS à Postgres directement. | Éviter une dépendance Npgsql externe (parfois délicate en IL2CPP/Mono) alors que PostgREST offre déjà tout ce qu'il faut en HTTP interne au réseau Docker. |
 | Portée V1 | **Un seul match actif au démarrage** (le temps du test à 2 téléphones), scaling multi-matchs documenté mais pas implémenté tout de suite | Évite de sur-ingénierer une orchestration multi-process avant d'avoir un premier match qui fonctionne. |
 
 ## Ce qui existe déjà dans le projet (contexte pour la suite)
 
-- `Assets/UnitAI.cs` + `UnitAI_Combat.cs` + `UnitAI_Movement.cs` + `UnitAI_Visuals.cs` : l'unité de jeu (fantassin, char, mortier), avec `teamID`, `isPlayerControlled`, `tacticalPath` (liste de `TacticalPathManager.TacticalNode`).
-- `Assets/TacticalPathManager.cs` : machine à états de tour (`GamePhase.Planification → CreationPath → Execution`), UI tactile de sélection/tracé de chemin, `LancerExecutionTour()` qui déclenche la résolution.
-- `Assets/Scripts/AI/TacticalAIPlanner.cs` : planificateur IA statique (`PlanTurnForUnit`) — **c'est notre futur système Ghost**.
-- `Assets/UnitSpawnerUI.cs` : déploiement des unités (Fantassin, Char Leopard 2, Véhicule Canon, Mortier, Barricade).
-- `Assets/GameManagerUI.cs` : écran de démarrage (carte hors-ligne / GPS réel), futur point d'insertion de l'écran de login.
-- Aucune dépendance réseau existante (`Packages/manifest.json` ne contient ni Netcode, ni Mirror, ni Photon) — tout est à construire.
+- `Assets/Scripts/AI/UnitAI.cs` + `UnitAI_Combat.cs` + `UnitAI_Movement.cs` + `UnitAI_Visuals.cs` : l'unité de jeu (fantassin, char, mortier), avec `teamID`, `isPlayerControlled`, `tacticalPath` (liste de `TacticalPathManager.TacticalNode`).
+- `Assets/Scripts/AI/TacticalPathManager.cs` (+ `TacticalPathManager_Input.cs`/`_Selection.cs`/`_ContextMenu.cs`/`_UI.cs`/`_PathDrawing.cs`/`_Execution.cs`, classes partielles, éclatées le 2026-08-29 — voir 08-known-issues-and-todo.md §9.1) : machine à états de tour (`GamePhase.Planification → CreationPath → Execution`), UI tactile de sélection/tracé de chemin, `LancerExecutionTour()` qui déclenche la résolution (et, depuis le 2026-08-29, la détection de victoire/défaite en solo).
+- `Assets/Scripts/AI/TacticalAIPlanner.cs` : planificateur IA statique (`PlanTurnForUnit`) — réutilisé tel quel côté serveur.
+- `Assets/Scripts/UI/UnitSpawnerUI.cs` : déploiement des unités (Fantassin, Char Leopard 2, Véhicule Canon, Mortier, Barricade), mode Hotseat (2 joueurs humains sur le même appareil en solo).
+- `Assets/Scripts/UI/GameManagerUI.cs` : écran de démarrage (2 boutons — Solo / Campagne Multijoueur, ce dernier enchaînant GPS puis login), point d'insertion de l'écran de login.
 - Unity **6000.5.8f1** (Unity 6), URP, Input System, `com.unity.ai.navigation` 2.0.14.

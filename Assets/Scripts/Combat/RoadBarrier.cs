@@ -149,6 +149,13 @@ public class RoadBarrier : MonoBehaviour
         }
     }
 
+    /// <summary>Retrait volontaire depuis le menu contextuel (voir TacticalPathManager_ContextMenu,
+    /// sélection d'une barricade) — même effet visuel/sonore qu'une destruction par les dégâts.</summary>
+    public void RemoveByPlayer()
+    {
+        DestroyBarrier();
+    }
+
     private void DestroyBarrier()
     {
         Debug.Log($"<color=red><b>[RoadBarrier] 💥 Barricade routière pulvérisée ! Voie de circulation libérée.</b></color>");

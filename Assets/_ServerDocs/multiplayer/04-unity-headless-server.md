@@ -1,5 +1,14 @@
 # Serveur Unity Headless autoritaire
 
+**État (2026-08-29) : build headless réellement obtenu, déployé et vérifié en direct sur le VPS
+(`novgov.com:7777` répond, `MatchSessionManager` charge la carte et écoute).** Voir
+[08-known-issues-and-todo.md](08-known-issues-and-todo.md), section 9, pour le détail complet des
+blocages réels rencontrés (pas ceux qu'on soupçonnait au départ) et de leur résolution — en
+particulier : le sous-cible **Dedicated Server** décrit ci-dessous est bien celui utilisé au final
+(`Assets/Editor/ServerBuildScript.cs`), après un détour par un Standalone classique qui s'est
+avéré être la mauvaise piste sur cette machine précise (son module d'Éditeur "Linux Build Support"
+Standalone n'est en réalité pas installé correctement, seul celui du Dedicated Server l'est).
+
 ## Principe
 
 La phase d'exécution d'un tour (`TacticalPathManager.ExecuterTourCoroutine`) fait déjà tourner
@@ -23,7 +32,10 @@ Unity 6 (2023+) propose un target "Dedicated Server" natif dans Build Settings :
   cas ici (`com.unity.ai.navigation` est utilisé pour un bake en edit-time, à vérifier que la
   scène de jeu a bien son NavMesh sauvegardé avec la scène et non régénéré au runtime via un
   script qui dépendrait du rendu).
-- Lancement : `./NovgovServer.x86_64 -batchmode -nographics -logFile /var/log/streetact/server.log`
+- Lancement : `./StreetActServer.x86_64 -batchmode -nographics -logFile /dev/stdout` (nom réel de
+  l'exécutable produit par `ServerBuildScript.BuildLinuxServer` — voir le `Dockerfile` dans
+  `Assets/_ServerDocs/multiplayer/game-server/`, qui utilise exactement cette commande en
+  `ENTRYPOINT`).
 
 ## Séparation client/serveur dans le code (implémentation réelle)
 
@@ -106,17 +118,18 @@ public static void PlanTurnForUnit(UnitAI unit)
 ```
 
 `unit.isPlayerControlled` bloque volontairement l'IA de jouer les unités du joueur. Pour le
-Ghost, il faut un signal distinct qui autorise l'IA à planifier une unité *appartenant* à un
+Ghost, il fallait un signal distinct qui autorise l'IA à planifier une unité *appartenant* à un
 joueur humain (elle reste `isPlayerControlled = true` pour le scoring/l'affichage — c'est
-juste que personne n'a donné d'ordre ce tour-ci) :
+juste que personne n'a donné d'ordre ce tour-ci).
 
-**Modification nécessaire (petite, ciblée, à faire quand on implémente le serveur) :**
+**Fait** (`UnitAI.cs` a bien le champ `isGhosted`, `TacticalAIPlanner.PlanTurnForUnit` a bien la
+condition assouplie ci-dessous) :
 
 ```csharp
-// Dans UnitAI.cs — nouveau champ
+// UnitAI.cs
 public bool isGhosted = false;
 
-// Dans TacticalAIPlanner.cs — condition assouplie
+// TacticalAIPlanner.cs — condition assouplie
 public static void PlanTurnForUnit(UnitAI unit)
 {
     if (unit == null || unit.isDead) return;
@@ -125,7 +138,11 @@ public static void PlanTurnForUnit(UnitAI unit)
 }
 ```
 
-Côté `MatchSessionManager`, quand un joueur timeout ou se déconnecte :
+**Implémentation réelle côté `MatchSessionManager` (légèrement différente de l'esquisse
+initiale ci-dessous, voir `ApplyForPlayer` dans le code) :** plutôt que de faire planifier l'unité
+par `TacticalAIPlanner` en cas d'absence, le choix final a été plus simple — un joueur absent/pas
+soumis voit juste ses unités garder une trajectoire vide (`ClearTacticalPath()`, immobiles ce
+tour-ci), sans substitut IA. L'esquisse initialement envisagée était :
 
 ```csharp
 foreach (var unit in UnitAI.AllLivingUnits.Where(u => u.teamID == disconnectedTeamId))
@@ -135,8 +152,10 @@ foreach (var unit in UnitAI.AllLivingUnits.Where(u => u.teamID == disconnectedTe
 }
 ```
 
-Et on émet l'événement `ghost_activated` dans le log + le message `opponent_ghosted` au
-client adverse, pour que l'UI affiche clairement "Adversaire absent — IA de secours active".
+Le message réseau `opponent_ghosted` est bien émis vers le client adverse (`reason:
+"disconnected"` ou `"timeout"`), pour que l'UI affiche clairement "Adversaire absent". Le nom
+d'événement `ghost_activated` évoqué initialement n'a pas été retenu séparément — `opponent_ghosted`
+suffit, voir [03-network-protocol.md](03-network-protocol.md).
 
 **Reconnexion pendant qu'un tour Ghost a déjà été résolu** : le tour est définitif dès que
 `turn_result` a été calculé et écrit — pas d'annulation rétroactive (cohérent avec un jeu à

@@ -1,5 +1,4 @@
 using UnityEngine;
-using UnityEngine.UI;
 using UnityEngine.UIElements;
 using System.Collections;
 #if UNITY_ANDROID
@@ -8,13 +7,11 @@ using UnityEngine.Android;
 
 public class GameManagerUI : MonoBehaviour
 {
-    [Header("UI Panels")]
-    public GameObject loadingPanel;
-    public GameObject errorPanel;
-    
-    [Header("UI Text")]
-    public Text errorText;
-    
+    // Écrans "Loading"/"Error" : entièrement pilotés par UIScreenManager (UI Toolkit, thème
+    // commando unifié) depuis Resources/UI/LoadingScreen.uxml et ErrorScreen.uxml — remplace
+    // l'ancien Canvas legacy (UnityEngine.UI) non stylé qui vivait directement dans la scène.
+    private Label errorTextLabel;
+
     private static GameManagerUI instance;
     public static GameManagerUI Instance { get { return instance; } }
 
@@ -40,12 +37,20 @@ public class GameManagerUI : MonoBehaviour
             return;
         }
         instance = this;
-        
+
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 60;
 
-        CanvasGroupFader.SetVisible(errorPanel, false);
-        CanvasGroupFader.SetVisible(loadingPanel, false);
+        // Le Canvas legacy (UnityEngine.UI) encore présent dans la scène (Panel/LoadingPanel/
+        // ErrorPanel, actifs par défaut) n'est plus piloté par aucun script depuis la migration
+        // des écrans Chargement/Erreur vers UI Toolkit (LoadingScreen/ErrorScreen.uxml) — sans ce
+        // nettoyage il resterait affiché en permanence, avec son rendu non stylé, par-dessus le jeu.
+        // Important : désactiver seulement le COMPOSANT Canvas (pas gameObject.SetActive) — ce
+        // Canvas legacy vit sur le MÊME GameObject que ce script GameManagerUI dans la scène, donc
+        // désactiver le GameObject désactiverait GameManagerUI lui-même et empêcherait Start() de
+        // s'exécuter (menu de démarrage jamais affiché — bug vécu et corrigé pendant cette session).
+        Canvas legacyCanvas = GetComponent<Canvas>();
+        if (legacyCanvas != null) legacyCanvas.enabled = false;
 
         // Ambiance visuelle militaire Brouillard de Guerre
         RenderSettings.fog = true;
@@ -78,29 +83,75 @@ public class GameManagerUI : MonoBehaviour
         }
 
         VisualElement root = UIScreenManager.Instance.GetScreen("StartupMenu");
-        root.Q<UnityEngine.UIElements.Button>("btn-offline").clicked += () =>
+        if (root == null)
         {
-            isMapSelectorOpen = false;
-            UIScreenManager.Instance.HideAll();
-            MusicManager.SetGameplayVolume();
-            OnClickLoadDefaultOfflineMap();
-        };
-        root.Q<UnityEngine.UIElements.Button>("btn-gps").clicked += () =>
+            Debug.LogError("[GameManagerUI] Écran 'StartupMenu' introuvable (UXML non chargé) — le menu de démarrage restera invisible.");
+            return;
+        }
+
+        try
         {
-            MusicManager.SetGameplayVolume();
-            StartCoroutine(StartDeviceGPS());
-        };
-        root.Q<UnityEngine.UIElements.Button>("btn-multiplayer").clicked += () =>
+            // Menu réduit à 2 choix : MODE SOLO (carte déjà présente, vs IA ou vs un second joueur
+            // sur le même appareil via la case à cocher ci-dessous) et MODE CAMPAGNE MULTIJOUEUR
+            // (géolocalisation GPS — anciennement un 3e bouton séparé "btn-gps" — puis connexion
+            // PvP, anciennement déclenchée directement sans passer par le GPS).
+            UnityEngine.UIElements.Toggle hotseatToggle = root.Q<UnityEngine.UIElements.Toggle>("hotseat-toggle");
+
+            root.Q<UnityEngine.UIElements.Button>("btn-offline").clicked += () =>
+            {
+                isMapSelectorOpen = false;
+                UnitSpawnerUI.HotseatMode = hotseatToggle != null && hotseatToggle.value;
+                UIScreenManager.Instance.HideAll();
+                MusicManager.SetGameplayVolume();
+                OnClickLoadDefaultOfflineMap();
+            };
+            root.Q<UnityEngine.UIElements.Button>("btn-multiplayer").clicked += () =>
+            {
+                MusicManager.SetGameplayVolume();
+                StartCoroutine(StartDeviceGPS(thenConnectMultiplayer: true));
+            };
+
+            gpsStatusLabel = root.Q<Label>("gps-status-label");
+        }
+        catch (System.Exception ex)
         {
-            isMapSelectorOpen = false;
-            UIScreenManager.Instance.HideAll();
-            Novgov.Network.MultiplayerMatchController.EnsureInstance().BeginLoginFlow();
-        };
+            Debug.LogError($"[GameManagerUI] Liaison des boutons du menu de démarrage échouée : {ex.GetType().Name} — {ex.Message}");
+        }
 
-
-        gpsStatusLabel = root.Q<Label>("gps-status-label");
-
+        // Menu de démarrage prioritaire : ce Show() doit s'exécuter même si l'écran "Error"
+        // (non critique) échoue à se lier plus bas — sans ce garde-fou, une seule exception dans
+        // le bloc suivant empêchait TOUT le menu de s'afficher (écran totalement vide au lancement).
         if (isMapSelectorOpen)
+        {
+            UIScreenManager.Instance.Show("StartupMenu");
+            MusicManager.SetMenuVolume();
+        }
+
+        VisualElement errorRoot = UIScreenManager.Instance.GetScreen("Error");
+        if (errorRoot == null)
+        {
+            Debug.LogWarning("[GameManagerUI] Écran 'Error' introuvable (UXML non chargé) — ShowError() se contentera de logger dans la Console.");
+            return;
+        }
+        errorTextLabel = errorRoot.Q<Label>("error-text");
+        UnityEngine.UIElements.Button btnLoadOffline = errorRoot.Q<UnityEngine.UIElements.Button>("btn-load-offline");
+        if (btnLoadOffline != null)
+        {
+            btnLoadOffline.clicked += () =>
+            {
+                UIScreenManager.Instance.SetVisible("Error", false);
+                OnClickLoadDefaultOfflineMap();
+            };
+        }
+    }
+
+    /// <summary>Retour au menu de démarrage (choix hors-ligne/GPS/multijoueur) — appelé depuis le
+    /// bouton RETOUR des boîtes de dialogue de connexion/création de compte
+    /// (voir MultiplayerMatchController), qui ne connaissent pas ce menu directement.</summary>
+    public void ReturnToStartupMenu()
+    {
+        isMapSelectorOpen = true;
+        if (UIScreenManager.Instance != null)
         {
             UIScreenManager.Instance.Show("StartupMenu");
             MusicManager.SetMenuVolume();
@@ -135,11 +186,11 @@ public class GameManagerUI : MonoBehaviour
 
     public void ShowError(string message)
     {
-        CanvasGroupFader.SetVisible(loadingPanel, false);
-        if (errorPanel != null)
+        UIScreenManager.Instance?.SetVisible("Loading", false);
+        if (UIScreenManager.Instance != null && errorTextLabel != null)
         {
-            CanvasGroupFader.SetVisible(errorPanel, true);
-            if (errorText != null) errorText.text = message;
+            if (errorTextLabel != null) errorTextLabel.text = message;
+            UIScreenManager.Instance.SetVisible("Error", true);
         }
         else
         {
@@ -149,38 +200,39 @@ public class GameManagerUI : MonoBehaviour
 
     public void OnClickLoadDefaultOfflineMap()
     {
-        CanvasGroupFader.SetVisible(errorPanel, false);
-        CanvasGroupFader.SetVisible(loadingPanel, true);
+        UIScreenManager.Instance?.SetVisible("Error", false);
+        UIScreenManager.Instance?.SetVisible("Loading", true);
         StartCoroutine(LoadOfflineRoutine());
     }
-    
+
     private IEnumerator LoadOfflineRoutine()
     {
         MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
         CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
-        
+
         if (mapLoader != null) mapLoader.ApplyDefaultOfflineMap();
         if (cityGen != null) cityGen.LoadDefaultOfflineCity();
-        
+
         yield return new WaitForSeconds(0.4f);
 
-        if (UnitSpawnerUI.Instance != null)
-        {
-            UnitSpawnerUI.Instance.AutoDeployBattlefield();
-        }
-
-        CanvasGroupFader.SetVisible(loadingPanel, false);
+        // Plus de déploiement automatique : la carte se charge vide, le joueur place lui-même ses
+        // unités via le dock "QG Renforts" (voir UnitSpawnerUI.Start()).
+        UIScreenManager.Instance?.SetVisible("Loading", false);
     }
-    
+
     public void HideLoading()
     {
-        CanvasGroupFader.SetVisible(loadingPanel, false);
-        CanvasGroupFader.SetVisible(errorPanel, false);
+        UIScreenManager.Instance?.SetVisible("Loading", false);
+        UIScreenManager.Instance?.SetVisible("Error", false);
     }
 
-    private IEnumerator StartDeviceGPS()
+    /// <summary>Géolocalise l'appareil, génère la ville réelle correspondante, puis — si
+    /// <paramref name="thenConnectMultiplayer"/> est vrai (bouton MODE CAMPAGNE MULTIJOUEUR) —
+    /// enchaîne directement sur la connexion PvP une fois la carte prête. En mode solo, le GPS
+    /// n'est jamais utilisé : ce paramètre est donc toujours vrai pour l'unique appelant restant.</summary>
+    private IEnumerator StartDeviceGPS(bool thenConnectMultiplayer)
     {
-        gpsStatus = "📡 Recherche du signal GPS de l'appareil...";
+        gpsStatus = "Recherche du signal GPS de l'appareil...";
 
 #if UNITY_ANDROID
         // Android 6+ : la permission déclarée dans le manifeste ne suffit pas, il faut la demander
@@ -189,7 +241,7 @@ public class GameManagerUI : MonoBehaviour
         // il a fallu le faire manuellement pendant les tests.
         if (!Permission.HasUserAuthorizedPermission(Permission.FineLocation))
         {
-            gpsStatus = "📍 Autorise l'accès à la position pour continuer...";
+            gpsStatus = "Autorise l'accès à la position pour continuer...";
             bool permissionResolved = false;
             bool permissionGranted = false;
 
@@ -202,7 +254,7 @@ public class GameManagerUI : MonoBehaviour
 
             if (!permissionGranted)
             {
-                gpsStatus = "⚠️ Autorisation de localisation refusée. Active-la dans les paramètres de l'appareil pour utiliser le GPS.";
+                gpsStatus = "Autorisation de localisation refusée. Active-la dans les paramètres de l'appareil pour utiliser le GPS.";
                 yield break;
             }
         }
@@ -210,7 +262,7 @@ public class GameManagerUI : MonoBehaviour
 
         if (!Input.location.isEnabledByUser)
         {
-            gpsStatus = "⚠️ GPS désactivé dans les paramètres du téléphone.";
+            gpsStatus = "GPS désactivé dans les paramètres du téléphone.";
             yield break;
         }
 
@@ -224,13 +276,13 @@ public class GameManagerUI : MonoBehaviour
 
         if (maxWait < 1 || Input.location.status == LocationServiceStatus.Failed)
         {
-            gpsStatus = "⚠️ Impossible de capter le signal GPS.";
+            gpsStatus = "Impossible de capter le signal GPS.";
             yield break;
         }
 
         float lat = (float)Input.location.lastData.latitude;
         float lon = (float)Input.location.lastData.longitude;
-        gpsStatus = "✅ Coordonnées acquises ! Génération de votre ville...";
+        gpsStatus = "Coordonnées acquises ! Génération de votre ville...";
         Input.location.Stop();
 
         yield return new WaitForSeconds(0.6f);
@@ -243,7 +295,7 @@ public class GameManagerUI : MonoBehaviour
         CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
         MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
 
-        CanvasGroupFader.SetVisible(loadingPanel, true);
+        UIScreenManager.Instance?.SetVisible("Loading", true);
 
         if (cityGen != null)
         {
@@ -260,11 +312,16 @@ public class GameManagerUI : MonoBehaviour
 
         yield return new WaitForSeconds(0.5f);
 
-        if (UnitSpawnerUI.Instance != null)
-        {
-            UnitSpawnerUI.Instance.AutoDeployBattlefield();
-        }
+        // Plus de déploiement automatique : la carte se charge vide, le joueur place lui-même ses
+        // unités via le dock "QG Renforts" (voir UnitSpawnerUI.Start()) — sauf en enchaînement
+        // multijoueur ci-dessous, où c'est l'écran de connexion qui prend immédiatement la main.
+        UIScreenManager.Instance?.SetVisible("Loading", false);
 
-        CanvasGroupFader.SetVisible(loadingPanel, false);
+        if (thenConnectMultiplayer)
+        {
+#if !UNITY_SERVER
+            Novgov.Network.MultiplayerMatchController.EnsureInstance().BeginLoginFlow();
+#endif
+        }
     }
 }

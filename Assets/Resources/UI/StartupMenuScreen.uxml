@@ -1,14 +1,27 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(4, 5, 6, 0.9); picking-mode: Ignore;">
         <ui:VisualElement class="panel" style="width: 75%; max-width: 620px;">
-            <ui:VisualElement style="width: 96px; height: 96px; align-self: center; margin-bottom: 12px; background-image: url(&apos;/Assets/Icon/NovgovIcon.png&apos;); -unity-background-scale-mode: scale-to-fit;" />
-            <ui:Label text="⚔️ NOVGOV : CHAMP DE BATAILLE" class="title" style="margin-bottom: 24px; font-size: 30px;" />
+            <ui:VisualElement style="width: 96px; height: 96px; align-self: center; margin-bottom: 12px; background-image: url('/Assets/Icon/NovgovIcon.png'); -unity-background-scale-mode: scale-to-fit;" />
+            <ui:Label text="NOVGOV : CHAMP DE BATAILLE" class="title" style="margin-bottom: 24px; font-size: 26px;" />
 
-            <ui:Button name="btn-offline" text="🏙️ COMBAT URBAIN HORS-LIGNE&#10;Chargement immédiat" class="btn-secondary" style="min-height: 96px; margin-bottom: 14px; white-space: normal;" />
-            <ui:Button name="btn-gps" text="🛰️ MA POSITION GPS RÉELLE&#10;Géolocalisation directe" class="btn-secondary" style="min-height: 96px; margin-bottom: 14px; white-space: normal;" />
-            <ui:Button name="btn-multiplayer" text="⚔️ MULTIJOUEUR (PvP en ligne)" class="btn-primary" style="min-height: 76px; margin-bottom: 14px; white-space: normal;" />
+            <ui:Button name="btn-offline" class="btn-secondary btn-with-icon" style="min-height: 96px; margin-bottom: 10px;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/city.png');" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="MODE SOLO" />
+                    <ui:Label text="Carte déjà présente — vs IA ou à deux sur cet appareil" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
+            <ui:Toggle name="hotseat-toggle" label="Équipe adverse contrôlée par un second joueur (même appareil)" style="margin-bottom: 14px; margin-left: 4px;" />
 
-            <ui:Label name="gps-status-label" text="" style="-unity-text-align: middle-center; color: rgb(255, 220, 80); font-size: 26px; margin-bottom: 14px; white-space: normal;" />
+            <ui:Button name="btn-multiplayer" class="btn-primary btn-with-icon" style="min-height: 96px; margin-bottom: 14px;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/satellite.png'); -unity-background-image-tint-color: var(--color-accent-text);" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="MODE CAMPAGNE MULTIJOUEUR" />
+                    <ui:Label text="Géolocalisation GPS puis connexion PvP en ligne" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
+
+            <ui:Label name="gps-status-label" text="" style="-unity-text-align: middle-center; color: var(--color-accent); font-size: 26px; margin-bottom: 14px; white-space: normal;" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

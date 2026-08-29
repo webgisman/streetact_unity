@@ -1,8 +1,20 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore;">
         <ui:VisualElement style="flex-direction: row; justify-content: space-between; padding: 16px; picking-mode: Ignore;">
-            <ui:Button name="back-button" text="◀ VUE 2D (CARTE)" class="btn-secondary" style="min-width: 220px; min-height: 68px;" />
-            <ui:Label name="focus-banner" text="" class="panel" style="display: none; color: rgb(70, 220, 255); font-size: 26px; -unity-font-style: bold; padding: 8px 20px; picking-mode: Ignore;" />
+            <ui:Button name="back-button" class="btn-secondary btn-with-icon" style="min-width: 220px; min-height: 68px; justify-content: center;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/chevron_left.png'); margin-right: 10px;" />
+                <ui:Label text="VUE 2D (CARTE)" />
+            </ui:Button>
+            <ui:VisualElement style="flex-direction: row; align-items: center; picking-mode: Ignore;">
+                <ui:Label name="focus-banner" text="" class="panel" style="display: none; color: var(--color-info); font-size: 26px; -unity-font-style: bold; padding: 8px 20px; margin-right: 12px; picking-mode: Ignore;" />
+                <!-- Fin de tour doit rester joignable même en vue 3D (Action) : avant ce bouton, il
+                     fallait revenir en 2D juste pour la déclencher, alors qu'elle s'applique à
+                     TOUTES les unités et n'a rien à voir avec l'unité actuellement suivie ici. -->
+                <ui:Button name="end-turn-button-3d" class="btn-primary btn-with-icon" style="min-height: 68px; padding: 0 20px; justify-content: center;">
+                    <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/play.png'); -unity-background-image-tint-color: var(--color-accent-text); margin-right: 10px;" />
+                    <ui:Label text="FIN DE TOUR" />
+                </ui:Button>
+            </ui:VisualElement>
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

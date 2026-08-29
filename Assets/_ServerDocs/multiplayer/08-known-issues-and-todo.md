@@ -1,8 +1,10 @@
 # État des lieux, problèmes rencontrés et travail restant
 
-Dernière mise à jour : 2026-08-23. Ce document liste **tout** ce qui a été fait, tout ce qui
-bloque, et tout ce qu'il reste à faire pour arriver au test à 2 téléphones. À lire avant de
-reprendre le travail sur ce projet, dans n'importe quelle session future.
+Dernière mise à jour : 2026-08-29 (voir §9 pour la session la plus récente — **le build Linux
+headless compile et tourne désormais réellement**, déployé et vérifié en direct sur le VPS). Ce
+document liste **tout** ce qui a été fait, tout ce qui bloque, et tout ce qu'il reste à faire pour
+arriver au test à 2 téléphones. À lire avant de reprendre le travail sur ce projet, dans n'importe
+quelle session future.
 
 ---
 
@@ -13,17 +15,25 @@ reprendre le travail sur ce projet, dans n'importe quelle session future.
 | VPS (sécurité, Docker, UFW, fail2ban) | ✅ Fait, live sur `novgov.com` |
 | Supabase (Postgres + GoTrue + PostgREST) | ✅ Fait, testé de bout en bout (inscription réelle → JWT → profil auto-créé) |
 | Nginx + TLS (Let's Encrypt) | ✅ Fait, `https://novgov.com` valide |
-| Code C# serveur (`Assets/Scripts/Server/`) | ✅ Écrit, jamais testé en exécution réelle (le build ne compile pas encore, voir §2) |
-| Code C# client (`Assets/Scripts/Network/`, `Assets/Scripts/Auth/`) | ✅ Écrit, jamais testé en exécution réelle |
+| Code C# serveur (`Assets/Scripts/Server/`) | ✅ Écrit, **exécuté réellement en prod** — voir §9 (logs vérifiés : matchmaking, `MatchSessionManager`, port 7777 confirmé joignable depuis l'extérieur) |
+| Code C# client (`Assets/Scripts/Network/`, `Assets/Scripts/Auth/`) | ✅ Écrit, pas encore testé depuis un vrai build Android (le serveur seul a été vérifié, voir §9) |
 | Modifications du code existant (isGhosted, guards UNITY_SERVER, fix Handheld, fix shaders null) | ✅ Faites, voir §4 pour le détail exact des fichiers touchés |
-| **Build Linux headless du serveur de jeu** | ❌ **BLOQUÉ** — voir §2, c'est le prochain obstacle à lever |
-| Déploiement du conteneur `game-server` sur le VPS | ⏳ En attente du point ci-dessus |
+| **Build Linux headless du serveur de jeu** | ✅ **RÉSOLU le 2026-08-29** — voir §9, §2 est désormais un historique (la vraie cause n'était pas celle soupçonnée) |
+| Déploiement du conteneur `game-server` sur le VPS | ✅ **Fait et vérifié en direct** — voir §9 |
 | Intégration réseau dans un build client (Android) réel | ⏳ Pas commencé (le code existe mais n'a jamais été buildé/testé sur un téléphone) |
-| Test à 2 téléphones (doc 07) | ⏳ Pas commencé |
+| Test à 2 téléphones (doc 07) | ⏳ Pas commencé — le serveur est prêt à le recevoir, voir §9 |
 
 ---
 
-## 2. Problème bloquant : le build Linux headless ne compile pas en ligne de commande
+## 2. Ancien problème bloquant (historique — voir §9 pour la résolution réelle)
+
+**Mise à jour du 2026-08-29 : cette section est conservée pour l'historique de l'investigation,
+mais sa conclusion s'est révélée fausse.** Le CS0121 décrit ci-dessous ne s'est **pas reproduit**
+lors d'un nouvel essai de build le 2026-08-29 — il semble avoir été un état transitoire propre à
+cette machine à ce moment-là (cache, licence ou état d'Éditeur non identifié), exactement comme
+l'hypothèse du point ci-dessous le suspectait déjà. Le vrai obstacle rencontré le 2026-08-29 était
+d'une toute autre nature (incohérences `#if UNITY_SERVER` dans le code, puis un module d'Éditeur
+manquant) — voir §9 pour le détail complet et la résolution.
 
 ### Symptôme
 
@@ -121,19 +131,25 @@ du projet.
 
 ## 3. Une fois le build Linux obtenu — ce qu'il reste à faire
 
-1. **Copier le build** dans `Assets/_ServerDocs/multiplayer/game-server/` : le fichier exécutable
-   (`NovgovServer.x86_64`), le dossier `NovgovServer_Data/`, et **`UnityPlayer.so`** (facile
+**Étapes 1 à 4 ci-dessous : faites et vérifiées le 2026-08-29, voir §9 pour le détail exact des
+commandes et des logs obtenus.**
+
+1. ~~**Copier le build** dans `Assets/_ServerDocs/multiplayer/game-server/`~~ : le fichier exécutable
+   (`StreetActServer.x86_64`), le dossier `StreetActServer_Data/`, et **`UnityPlayer.so`** (facile
    à oublier — il est à côté de l'exécutable, pas dedans `_Data/`).
-2. Transférer sur le VPS (`scp` + `tar`, voir historique de session pour la commande exacte —
-   env. 40 Mo compressés) dans `/opt/streetact/game-server/`.
-3. `docker compose build game-server && docker compose up -d game-server` sur le VPS.
-4. **Vérifier les logs** (`docker compose logs -f game-server`) : le serveur doit charger la
-   carte par défaut, générer les ~396 bâtiments (pas seulement 21 — sinon le fix shader n'a pas
-   pris), et afficher `[GameServerBootstrap] Serveur de jeu Novgov à l'écoute sur le port 7777.`
+2. ~~Transférer sur le VPS~~ (`scp`, voir §9 pour la commande exacte utilisée) dans
+   `/opt/streetact/game-server/`.
+3. ~~`docker compose build game-server && docker compose up -d game-server` sur le VPS.~~
+4. ~~**Vérifier les logs**~~ (`docker compose logs -f game-server`) : confirmé — le serveur charge
+   la carte par défaut, génère 758 bâtiments, et affiche
+   `[GameServerBootstrap] Serveur de jeu Novgov à l'écoute sur le port 7777.` +
+   `[MatchSessionManager] Carte par défaut (hors-ligne) chargée pour le serveur.`
 5. **Test de fumée sans téléphone** : ouvrir une connexion TCP brute vers `novgov.com:7777`,
    envoyer un message `auth` avec un JWT valide (récupérable via un vrai login sur
    `/auth/v1/token`), vérifier qu'il n'y a pas de crash serveur. Ceci teste `GameServerBootstrap`
-   et `JwtValidator` sans avoir besoin du client mobile.
+   et `JwtValidator` sans avoir besoin du client mobile. **Fait uniquement au niveau TCP brut
+   (port ouvert, accepte une connexion) le 2026-08-29 — le handshake applicatif avec un vrai JWT
+   n'a pas encore été testé.**
 6. **Builder le client Unity pour Android** avec les nouveaux scripts réseau. Points d'attention :
    - Vérifier que `SupabaseAuthClient.BaseUrl`/`AnonKey` et `GameServerClient.ServerHost`/`ServerPort` (dans `Assets/Scripts/Auth/SupabaseAuthClient.cs` et
      `Assets/Scripts/Network/GameServerClient.cs`) pointent bien vers `novgov.com` (déjà le cas
@@ -360,3 +376,202 @@ inline minimaux, d'où un rendu très brut ("horrible" au retour utilisateur).
 | `Assets/TacticalPathManager.cs` | Backdrop cliquable pour le menu contextuel ; boutons du menu contextuel migrés vers la classe USS `context-button` |
 | `Assets/Resources/UI/ContextMenuScreen.uxml` + `.uss` (nouveau) | Refonte visuelle du menu d'action contextuel |
 | `Assets/Resources/UI/DeploymentDockScreen.uxml` + `.uss` (nouveau) | Refonte visuelle du dock de déploiement |
+
+---
+
+## 9. Session du 2026-08-29 — refonte UI/UX, barricades, menu de démarrage, **build serveur réellement résolu et déployé**
+
+### 9.1 Lisibilité du code — éclatement de `TacticalPathManager`
+
+`TacticalPathManager.cs` (~1750 lignes) éclaté en classes partielles, même convention que
+`UnitAI`/`UnitAI_Movement`/`UnitAI_Combat`/`UnitAI_Visuals` :
+- `TacticalPathManager.cs` — enums, struct `TacticalNode`, champs partagés, `AnyOrderMenuOpen`,
+  `IsSoloGameOver`, `Awake`/`Start`/`Update`.
+- `TacticalPathManager_Input.cs` — toute la cascade de détection de tap (unité/sol/porte/fenêtre/
+  bâtiment/barricade), radius tolérant, anti-double-tir.
+- `TacticalPathManager_Selection.cs` — sélection d'unité, unité blessée suivante.
+- `TacticalPathManager_ContextMenu.cs` — ouverture/fermeture centralisée du menu contextuel,
+  confirmation d'ordres, menus barricade.
+- `TacticalPathManager_UI.cs` — barre d'escouade, câblage des boutons UI Toolkit.
+- `TacticalPathManager_PathDrawing.cs` — tracé des lignes de trajectoire.
+- `TacticalPathManager_Execution.cs` — lancement/coroutine/fin de tour, **et depuis cette session
+  la détection de victoire/défaite solo** (voir 9.3).
+
+### 9.2 Corrections d'interaction (sélection, menus, tir de char)
+
+Plusieurs bugs d'enchaînement tap → sélection → menu → confirmation corrigés dans la même série :
+mauvaise unité recevant les ordres, menu resté ouvert confirmant une cible obsolète, double
+déclenchement d'un même tap physique (appui **et** relâchement comptaient chacun comme un tap),
+faux rejets sur les chars/bâtiments (`BuildingStructure.FindBuildingAt` trop permissif, remplacé
+par un test raycast+collider), et une fuite d'un même frame entre un clic de bouton UI Toolkit et
+le tap 3D brut sous-jacent — corrigée via un drapeau `suppressPointerInputUntilFrame` basé sur
+`Time.frameCount` (pas `Time.time` : un cooldown temporel avait été essayé et rejeté, il retardait
+aussi les actions suivantes légitimes). Centralisation de la fermeture de menu dans
+`FermerMenuContextuel()` pour ne plus jamais laisser une cible obsolète confirmable.
+
+### 9.3 Condition de victoire/défaite en mode solo (n'existait pas avant)
+
+Le mode solo tournait indéfiniment, même un camp entièrement anéanti. Ajout dans
+`TacticalPathManager_Execution.cs` : effectif de chaque camp capturé en début de tour
+(`team1CountAtTurnStart`/`team2CountAtTurnStart`, pour ne jamais déclarer une victoire dès le tout
+premier tour juste parce qu'un camp n'a encore rien déployé), comparé à l'effectif après
+résolution du tour dans `CheckSoloGameOver()`. Nouvel écran `GameOverScreen.uxml` (résultat,
+détail, bouton "Rejouer" qui recharge la scène), enregistré dans `UIScreenManager`. Ce check est
+explicitement sauté si une partie multijoueur est active (`MultiplayerMatchController.IsActive`) —
+la fin de partie multijoueur est gérée côté serveur (`MatchSessionManager`), pas ici.
+
+### 9.4 Barricades — mécanique corrigée après plusieurs itérations erronées
+
+Design final (après plusieurs allers-retours, dont une version à glisser-déposer explicitement
+rejetée par l'utilisateur — "il faut la même méthode que les autres unités" — et refaite en tap
+comme toutes les autres unités) : **la première barricade d'une session se pose directement**
+(pas de menu, si l'emplacement est faisable) ; **chaque tap suivant** calcule une trajectoire
+depuis la dernière barricade posée jusqu'au nouveau point, vérifie le stock restant
+(`RemainingBarricadeStock`, 8 par équipe) et la faisabilité (raycast+collider, pas le test
+polygonal `BuildingStructure.FindBuildingAt`, trop permissif), puis affiche un menu de
+confirmation "DÉPLOYER CETTE EXTENSION" (même système `ShowContextMenu` que les ordres tactiques
+normaux, pas d'UI séparée). Bouton DÉPLOIEMENT recoloré pour être visuellement identique à FIN DE
+TOUR (même classe USS, même icône). Voir `UnitSpawnerUI.cs`
+(`lastPlacedBarricadeAnchor`/`pendingBarricadeExtension`/`ComputeBarricadeExtensionPositions`) et
+`TacticalPathManager_ContextMenu.cs` (`ShowBarricadeExtensionMenu`).
+
+### 9.5 Refonte visuelle : thème rouge, bandeau supprimé, icônes
+
+- Bandeau noir opaque en haut de l'UI tactique supprimé (`TacticalBottomBarScreen.uxml` :
+  `picking-mode` passé de `Position` à `Ignore`, fond retiré), bouton vue 3D agrandi et rendu
+  visible (`btn-glass`, 48px).
+- Bouton FIN DE TOUR ajouté en vue 3D (`ActionViewBackScreen.uxml` + `CameraStateManager.cs`) —
+  auparavant inaccessible dans ce mode de caméra.
+- Thème d'accent entièrement changé de doré/jaune vers rouge (`Theme.tss`, `NovgovTheme.cs` —
+  seule vraie duplication tolérée, C# miroir manuel des variables CSS).
+- Icône dédiée pour le véhicule canon (partageait auparavant l'icône générique char) dans la
+  barre d'escouade — bucket `activeCanonVehicles` vérifié **avant** le bucket char générique
+  puisque `isTank` est vrai pour les deux.
+- Son ajouté sur les boutons d'option du menu contextuel.
+
+### 9.6 Menu de démarrage réduit à 2 boutons + mode hotseat
+
+Refonte complète de `StartupMenuScreen.uxml` : plus que **MODE SOLO** et **MODE CAMPAGNE
+MULTIJOUEUR** (le bouton GPS séparé a été supprimé, fusionné dans le flux multijoueur — activer le
+GPS puis télécharger la carte/les polygones fait désormais partie du parcours "Campagne
+Multijoueur", voir `GameManagerUI.StartDeviceGPS(thenConnectMultiplayer:true)`). Mode Solo propose
+un interrupteur **Hotseat** (`UnitSpawnerUI.HotseatMode`, static bool) : activé, l'équipe 2 devient
+elle aussi `isPlayerControlled` (au lieu d'être pilotée par `TacticalAIPlanner`) pour jouer à deux
+sur le même appareil, carte déjà présente. Bouton "RETOUR" ajouté sur les écrans de connexion/
+inscription (`AuthScreen.uxml` + `MultiplayerMatchController.BindUI()`), qui appelle
+`GameManagerUI.ReturnToStartupMenu()` (nouvelle méthode publique).
+
+### 9.7 Le vrai blocage du build serveur, résolu — ce que le §2 ne disait pas
+
+En relançant réellement un build headless (`Unity.exe -batchmode -nographics -quit -buildTarget
+Linux64 -executeMethod ServerBuildScript.BuildLinuxServer`), le CS0121 historique du §2 **ne s'est
+pas reproduit du tout**. Trois blocages bien plus mondains ont été trouvés et corrigés à la place,
+un par un, en relançant le build après chaque correction :
+
+1. **`TacticalPathManager_Execution.cs`** — `using UnityEngine.UIElements;` manquant (utilisé pour
+   `.Q<Label>()`/`.Q<Button>()` dans `ShowSoloGameOver()`, ajouté avec la fonctionnalité §9.3).
+2. **`UnitSpawnerUI.cs`** — `IsPointerOverOnGUI()` déclarée à l'intérieur d'un bloc
+   `#if !UNITY_SERVER` mais appelée depuis du code non gardé de `TacticalCamera.cs` et
+   `TacticalPathManager_Input.cs`. Corrigé en sortant la méthode du bloc, avec un garde interne
+   (`#if UNITY_SERVER return false; #else ... #endif`) plutôt que de dupliquer l'appelant.
+3. **`Assets/Scripts/Network/MultiplayerMatchController.cs`** — la quasi-totalité de la classe
+   (login, matchmaking, HUD, tout ce qui touche `UIScreenManager`/UI Toolkit) était appelée depuis
+   des méthodes non gardées (`Update`, `BeginLoginFlow`, `HandleSignIn`, `ConnectToGameServer`,
+   `OnMatchFound`, `OnMatchOver`, etc.) alors que les méthodes UI (`SetUiState`,
+   `RefreshHudDynamicFields`, `BindUI`...) qu'elles appellent, elles, étaient déclarées sous
+   `#if !UNITY_SERVER`. Corrigé en restructurant tout le fichier : seuls les membres statiques
+   réellement référencés depuis d'autres fichiers compilés inconditionnellement (`Instance`,
+   `IsActive`, `IsFlowActive`, `EnsureInstance()`, `SubmitLocalTurn()` — ce dernier ne dépend
+   d'aucun type UI Toolkit) restent hors garde ; tout le reste de la classe (Awake/Update/auth/
+   matchmaking/HUD/BindUI) est maintenant sous un seul `#if !UNITY_SERVER` couvrant tout le corps
+   de la classe. Un appel non gardé similaire dans `GameManagerUI.StartDeviceGPS()` a aussi été
+   corrigé (`Novgov.Network.MultiplayerMatchController.EnsureInstance().BeginLoginFlow();` mis
+   sous `#if !UNITY_SERVER`).
+
+Une fois ces trois corrections faites, la compilation passait, mais le build échouait ensuite pour
+deux raisons **de configuration Éditeur/projet, pas de code** :
+
+4. **`ProjectSettings/GraphicsSettings.asset`** ne référençait aucun pipeline de rendu par défaut
+   (`m_CustomRenderPipeline: {fileID: 0}`) alors que le Quality Level "Mobile" du projet référence
+   un asset URP (`Mobile_RPAsset`) — Unity refuse de builder avec ce mélange
+   ("BuildFailedException: assets in its associated Quality levels and Graphics Settings that
+   belong to different render pipelines"). Corrigé en assignant ce même asset URP par défaut dans
+   `GraphicsSettings.asset`.
+5. **Le module "Linux Build Support" (Standalone Player) de cette installation Unity Editor est en
+   réalité un fragment cassé** — vérifié en comparant le contenu de
+   `Editor/Data/PlaybackEngines/LinuxStandaloneSupport/Variations/` : seul
+   `linux64_player_development_mono` existe côté Player (et ne contient que `Data/Managed`, sans
+   `LinuxPlayer`/`UnityPlayer.so` — pas un runtime jouable), alors que les 4 variantes
+   `linux64_server_{development,nondevelopment}_{mono,il2cpp}` sont, elles, complètes. Autrement
+   dit : **seul le module "Linux Dedicated Server Build Support" a réellement été installé sur
+   cette machine, jamais celui du Standalone classique.** Or `ServerBuildScript.cs` avait
+   spécifiquement été configuré (voir ancien §2, point 10) pour éviter le sous-cible Dedicated
+   Server à cause du CS0121 — qui ne s'est pas reproduit cette fois. **Solution : basculer
+   `ServerBuildScript.cs` sur `StandaloneBuildSubtarget.Server`**, le seul réellement installé et
+   complet sur cette machine. Build immédiatement réussi (`build/LinuxServer/StreetActServer.x86_64`,
+   ~118 Mo, `Build Finished, Result: Success.`).
+
+**Conclusion pour toute session future** : ne pas se fier à l'ancien §2 pour décider quel
+sous-cible utiliser — **vérifier d'abord quelles variantes existent réellement** sous
+`Editor/Data/PlaybackEngines/LinuxStandaloneSupport/Variations/` avant de choisir Player vs
+Server, plutôt que de supposer que Server est cassé sur la base d'une session précédente.
+
+### 9.8 Déploiement réel sur le VPS, vérifié en direct
+
+Le nouveau build a été transféré et mis en production sur `novgov.com` (54.36.100.151) :
+```bash
+scp -i ~/.ssh/streetact_vps StreetActServer.x86_64 UnityPlayer.so ubuntu@54.36.100.151:/opt/streetact/game-server/
+scp -i ~/.ssh/streetact_vps -r StreetActServer_Data ubuntu@54.36.100.151:/opt/streetact/game-server/
+ssh -i ~/.ssh/streetact_vps ubuntu@54.36.100.151 "cd /opt/streetact && docker compose build game-server && docker compose up -d game-server"
+```
+Vérifié après coup : `docker compose logs game-server` montre `[GameServerBootstrap] Serveur de
+jeu Novgov à l'écoute sur le port 7777.` et `[MatchSessionManager] Carte par défaut (hors-ligne)
+chargée pour le serveur.`, génération de 758 bâtiments, aucune exception. `novgov.com:7777`
+confirmé joignable depuis l'extérieur (`Test-NetConnection` → `TcpTestSucceeded: True`). Les 4
+autres conteneurs (`db`, `auth`, `rest`, `nginx`) n'ont pas été touchés, toujours up depuis 6
+jours au moment du déploiement.
+
+### 9.9 Vérification que la simulation est bien autoritaire côté serveur (audit demandé explicitement)
+
+Point important à ne pas re-découvrir plus tard : `MatchSessionManager.cs` ne fait *pas confiance*
+au client — chaque client envoie uniquement des **ordres** (chemin voulu), le serveur les valide
+(rejette NaN/Infinity/valeurs d'action hors énumération/chemins > 200 points) puis exécute
+lui-même `unit.ExecuterOrdres()`, **exactement le même code** que le mode solo
+(`UnitAI_Movement.cs`/`UnitAI_Combat.cs`, aucun garde `#if UNITY_SERVER` dessus) : mouvement
+NavMesh, ligne de vue par raycast contre les polygones de bâtiments (`GetVisibleEnemy`/
+`IsUnitSpottedByTeam`), tir depuis/vers une fenêtre ou une porte avec cône de vision, mortiers avec
+dégâts de zone réels (`MortarShell.ApplySplashDamage`, `Physics.OverlapSphere`), blocage physique
+du passage par les barricades (`RoadBarrier` = vrai `NavMeshObstacle` carvé), et checkpoints
+d'attente/guet/embuscade/camouflage — tout est recalculé serveur, les clients ne font que rejouer
+les snapshots de positions/PV reçus (`MultiplayerMatchController.PlaySnapshotsCoroutine`). Seule
+nuance : le serveur ne revérifie pas que le chemin soumis est géométriquement légal (seulement les
+valeurs aberrantes) — mais le mouvement réel reste contraint par le NavMesh serveur, qui respecte
+la vraie géométrie, donc un client modifié ne peut pas faire traverser un mur/une barricade à une
+unité même en soumettant n'importe quel point.
+
+### 9.10 Fichiers touchés cette session (résumé)
+
+| Fichier | Changement |
+|---|---|
+| `Assets/Scripts/AI/TacticalPathManager.cs` + 6 fichiers `_Xxx.cs` (nouveaux) | Éclatement en classes partielles (voir 9.1) |
+| `Assets/Scripts/AI/TacticalPathManager_Execution.cs` | Victoire/défaite solo (9.3) + `using UnityEngine.UIElements;` |
+| `Assets/Scripts/UI/UnitSpawnerUI.cs` | Barricades (9.4), hotseat (9.6), `IsPointerOverOnGUI()` sorti du garde `#if !UNITY_SERVER` |
+| `Assets/Scripts/UI/GameManagerUI.cs` | Menu 2 boutons (9.6), `ReturnToStartupMenu()`, appel `BeginLoginFlow()` gardé |
+| `Assets/Scripts/Network/MultiplayerMatchController.cs` | Restructuration complète des gardes `#if UNITY_SERVER` (9.7) + bouton retour (9.6) |
+| `Assets/Editor/ServerBuildScript.cs` | Bascule vers `StandaloneBuildSubtarget.Server` (9.7) |
+| `ProjectSettings/GraphicsSettings.asset` | Assignation du pipeline de rendu par défaut (9.7) |
+| `Assets/UI/Theme.tss`, `Assets/Scripts/UI/NovgovTheme.cs` | Thème rouge (9.5) |
+| `Assets/Resources/UI/GameOverScreen.uxml` (nouveau) | Écran de fin de partie solo (9.3) |
+| `Assets/Resources/UI/StartupMenuScreen.uxml`, `AuthScreen.uxml` | Menu 2 boutons + hotseat (9.6), bouton retour |
+| `Assets/Resources/UI/TacticalBottomBarScreen.uxml`, `ActionViewBackScreen.uxml`, `DeploymentDockScreen.uxml/.uss` | Refonte visuelle (9.5) |
+| `Assets/Scripts/Combat/RoadBarrier.cs` | `RemoveByPlayer()` |
+| `Assets/Scripts/Camera/CameraStateManager.cs` | Bouton fin de tour en vue 3D |
+| `Assets/Scripts/UI/UIScreenManager.cs` | Enregistrement de l'écran `GameOver` |
+
+### 9.11 Toujours pas fait après cette session
+
+- Test à 2 téléphones réel (doc 07) — le serveur est prêt, mais le build client Android avec les
+  scripts réseau n'a pas encore été refait/testé sur appareil depuis ces changements.
+- Handshake applicatif JWT réel sur le port 7777 (seul un test TCP brut a été fait, voir §3 point 5).
+- Audit `TacticalCamera`/scripts de scène non listés en §5 pour dépendances non gardées — toujours
+  pas fait, à surveiller.

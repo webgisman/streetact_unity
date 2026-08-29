@@ -1,7 +1,11 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.85); picking-mode: Ignore;">
+        <ui:Button name="back-button" class="btn-secondary btn-with-icon" style="position: absolute; top: 4%; left: 4%; min-width: 160px; min-height: 56px; justify-content: center;">
+            <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/chevron_left.png'); margin-right: 8px;" />
+            <ui:Label text="RETOUR" />
+        </ui:Button>
         <ui:VisualElement name="panel" class="panel" style="width: 70%; max-width: 620px;">
-            <ui:Label name="title-label" text="⚔️ CONNEXION MULTIJOUEUR" class="title" style="margin-bottom: 24px;" />
+            <ui:Label name="title-label" text="CONNEXION MULTIJOUEUR" class="title" style="margin-bottom: 24px;" />
 
             <ui:Label text="Email :" class="hint" />
             <ui:TextField name="email-field" style="margin-bottom: 16px;" />
