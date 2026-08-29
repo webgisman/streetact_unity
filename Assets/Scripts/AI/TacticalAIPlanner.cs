@@ -111,7 +111,7 @@ public static class TacticalAIPlanner
             if (bestScoutBuilding != null)
             {
                 Collider bCol = bestScoutBuilding.GetComponent<Collider>();
-                if (bCol != null && bCol.bounds.size.y > 3.5f)
+                if (bCol != null && bCol.bounds.size.y > 3.5f && IsBuildingReachableWithinBudget(unit, bestScoutBuilding, out _))
                 {
                     Vector3 roofPos = new Vector3(bCol.bounds.center.x, bCol.bounds.max.y, bCol.bounds.center.z);
                     unit.AddTacticalNode(new TacticalPathManager.TacticalNode
@@ -130,10 +130,25 @@ public static class TacticalAIPlanner
         MoveTowardsTarget(unit, patrolPoint, 15f);
     }
 
+    private const float MortarMinRange = 15f;
+    private const float MortarMaxRange = 120f;
+
     private static void PlanMortarBehavior(UnitAI unit, UnitAI target, float dist)
     {
+        // Trop proche : son propre souffle (MortarShell.ApplySplashDamage, rayon 6.5m) toucherait le
+        // mortier lui-même. Se replier au lieu de tirer, plutôt que de se suicider à bout portant.
+        if (dist < MortarMinRange)
+        {
+            Vector3 retreatDir = (unit.transform.position - target.transform.position).normalized;
+            if (retreatDir == Vector3.zero) retreatDir = Vector3.forward;
+            Vector3 retreatPoint = unit.transform.position + retreatDir * (MortarMinRange + 5f - dist);
+            MoveTowardsTarget(unit, retreatPoint, 0f);
+            Debug.Log($"<color=yellow>[TacticalAI] ⚠️ Mortier Ennemi {unit.gameObject.name} recule, cible trop proche ({dist:F0}m) pour tirer sans se blesser.</color>");
+            return;
+        }
+
         // Si la cible est à portée de tir d'artillerie (15m à 120m)
-        if (dist <= 120f)
+        if (dist <= MortarMaxRange)
         {
             // Planifie directement un tir de mortier parabolique avec salve AoE
             unit.AddTacticalNode(new TacticalPathManager.TacticalNode
@@ -150,10 +165,13 @@ public static class TacticalAIPlanner
         }
     }
 
+    private const float TankMinEngageDist = 18f;
+    private const float TankMaxEngageDist = 35f;
+
     private static void PlanTankBehavior(UnitAI unit, UnitAI target, float dist)
     {
         // Si le char est déjà à bonne distance d'engagement (18m à 35m)
-        if (dist >= 18f && dist <= 35f)
+        if (dist >= TankMinEngageDist && dist <= TankMaxEngageDist)
         {
             // Posture de guet tourelle 360° pour faire feu
             unit.AddTacticalNode(new TacticalPathManager.TacticalNode
@@ -161,6 +179,18 @@ public static class TacticalAIPlanner
                 position = unit.transform.position,
                 action = TacticalPathManager.NodeAction.Guetter
             });
+            return;
+        }
+
+        // Trop proche : "avancer en s'arrêtant à 20m" n'a aucun effet quand on est déjà plus près que
+        // la distance d'arrêt (MoveTowardsTarget calcule alors une distance négative et se contente
+        // d'un Guetter sur place) — reculer explicitement pour reprendre sa distance d'engagement.
+        if (dist < TankMinEngageDist)
+        {
+            Vector3 retreatDir = (unit.transform.position - target.transform.position).normalized;
+            if (retreatDir == Vector3.zero) retreatDir = Vector3.forward;
+            Vector3 retreatPoint = unit.transform.position + retreatDir * (TankMaxEngageDist - dist);
+            MoveTowardsTarget(unit, retreatPoint, 0f);
             return;
         }
 
@@ -206,7 +236,7 @@ public static class TacticalAIPlanner
             {
                 Collider bCol = bestRoofBuilding.GetComponent<Collider>();
                 float bHeight = (bCol != null) ? bCol.bounds.size.y : 10f;
-                if (bHeight > 3.5f)
+                if (bHeight > 3.5f && IsBuildingReachableWithinBudget(unit, bestRoofBuilding, out _))
                 {
                     Vector3 roofTarget = (bCol != null) ? new Vector3(bCol.bounds.center.x, bCol.bounds.max.y, bCol.bounds.center.z) : (bestRoofBuilding.transform.position + Vector3.up * 10f);
                     unit.AddTacticalNode(new TacticalPathManager.TacticalNode
@@ -243,18 +273,49 @@ public static class TacticalAIPlanner
             if (bestBarrier != null && bestBarrierDist < 18f)
             {
                 Vector3 coverPos = bestBarrier.transform.position + (bestBarrier.transform.position - target.transform.position).normalized * 1.2f;
-                unit.AddTacticalNode(new TacticalPathManager.TacticalNode
+
+                // La position de couverture brute peut tomber hors NavMesh (ou dans l'obstacle de la
+                // barricade elle-même) — valider avant de commander une destination inatteignable qui
+                // ferait échouer silencieusement le déplacement de l'unité ce tour-ci.
+                NavMeshAgent coverAgent = unit.GetComponent<NavMeshAgent>();
+                int coverAreaMask = coverAgent != null ? coverAgent.areaMask : NavMesh.AllAreas;
+                if (NavMesh.SamplePosition(coverPos, out NavMeshHit coverHit, 3.0f, coverAreaMask))
                 {
-                    position = coverPos,
-                    action = TacticalPathManager.NodeAction.Guetter
-                });
-                Debug.Log($"<color=cyan>[TacticalAI] 🚧 Fantassin Ennemi {unit.gameObject.name} se retranche derrière la Barricade Routière !</color>");
-                return;
+                    unit.AddTacticalNode(new TacticalPathManager.TacticalNode
+                    {
+                        position = coverHit.position,
+                        action = TacticalPathManager.NodeAction.Guetter
+                    });
+                    Debug.Log($"<color=cyan>[TacticalAI] 🚧 Fantassin Ennemi {unit.gameObject.name} se retranche derrière la Barricade Routière !</color>");
+                    return;
+                }
             }
         }
 
         // D. STRATÉGIE ASSAUT / RAPPROCHEMENT STANDARD
         MoveTowardsTarget(unit, target.transform.position, 6.0f);
+    }
+
+    /// <summary>
+    /// Vrai si le pied de <paramref name="building"/> est atteignable ce tour-ci dans le budget de
+    /// mouvement de l'unité — contrairement à un ordre Escalade posé directement sans passer par
+    /// MoveTowardsTarget, qui ignorait jusqu'ici totalement <c>unit.maxMovementPerTurn</c>.
+    /// </summary>
+    private static bool IsBuildingReachableWithinBudget(UnitAI unit, BuildingStructure building, out Vector3 basePosOnNavMesh)
+    {
+        basePosOnNavMesh = building.transform.position;
+        NavMeshAgent agent = unit.GetComponent<NavMeshAgent>();
+        if (agent == null) return false;
+
+        if (!NavMesh.SamplePosition(building.transform.position, out NavMeshHit hit, 8f, agent.areaMask)) return false;
+        basePosOnNavMesh = hit.position;
+
+        NavMeshPath path = new NavMeshPath();
+        if (!NavMesh.CalculatePath(unit.transform.position, basePosOnNavMesh, agent.areaMask, path) || path.corners.Length < 2) return false;
+
+        float len = 0f;
+        for (int i = 0; i < path.corners.Length - 1; i++) len += Vector3.Distance(path.corners[i], path.corners[i + 1]);
+        return len <= unit.maxMovementPerTurn;
     }
 
     private static void MoveTowardsTarget(UnitAI unit, Vector3 targetWorldPos, float stopDistance)
@@ -312,6 +373,17 @@ public static class TacticalAIPlanner
             {
                 position = finalNodePos,
                 action = TacticalPathManager.NodeAction.Continuer
+            });
+        }
+        else
+        {
+            // Cible génuinement inatteignable (ex: coupée par des décombres) — sans ce repli,
+            // l'unité ne recevait aucun nœud tactique et restait totalement inactive, tour après
+            // tour, sans jamais retenter une autre approche.
+            unit.AddTacticalNode(new TacticalPathManager.TacticalNode
+            {
+                position = unit.transform.position,
+                action = TacticalPathManager.NodeAction.Guetter
             });
         }
     }

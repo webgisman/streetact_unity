@@ -29,7 +29,11 @@ public partial class TacticalPathManager : MonoBehaviour
     public GameObject menuPanel;
 
     public GameObject uniteSelectionnee;
-    private Vector3 positionClicTemporaire;
+    // Vector3.positiveInfinity (pas Vector3.zero) comme sentinelle "aucun clic en attente" : le plan
+    // "Sol" est centré sur l'origine du monde (voir MapTileLoader.GenerateQuadMesh), donc un tap au
+    // centre de la carte résolvait littéralement à (0,0,0) et faisait disparaître silencieusement la
+    // prévisualisation du tracé (voir DessinerTousLesChemins).
+    private Vector3 positionClicTemporaire = Vector3.positiveInfinity;
     private Novgov.Interaction.DoorInteraction selectedDoor = null;
     private Novgov.Interaction.WindowInteraction selectedWindow = null;
     private BuildingStructure selectedBuilding = null;

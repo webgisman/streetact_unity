@@ -200,7 +200,11 @@ public partial class TacticalPathManager
             if (hasHit && phaseActuelle == GamePhase.Planification && hit.collider != null)
             {
                 RoadBarrier hitBarrier = hit.collider.GetComponent<RoadBarrier>() ?? hit.collider.GetComponentInParent<RoadBarrier>();
-                if (hitBarrier != null)
+                // Même règle de propriété que la sélection d'unité (isPlayerControlled) : on ne peut
+                // ouvrir le menu (et donc retirer via ConfirmerRetirerBarricade) que sur une barricade
+                // de son propre camp (équipe 1), jamais celle de l'adversaire IA — sans ce garde,
+                // taper une barricade ennemie la détruisait gratuitement.
+                if (hitBarrier != null && hitBarrier.teamID == 1)
                 {
                     if (AnyOrderMenuOpen) FermerMenuContextuel(invokeCancelAction: true);
                     selectedBarricade = hitBarrier;

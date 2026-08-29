@@ -102,7 +102,18 @@ namespace Novgov.Server
                     return;
                 }
 
-                client.ReceiveTimeout = 0;
+                // Auparavant remis à 0 (infini) après l'auth : un client mobile qui disparaît
+                // silencieusement (perte de réseau ou app tuée sans FIN/RST propre, voir
+                // GameServerClient.OnApplicationPause/Quit côté client) laissait alors le thread de
+                // lecture bloqué indéfiniment, et surtout risquait de bloquer un futur PlayerConnection.Send()
+                // (turn_timer/turn_result, appelés depuis le thread principal) si le tampon socket finissait
+                // par se remplir — gelant tout le serveur puisqu'un seul match tourne à la fois (voir
+                // 06-security-checklist.md). Un timeout fini, combiné au heartbeat client toutes les 5s
+                // (voir GameServerClient/MatchSessionManager.DrainMessages), permet de détecter une
+                // connexion morte sans jamais couper un joueur simplement silencieux en pleine réflexion.
+                client.ReceiveTimeout = 20000;
+                client.SendTimeout = 10000;
+                try { client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true); } catch { }
                 var connection = new PlayerConnection(client, stream, userId);
                 connection.StartReceiving();
                 AuthenticatedConnections.Enqueue(connection);

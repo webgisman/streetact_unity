@@ -18,8 +18,13 @@ vérité (`Assets/Scripts/Network/MultiplayerMatchController.cs`) :
   `TacticalPathManager.LancerExecutionTour()` quand `MultiplayerMatchController.IsActive` est vrai
   — l'intention ci-dessous ("attendre le message turn_result... nouvelle coroutine") est bien ce
   qui a été fait, juste avec ces noms réels.
-- Le déploiement automatique et symétrique décrit plus bas a bien été retenu tel quel
-  (`UnitSpawnerUI.AutoDeployBattlefield()`).
+- **Mise à jour du 2026-08-29 (session bugs post-test-2-téléphones)** : le déploiement automatique
+  et symétrique décrit plus bas (`UnitSpawnerUI.AutoDeployBattlefield()`) a été **remplacé** par une
+  vraie phase de placement manuel (jusqu'à 45s, en parallèle pour les deux joueurs) — voir
+  `08-known-issues-and-todo.md` §10.2/§10.4 et `03-network-protocol.md` ("submit_deployment"/
+  "deployment_result") pour le détail complet. `AutoDeployBattlefield()` reste utilisée en solo
+  uniquement ; côté serveur, `AutoDeployTeamFallback()` (repli PAR CAMP) prend le relais si un
+  joueur ne soumet rien de valide à temps.
 
 Le reste de ce document (flux cible, répartition des responsabilités serveur/client) reste une
 bonne description de l'intention et de ce qui a effectivement été construit — seuls les noms de
@@ -84,13 +89,28 @@ parallèle, pas un remplacement.
 - Le mode solo garde `ExecuterTourCoroutine` telle quelle, inchangée.
 
 ### `UnitSpawnerUI.cs`
-- En mode multijoueur, le déploiement initial des deux équipes doit venir du serveur (positions
-  déterministes ou négociées), pas du drag & drop libre actuel — sinon rien n'empêche un client
-  de se déclarer des unités supplémentaires. Le écran de déploiement solo (`StartPlacingUnit`,
-  `SpawnUnitAt` appelés directement par le joueur) reste tel quel pour le mode solo uniquement.
-  Pour le multijoueur V1, le plus simple est un déploiement **automatique et symétrique** décidé
-  par le serveur (miroir de `AutoDeployBattlefield`), sans phase de placement manuel — à
-  enrichir plus tard si vous voulez un vrai draft de composition d'équipe.
+**Mise à jour du 2026-08-29 (implémentation réelle, différente de l'intention initiale ci-dessous) :**
+le multijoueur V1 utilise bien le dock de déploiement solo existant (`StartPlacingUnit`,
+`SpawnUnitAt`), pas un écran séparé — mais verrouillé sur le seul camp du joueur local
+(`OpenDockForMultiplayerDeployment(team)`) et limité à un budget de 4 unités de combat + 8
+barricades (`maxUnitsPerTeam` forcé à 4 pour la durée du match). Chaque joueur place manuellement
+sa propre escouade en parallèle de l'autre (fenêtre de 45s, voir `MatchSessionManager.
+RunDeploymentPhase`), le client envoie `submit_deployment`, et **ne spawn jamais ses propres
+unités à partir de son placement local** — il attend `deployment_result` (positions validées/
+recadrées par le serveur pour les DEUX camps) avant de réellement les instancier, exactement comme
+il le fait déjà pour `turn_result`. Voir `03-network-protocol.md` et
+`08-known-issues-and-todo.md` §10.2/§10.4 pour le détail complet et la justification (l'ancien
+déploiement automatique symétrique, décrit ci-dessous à titre historique, restait fonctionnel mais
+ne répondait pas au besoin d'un vrai choix tactique de déploiement).
+
+Intention initiale (dépassée, gardée pour l'historique) : en mode multijoueur, le déploiement
+initial des deux équipes doit venir du serveur (positions déterministes ou négociées), pas du
+drag & drop libre actuel — sinon rien n'empêche un client de se déclarer des unités
+supplémentaires. Le écran de déploiement solo (`StartPlacingUnit`, `SpawnUnitAt` appelés
+directement par le joueur) reste tel quel pour le mode solo uniquement. Pour le multijoueur V1, le
+plus simple est un déploiement **automatique et symétrique** décidé par le serveur (miroir de
+`AutoDeployBattlefield`), sans phase de placement manuel — à enrichir plus tard si vous voulez un
+vrai draft de composition d'équipe.
 
 ## Ce qui ne bouge pas
 

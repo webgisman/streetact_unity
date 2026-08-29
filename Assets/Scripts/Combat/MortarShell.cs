@@ -179,6 +179,10 @@ namespace Novgov.Combat
                 float dist = Vector3.Distance(center, unit.transform.position);
                 if (dist <= explosionRadius)
                 {
+                    // Un mur/bâtiment opaque entre l'épicentre et l'unité bloque le souffle — même
+                    // heuristique par nom que la ligne de vue de combat (UnitAI_Combat.GetVisibleEnemy).
+                    if (HasWallBetween(center, unit.transform.position + Vector3.up * 1.0f)) continue;
+
                     // Chute des dégâts linéaire selon la distance à l'épicentre
                     float damagePercent = 1f - (dist / explosionRadius);
                     float damage = Mathf.Lerp(30f, maxDamage, damagePercent);
@@ -210,6 +214,25 @@ namespace Novgov.Combat
 
             // Dégâts sur les barricades routières existantes
             RoadBarrier.ApplySplashDamageToBarriers(center, explosionRadius, maxDamage);
+        }
+
+        /// <summary>Vrai si un mur/bâtiment opaque intercepte le segment [from, to] (souffle bloqué).</summary>
+        private static bool HasWallBetween(Vector3 from, Vector3 to)
+        {
+            Vector3 dir = to - from;
+            float dist = dir.magnitude;
+            if (dist < 0.01f) return false;
+
+            RaycastHit[] hits = Physics.RaycastAll(from, dir.normalized, dist, ~0, QueryTriggerInteraction.Ignore);
+            foreach (var hit in hits)
+            {
+                string n = hit.collider.gameObject.name;
+                if (n.Contains("Terrain") || n.Contains("Building") || n.Contains("City") || n.Contains("Polygone") || n.Contains("Mur") || n.Contains("Wall") || n.Contains("Batiment"))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 }

@@ -64,8 +64,17 @@ serveur n'instrumente aucun call site individuel. Il laisse tourner la simulatio
 (particules/audio inclus — inoffensifs mais inutiles en headless, non bloquants) et se contente
 d'échantillonner l'état des unités à intervalle régulier (voir "Rejeu par snapshots" dans
 [03-network-protocol.md](03-network-protocol.md)). C'est délibérément moins "propre" que de
-retirer les effets visuels du serveur, mais zéro risque de régression sur le mode solo puisque
-`UnitAI_Combat.cs`/`UnitAI_Movement.cs` sont restés intacts à 100%.
+retirer les effets visuels du serveur, mais zéro risque de régression sur le mode solo.
+
+**Mise à jour du 2026-08-29** : `UnitAI_Combat.cs` n'est en fait plus resté intact à 100% —
+`Update()` a dû recevoir un garde `if (!MultiplayerMatchController.IsActive)` autour de tout son
+bloc de combat temps réel (scan de cible, tir, contrôle de l'Animator), voir
+`08-known-issues-and-todo.md` §10.4. Ce garde ne change RIEN au comportement décrit ci-dessus côté
+serveur (`MultiplayerMatchController.IsActive` y vaut toujours `false`, cette classe n'existant que
+côté client) ni en solo (`IsActive` n'est jamais mis à `true` hors multijoueur) — il empêche
+seulement chaque CLIENT de faire tourner par erreur sa propre simulation de combat locale (fumée/
+tir fantômes, désynchronisés de l'autre téléphone) pendant qu'il attend le `turn_result` du
+serveur. `UnitAI_Movement.cs`, lui, est resté intact à 100%.
 
 ## `MatchSessionManager` (implémentation réelle)
 
@@ -73,10 +82,18 @@ Une seule instance active à la fois (V1, cf. README). Responsabilités réelles
 
 1. `Update()` consomme la file de connexions authentifiées (`GameServerBootstrap.
    AuthenticatedConnections`) et démarre un match dès que 2 joueurs sont en attente.
-2. `UnitSpawnerUI.Instance.ClearAllUnits()` puis `AutoDeployBattlefield()` — les DEUX équipes
-   sont ensuite forcées à `isPlayerControlled = true` (contrairement au mode solo où l'équipe 2
-   est de l'IA) : c'est ce qui permet au garde assoupli de `TacticalAIPlanner` de ne planifier
-   que les unités effectivement `isGhosted`, jamais les autres.
+2. `UnitSpawnerUI.Instance.ClearAllUnits()`, puis `match_found` envoyé aux deux joueurs, puis
+   `RunDeploymentPhase()` (**mise à jour du 2026-08-29** — remplace l'ancien
+   `AutoDeployBattlefield()` unique et symétrique) : jusqu'à 45s, en parallèle, chaque joueur
+   soumet son propre placement manuel (`submit_deployment`) dans sa zone de déploiement (cercle de
+   22m autour du même point d'ancrage qu'avant) ; le serveur recadre toute position hors zone,
+   rejette en bloc toute soumission hors budget (4 unités de combat + 8 barricades max) au profit
+   d'un repli automatique PAR CAMP (`UnitSpawnerUI.AutoDeployTeamFallback(team)`), puis diffuse le
+   résultat final aux deux clients via `deployment_result` — voir `03-network-protocol.md` et
+   `08-known-issues-and-todo.md` §10.2/§10.4. Les DEUX équipes sont ensuite forcées à
+   `isPlayerControlled = true` (contrairement au mode solo où l'équipe 2 est de l'IA) : c'est ce qui
+   permet au garde assoupli de `TacticalAIPlanner` de ne planifier que les unités effectivement
+   `isGhosted`, jamais les autres.
 3. Boucle de tour (`RunPlanningPhase` puis `RunExecutionPhase`) :
    - Planification : 60s, diffusion de `turn_timer` chaque seconde, réception de `submit_turn`/
      `heartbeat` via `PlayerConnection.TryDequeueMessage`.

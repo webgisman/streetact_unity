@@ -30,13 +30,31 @@ démarré (doc 04), client modifié (doc 05).
 3. Fermer et rouvrir l'app sur les deux : vérifier que le refresh token reconnecte sans
    redemander le mot de passe.
 
-## Scénario 2 — Matchmaking et déploiement
+## Scénario 2 — Matchmaking et déploiement manuel
+
+**Mise à jour du 2026-08-29** : le déploiement n'est plus automatique — chaque joueur place
+désormais sa propre escouade manuellement (voir `08-known-issues-and-todo.md` §10.2 et
+`03-network-protocol.md`, "submit_deployment"/"deployment_result").
 
 1. Téléphone A : "Multijoueur" → "Recherche d'adversaire...".
 2. Téléphone B : idem, dans les ~10 secondes qui suivent.
 3. Vérifier que les deux reçoivent `match_found` avec les bons `team_id` (1 et 2) et le bon nom
    d'adversaire.
-4. Vérifier le déploiement automatique symétrique des deux escouades.
+4. Vérifier que le dock de déploiement s'ouvre automatiquement sur les deux téléphones, verrouillé
+   sur le SEUL camp local (impossible de basculer sur "Ennemi" — les boutons Joueur/Ennemi et
+   ESCOUADE IA/DÉPLOIEMENT AUTO doivent être masqués), avec un bouton "CONFIRMER LE DÉPLOIEMENT" à
+   la place.
+5. Placer manuellement 4 unités de combat (n'importe quel mélange Fantassin/Char Leopard/Véhicule
+   Canon/Mortier) sur chaque téléphone, dans des zones différentes, puis confirmer sur les deux.
+6. Vérifier que les deux téléphones reçoivent `deployment_result` avec les positions des DEUX
+   camps, et voient exactement les mêmes positions pour l'adversaire (pas seulement pour soi-même).
+7. **Cas limite à tester** : sur un des deux téléphones, attendre l'expiration du timer de 45s
+   sans rien placer (ou sans confirmer) — vérifier que ce camp reçoit quand même un déploiement
+   (repli automatique) et que la partie démarre normalement pour les deux joueurs.
+8. **Cas limite à tester** : essayer de placer une unité très loin de sa propre zone (ex: au
+   centre de la carte ou dans la zone adverse) — vérifier dans les logs serveur ou en observant la
+   position reçue dans `deployment_result` qu'elle a bien été ramenée dans la zone légale (cercle
+   de 22m autour du point d'ancrage du camp), pas rejetée en bloc ni acceptée telle quelle.
 
 ## Scénario 3 — Tour normal (les deux joueurs jouent)
 
@@ -75,6 +93,13 @@ ce tour-ci (`MatchSessionManager.ApplyForPlayer`, `unit.ClearTacticalPath()`), s
    même partie en se reconnectant : il rejoindrait une nouvelle recherche de match, pendant que
    son ancienne équipe reste immobile jusqu'à la fin de la partie en cours (voir le commentaire en
    tête de `MatchSessionManager.cs`, "Limitation connue V1").
+6. **Mise à jour du 2026-08-29** : le téléphone B qui verrouille son écran ou passe l'app en
+   arrière-plan (bouton Accueil) ferme désormais la connexion proprement et immédiatement
+   (`GameServerClient.OnApplicationPause`), au lieu de laisser une socket morte — vérifier que
+   l'indicateur "Adversaire absent" apparaît bien côté A dès ce moment-là plutôt qu'après un délai
+   incohérent. Vérifier aussi qu'une coupure réseau silencieuse (mode avion sans fermer l'app) est
+   toujours détectée dans un délai raisonnable (~20s) grâce au nouveau timeout socket fini côté
+   serveur — voir §10.3 de `08-known-issues-and-todo.md`.
 
 ## Scénario 5 — Fin de partie
 
@@ -88,7 +113,10 @@ ce tour-ci (`MatchSessionManager.ApplyForPlayer`, `unit.ClearTacticalPath()`), s
   simulation serveur).
 - Cohérence visuelle entre ce que chaque téléphone affiche pour le même tour (les deux doivent
   voir exactement la même issue, puisque c'est le serveur qui a calculé le résultat une seule
-  fois).
+  fois). **Point précis à re-vérifier après le 2026-08-29** : le tout premier test réel à 2
+  téléphones avait révélé un tir/de la fumée visibles sur un seul des deux écrans (simulation de
+  combat locale fantôme sur le téléphone en attente réseau) — corrigé (voir
+  `08-known-issues-and-todo.md` §10.4), mais jamais encore reconfirmé par un vrai test.
 - Robustesse du Ghost si la coupure réseau du scénario 4 survient **pendant** l'envoi de
   `submit_turn` plutôt qu'avant (paquet perdu en cours de route) — vérifier que le serveur
   traite bien l'absence de confirmation comme "pas d'ordre reçu" et bascule en Ghost, plutôt que

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 public partial class TacticalPathManager
@@ -76,20 +77,25 @@ public partial class TacticalPathManager
     /// repérer visuellement sur la carte. Ne fait rien si aucune unité n'est en difficulté.</summary>
     private void SelectionnerProchaineUniteBlessee()
     {
-        UnitAI candidate = null;
+        // Liste complète (pas juste "la première trouvée différente de la sélection actuelle") pour
+        // pouvoir cycler correctement à travers 3+ unités blessées simultanées : sans ça, un appui
+        // répété oscillait indéfiniment entre les deux premières de la liste, les suivantes n'étant
+        // jamais atteintes.
+        List<UnitAI> wounded = new List<UnitAI>();
         for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
         {
             UnitAI u = UnitAI.AllLivingUnits[i];
             if (u == null || u.isDead || !u.isPlayerControlled) continue;
-            if (u.gameObject == uniteSelectionnee) continue; // déjà sélectionnée, passer à la suivante
             float pct = u.maxHealth > 0 ? (float)u.health / u.maxHealth : 1f;
-            if (pct < 0.5f) { candidate = u; break; }
+            if (pct < 0.5f) wounded.Add(u);
         }
-        if (candidate != null)
-        {
-            phaseActuelle = GamePhase.Planification;
-            SelectionnerUnite(candidate.gameObject);
-        }
+        if (wounded.Count == 0) return;
+
+        int currentIndex = uniteSelectionnee != null ? wounded.FindIndex(u => u.gameObject == uniteSelectionnee) : -1;
+        UnitAI candidate = wounded[(currentIndex + 1) % wounded.Count];
+
+        phaseActuelle = GamePhase.Planification;
+        SelectionnerUnite(candidate.gameObject);
     }
 
     /// <summary>Nombre d'unités alliées vivantes en dessous de 50% de vie — affiché en pastille

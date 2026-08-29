@@ -1,9 +1,10 @@
 # État des lieux, problèmes rencontrés et travail restant
 
-Dernière mise à jour : 2026-08-29 (voir §9 pour la session la plus récente — **le build Linux
-headless compile et tourne désormais réellement**, déployé et vérifié en direct sur le VPS). Ce
-document liste **tout** ce qui a été fait, tout ce qui bloque, et tout ce qu'il reste à faire pour
-arriver au test à 2 téléphones. À lire avant de reprendre le travail sur ce projet, dans n'importe
+Dernière mise à jour : 2026-08-29 (voir §9 pour le build Linux headless, désormais fonctionnel et
+déployé, et **§10 pour le premier vrai test à 2 téléphones** — fait, 4 bugs trouvés et corrigés en
+lisant le code, mais correctifs pas encore rebuild/redéployés ni retestés). Ce document liste
+**tout** ce qui a été fait, tout ce qui bloque, et tout ce qu'il reste à faire pour arriver à un
+test à 2 téléphones concluant. À lire avant de reprendre le travail sur ce projet, dans n'importe
 quelle session future.
 
 ---
@@ -20,8 +21,8 @@ quelle session future.
 | Modifications du code existant (isGhosted, guards UNITY_SERVER, fix Handheld, fix shaders null) | ✅ Faites, voir §4 pour le détail exact des fichiers touchés |
 | **Build Linux headless du serveur de jeu** | ✅ **RÉSOLU le 2026-08-29** — voir §9, §2 est désormais un historique (la vraie cause n'était pas celle soupçonnée) |
 | Déploiement du conteneur `game-server` sur le VPS | ✅ **Fait et vérifié en direct** — voir §9 |
-| Intégration réseau dans un build client (Android) réel | ⏳ Pas commencé (le code existe mais n'a jamais été buildé/testé sur un téléphone) |
-| Test à 2 téléphones (doc 07) | ⏳ Pas commencé — le serveur est prêt à le recevoir, voir §9 |
+| Intégration réseau dans un build client (Android) réel | ✅ **Buildé et testé en conditions réelles** (voir §10) — mais un NOUVEAU build est requis avant de retester, le code a changé depuis (correctifs §10) |
+| Test à 2 téléphones (doc 07) | 🟡 **Fait une première fois le 2026-08-29** (voir §10) — 4 bugs trouvés (boutons, déploiement, déconnexion, désync combat), tous corrigés dans le code, mais **aucun correctif n'a encore été rebuild/redéployé ni reconfirmé par un nouveau test** |
 
 ---
 
@@ -156,8 +157,10 @@ commandes et des logs obtenus.**
      par défaut, à re-vérifier si ces valeurs sont modifiées).
    - Le bouton "⚔️ MULTIJOUEUR" ajouté dans `GameManagerUI.cs` doit apparaître sur l'écran de
      démarrage.
-7. **Test à 2 téléphones** en suivant `07-test-plan-2-phones.md` (login, matchmaking, tour normal,
-   scénario Ghost, fin de partie).
+7. ~~**Test à 2 téléphones**~~ **Fait une première fois le 2026-08-29 — voir §10** : 4 bugs
+   trouvés et corrigés dans le code (boutons, déploiement manuel ajouté, déconnexion, désync
+   combat). Il faut maintenant refaire les étapes 5-6 (nouveau build client Android + redéploiement
+   du `game-server` sur le VPS avec les correctifs) avant de reboucler sur `07-test-plan-2-phones.md`.
 
 ---
 
@@ -570,8 +573,94 @@ unité même en soumettant n'importe quel point.
 
 ### 9.11 Toujours pas fait après cette session
 
-- Test à 2 téléphones réel (doc 07) — le serveur est prêt, mais le build client Android avec les
-  scripts réseau n'a pas encore été refait/testé sur appareil depuis ces changements.
+- ~~Test à 2 téléphones réel (doc 07)~~ **Fait juste après cette session — voir §10.**
 - Handshake applicatif JWT réel sur le port 7777 (seul un test TCP brut a été fait, voir §3 point 5).
 - Audit `TacticalCamera`/scripts de scène non listés en §5 pour dépendances non gardées — toujours
   pas fait, à surveiller.
+
+---
+
+## 10. Session du 2026-08-29 (suite) — premier vrai test à 2 téléphones, 4 bugs trouvés et corrigés
+
+Le test à 2 téléphones (doc 07) a enfin été fait réellement par l'utilisateur. 4 bugs rapportés,
+tous diagnostiqués en lisant le code (pas de repro locale possible, pas d'accès à 2 appareils dans
+cette session) puis corrigés. **Aucun de ces correctifs n'a encore été redéployé sur le VPS ni
+rebuildé côté Android — à faire avant de retester.**
+
+### 10.1 Conflits de boutons (boutons déclenchant leur action plusieurs fois)
+Cause : `GameManagerUI.BindStartupUI()` rebranchait `clicked +=` sur les boutons "MODE SOLO"/"MODE
+CAMPAGNE MULTIJOUEUR" à CHAQUE rechargement de scène (bouton "Rejouer" en fin de partie solo ou
+multijoueur), sans le garde anti-double-abonnement que toutes les autres classes UI ont déjà
+(`uiBound`/`deploymentUiBound`/`tacticalUiBound`) — ces boutons persistent, eux, pour toute la
+session (`UIScreenManager` est `DontDestroyOnLoad`). Un abonnement s'accumulait à chaque partie
+rejouée. Idem pour `ConnectToGameServer()` (`MultiplayerMatchController`) qui réabonnait
+`GameServerClient.OnMessage`/`OnDisconnected` sans jamais se désabonner. **Fix** : garde statique
+`startupButtonsBound` dans `GameManagerUI.cs` ; `-=` défensif avant chaque `+=` dans
+`MultiplayerMatchController.ConnectToGameServer()`.
+
+### 10.2 "Le bouton déploiement n'existe pas" en multijoueur
+Confirmé volontaire à l'origine (déploiement auto anti-triche, voir §5) — mais l'utilisateur a
+demandé un vrai placement manuel. **Ajouté** : phase de déploiement dédiée (jusqu'à 45s, en
+parallèle pour les deux joueurs) avant le premier tour — voir §10.4 pour le détail complet, et
+`03-network-protocol.md` (nouveaux messages `submit_deployment`/`deployment_result`).
+
+### 10.3 Déconnexion/fermeture de l'app mal gérée
+Deux causes cumulées :
+- Client (`GameServerClient.cs`) : aucun `OnApplicationPause`/`OnApplicationQuit` — la socket ne se
+  fermait proprement que sur `OnDestroy()` (jamais en mise en arrière-plan Android/iOS). **Fix** :
+  les deux callbacks ajoutés, appellent `Disconnect(...)`.
+- Serveur (`GameServerBootstrap.HandleHandshake`) : `client.ReceiveTimeout` remis à `0` (infini)
+  après l'auth — un client mort silencieusement (sans FIN/RST) pouvait laisser le thread de lecture
+  bloqué indéfiniment, et surtout risquait de bloquer un futur `PlayerConnection.Send()` (appelé
+  depuis le thread principal) si le tampon socket se remplissait — gelant tout le serveur (un seul
+  match à la fois). Déjà documenté comme risque connu en §7/06-security-checklist.md, jamais corrigé
+  jusqu'ici. **Fix** : `ReceiveTimeout=20000`/`SendTimeout=10000` + `SocketOptionName.KeepAlive`
+  après l'auth, combiné à un vrai heartbeat client toutes les 5s (`GameServerClient.Update()`,
+  auparavant décrit dans la doc mais jamais implémenté — `MatchSessionManager` lisait déjà
+  `LastHeartbeat` mais rien ne l'écrivait jamais côté client) pour ne jamais couper un joueur juste
+  silencieux en pleine réflexion.
+
+### 10.4 Combat désynchronisé entre les deux téléphones (fumée/tir visible sur un seul écran)
+**Cause racine, la plus subtile des 4** : `TacticalPathManager.LancerExecutionTour()` met
+`phaseActuelle = GamePhase.Execution` AVANT même de vérifier si le multijoueur est actif — en
+multijoueur elle délègue ensuite à `SubmitLocalTurn()` et `return`, mais `phaseActuelle` reste à
+`Execution` sur CE client pendant tout l'aller-retour serveur (jusqu'à la fin de
+`PlaySnapshotsCoroutine`). Or `UnitAI_Combat.Update()` (tourne SUR CHAQUE CLIENT, à chaque frame,
+pour chaque unité, sans aucun garde multijoueur) traite `phaseActuelle == Execution` comme "on est
+en exécution réelle, scanner + tirer" — un comportement pensé pour le solo/hotseat, où
+`ExecuterOrdres()` fait réellement tourner le combat. Résultat : dès que ce client entrait dans son
+attente réseau, TOUTES ses unités (des deux camps) se remettaient à scanner/tourner leur tourelle
+et **tirer réellement en local** (fumée, traceur, dégâts) sur la base de positions/raycasts propres
+à CE téléphone — complètement indépendant de ce que l'autre téléphone voyait au même instant,
+d'où l'antique "je vois un tir et de la fumée, pas mon adversaire". Le joueur qui appuyait sur "FIN
+TOUR" en premier (ou dont la fenêtre d'attente réseau était la plus longue) était celui qui voyait
+cette simulation fantôme. **Fix** (`UnitAI_Combat.cs`) : tout ce bloc (scan de cible, rotation de
+visée, tir, contrôle direct de l'Animator) est désormais entièrement sauté si
+`MultiplayerMatchController.IsActive` est vrai — en multijoueur, l'Animator/la vie/la mort sont
+exclusivement pilotés par `UnitAI.SetNetworkAnimState`/`SetNetworkHealth`/`ApplyNetworkDeath`, jamais
+par une simulation locale. `IsActive` vaut toujours `false` côté serveur headless, donc la vraie
+simulation continue de tourner normalement là où elle doit avoir lieu.
+
+### 10.5 Fichiers touchés cette session (résumé)
+| Fichier | Changement |
+|---|---|
+| `Assets/Scripts/AI/UnitAI_Combat.cs` | Bloc combat temps réel entièrement sauté si `MultiplayerMatchController.IsActive` (10.4) |
+| `Assets/Scripts/UI/GameManagerUI.cs` | Garde `startupButtonsBound` anti double-abonnement (10.1) |
+| `Assets/Scripts/Network/MultiplayerMatchController.cs` | `-=`/`+=` défensif (10.1) ; nouvel état `UiState.Deployment` + `IsDeploymentPhaseActive` + `SubmitLocalDeployment()`/`OnDeploymentResult()` (10.2) |
+| `Assets/Scripts/Network/GameServerClient.cs` | Heartbeat toutes les 5s ; `OnApplicationPause`/`OnApplicationQuit` (10.3) |
+| `Assets/Scripts/Server/GameServerBootstrap.cs` | `ReceiveTimeout`/`SendTimeout` finis + `KeepAlive` après l'auth (10.3) |
+| `Assets/Scripts/Server/PlayerConnection.cs` | `PendingDeployment`/`HasSubmittedDeployment` (10.2) |
+| `Assets/Scripts/Server/MatchSessionManager.cs` | `RunDeploymentPhase`/`ResolveDeployment`/`IsRosterValid`/`ClampToDeploymentZone` (10.2) |
+| `Assets/Scripts/UI/UnitSpawnerUI.cs` | `SpawnUnitAt(..., forcedName)` ; `AutoDeployTeamFallback()` ; `OpenDockForMultiplayerDeployment()` ; dock adapté au contexte PvP (10.2) |
+| `Assets/Scripts/Network/NetMessage.cs` | Messages `submit_deployment`/`deployment_result`, types `UnitPlacement`/`DeployedUnit` (10.2) |
+| `Assets/Resources/UI/DeploymentDockScreen.uxml` | Bouton `btn-mp-confirm` ajouté (caché par défaut) (10.2) |
+| `Assets/_ServerDocs/multiplayer/03-network-protocol.md` | Nouveaux messages documentés |
+
+### 10.6 Pas encore fait après cette session
+- **Aucun de ces correctifs n'a été testé** (ni build client Android, ni redéploiement du
+  `game-server` sur le VPS) — à faire avant de reprendre le test à 2 téléphones.
+- Le placement manuel (10.2) n'a pas de retour visuel de la zone de déploiement légale à l'écran
+  (le serveur recadre silencieusement une position hors zone) — amélioration possible plus tard
+  (dessiner le cercle de zone au sol pendant le déploiement), pas bloquant.
+- Pas de compte à rebours affiché pendant les 45s de déploiement (le serveur a bien un timeout,
+  mais aucun message `deployment_timer` n'est envoyé) — amélioration UX possible plus tard.

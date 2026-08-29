@@ -177,7 +177,12 @@ public partial class TacticalPathManager
         bool is2DMode = CameraStateManager.Instance == null || CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Command;
 
         bool hideBottomBar = !is2DMode;
-        if (Novgov.Network.MultiplayerMatchController.IsFlowActive) hideBottomBar = true;
+        // IsFlowActive reste vrai pendant TOUTE la session multijoueur, y compris la partie
+        // elle-même (InMatch) — sans l'exception IsInMatch ci-dessous, le bouton FIN DE TOUR et la
+        // squad-bar restaient invisibles du premier au dernier tour d'un match PvP réel (bug trouvé
+        // lors du premier vrai test à 2 téléphones), alors que le tour-par-tour utilise exactement
+        // ce même TacticalBottomBar qu'en solo (voir MatchSessionManager, "simulation autoritaire").
+        if (Novgov.Network.MultiplayerMatchController.IsFlowActive && !Novgov.Network.MultiplayerMatchController.IsInMatch) hideBottomBar = true;
         if (GameManagerUI.Instance != null && GameManagerUI.Instance.IsStartupSelectionActive) hideBottomBar = true;
         if (IsSoloGameOver) hideBottomBar = true;
         UIScreenManager.Instance.SetVisible("TacticalBottomBar", !hideBottomBar);

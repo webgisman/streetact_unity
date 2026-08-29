@@ -20,6 +20,21 @@ namespace Novgov.Server
     public class MatchSessionManager : MonoBehaviour
     {
         private const float PlanningSeconds = 60f;
+        private const float DeploymentSeconds = 45f;
+        // Mêmes points d'ancrage que UnitSpawnerUI.AutoDeployBattlefield/AutoDeployTeamFallback —
+        // le rayon délimite la zone légale où un placement manuel soumis via "submit_deployment"
+        // est accepté (voir ClampToDeploymentZone) ; au-delà, la position est ramenée sur le bord
+        // de la zone plutôt que rejetée en bloc, pour rester tolérant à une imprécision de tap tout
+        // en empêchant un client modifié de déployer au contact immédiat de l'adversaire.
+        private static readonly Vector3 Team1DeploymentZoneCenter = new Vector3(-25f, 0f, -25f);
+        private static readonly Vector3 Team2DeploymentZoneCenter = new Vector3(25f, 0f, 25f);
+        private const float DeploymentZoneRadius = 22f;
+        // Budget de déploiement manuel : jusqu'à 4 unités de combat (n'importe quel mélange parmi
+        // Fantassin/CharLeopard/VehiculeCanon/Mortier) + jusqu'à 8 barricades (même stock que le
+        // dock solo, voir UnitSpawnerUI.maxBarricadesPerTeam) — au-delà, ou un type d'unité hors de
+        // l'enum, la soumission ENTIÈRE est rejetée et ce camp reçoit le repli automatique.
+        private const int MaxDeployedCombatUnits = 4;
+        private const int MaxDeployedBarricades = 8;
         private const int SnapshotIntervalMs = 100;
         private const int ZoneControlTurnCap = 20;
         // Sans plafond, deux joueurs qui se contentent de se cacher chaque tour pouvaient bloquer
@@ -174,8 +189,6 @@ namespace Novgov.Server
 
             UnitSpawnerUI.Instance.ClearAllUnits();
             yield return null;
-            UnitSpawnerUI.Instance.AutoDeployBattlefield();
-            yield return null;
 
             if (mode == "zone_control")
             {
@@ -183,14 +196,21 @@ namespace Novgov.Server
                 zone.ResetProgress();
             }
 
-            // Les deux camps sont pilotés par de vrais joueurs : TacticalAIPlanner ne les
-            // planifiera donc jamais (voir TacticalAIPlanner.cs, guard isPlayerControlled).
-            foreach (var unit in UnitAI.AllLivingUnits) unit.isPlayerControlled = true;
-
             p1.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 1, opponent_username = p2.Username, mode = mode });
             p2.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 2, opponent_username = p1.Username, mode = mode });
 
             yield return CreateMatchRecord(matchId, p1, p2, mode);
+
+            // Placement manuel (voir 03-network-protocol.md, "submit_deployment"/"deployment_result") :
+            // chaque joueur choisit où poser sa PROPRE escouade dans sa zone de déploiement pendant
+            // que l'autre fait de même, en parallèle — pas de tour par tour ici. Un joueur qui ne
+            // soumet rien (ou une soumission invalide) de valide avant l'expiration du timer reçoit
+            // le repli automatique (UnitSpawnerUI.AutoDeployTeamFallback) pour SON seul camp.
+            yield return RunDeploymentPhase(p1, p2);
+
+            // Les deux camps sont pilotés par de vrais joueurs : TacticalAIPlanner ne les
+            // planifiera donc jamais (voir TacticalAIPlanner.cs, guard isPlayerControlled).
+            foreach (var unit in UnitAI.AllLivingUnits) unit.isPlayerControlled = true;
 
             int turnNumber = 1;
             bool matchOver = false;
@@ -261,6 +281,139 @@ namespace Novgov.Server
             matchInProgress = false;
         }
 
+        /// <summary>
+        /// Attend jusqu'à DeploymentSeconds que les DEUX joueurs soumettent "submit_deployment" (en
+        /// parallèle, pas tour par tour), puis spawn réellement les unités des deux camps — soit à
+        /// partir du placement manuel soumis (recadré dans la zone légale, voir ResolveDeployment),
+        /// soit via le repli automatique si rien de valide n'a été reçu à temps — et diffuse le
+        /// résultat final aux deux clients via "deployment_result" (voir 03-network-protocol.md).
+        /// </summary>
+        private IEnumerator RunDeploymentPhase(PlayerConnection p1, PlayerConnection p2)
+        {
+            p1.HasSubmittedDeployment = false;
+            p2.HasSubmittedDeployment = false;
+            p1.PendingDeployment = null;
+            p2.PendingDeployment = null;
+
+            float remaining = DeploymentSeconds;
+            while (remaining > 0f && !(p1.HasSubmittedDeployment && p2.HasSubmittedDeployment))
+            {
+                // Réutilise DrainMessages (turnNumber=0 ne correspondra jamais à un vrai
+                // "submit_turn", qui commence à 1 — seuls "heartbeat"/"submit_deployment" sont donc
+                // traités ici, sans dupliquer la boucle de lecture des messages entrants).
+                DrainMessages(p1, 0);
+                DrainMessages(p2, 0);
+
+                if (p1.IsDisconnected && p2.IsDisconnected) yield break;
+
+                remaining -= Time.deltaTime;
+                yield return null;
+            }
+
+            var team1Units = ResolveDeployment(p1, 1);
+            var team2Units = ResolveDeployment(p2, 2);
+
+            var allDeployed = new DeployedUnit[team1Units.Count + team2Units.Count];
+            team1Units.CopyTo(allDeployed, 0);
+            team2Units.CopyTo(allDeployed, team1Units.Count);
+
+            var resultMsg = new NetMessage { type = "deployment_result", deployed_units = allDeployed };
+            if (!p1.IsDisconnected) p1.Send(resultMsg);
+            if (!p2.IsDisconnected) p2.Send(resultMsg);
+        }
+
+        /// <summary>Vrai si le multi-ensemble de placements respecte le budget autorisé (voir
+        /// MaxDeployedCombatUnits/MaxDeployedBarricades) et ne contient que des types/coordonnées
+        /// valides — sinon la soumission ENTIÈRE est rejetée (repli automatique pour tout ce camp),
+        /// plutôt que d'essayer de n'en garder qu'une partie.</summary>
+        private static bool IsRosterValid(UnitPlacement[] placements)
+        {
+            if (placements == null || placements.Length == 0) return false;
+            if (placements.Length > MaxDeployedCombatUnits + MaxDeployedBarricades) return false;
+
+            int combatCount = 0, barricadeCount = 0;
+            foreach (var p in placements)
+            {
+                if (!Enum.IsDefined(typeof(UnitSpawnerUI.UnitType), p.unit_type)) return false;
+                if (float.IsNaN(p.x) || float.IsNaN(p.y) || float.IsNaN(p.z)) return false;
+                if (float.IsInfinity(p.x) || float.IsInfinity(p.y) || float.IsInfinity(p.z)) return false;
+
+                if ((UnitSpawnerUI.UnitType)p.unit_type == UnitSpawnerUI.UnitType.BarricadeRoutiere) barricadeCount++;
+                else combatCount++;
+            }
+            return combatCount <= MaxDeployedCombatUnits && barricadeCount <= MaxDeployedBarricades;
+        }
+
+        /// <summary>Ramène (x, z) dans la zone de déploiement légale du camp (cercle centré sur le
+        /// même point d'ancrage qu'AutoDeployBattlefield/AutoDeployTeamFallback) — jamais un rejet
+        /// en bloc pour une simple imprécision de tap, mais impossible de déployer au contact
+        /// immédiat de l'adversaire en soumettant volontairement une position lointaine.</summary>
+        private static Vector3 ClampToDeploymentZone(Vector3 pos, int team)
+        {
+            Vector3 center = team == 1 ? Team1DeploymentZoneCenter : Team2DeploymentZoneCenter;
+            Vector3 flat = new Vector3(pos.x - center.x, 0f, pos.z - center.z);
+            if (flat.magnitude > DeploymentZoneRadius) flat = flat.normalized * DeploymentZoneRadius;
+            return new Vector3(center.x + flat.x, pos.y, center.z + flat.z);
+        }
+
+        private static int InferUnitType(UnitAI u)
+        {
+            if (u.isMortar) return (int)UnitSpawnerUI.UnitType.Mortier;
+            if (u.isCanonVehicle) return (int)UnitSpawnerUI.UnitType.VehiculeCanon;
+            if (u.isTank) return (int)UnitSpawnerUI.UnitType.CharLeopard;
+            return (int)UnitSpawnerUI.UnitType.Fantassin;
+        }
+
+        /// <summary>Spawn réellement les unités d'UN camp (placement manuel validé+recadré, ou repli
+        /// automatique) et renvoie la liste des unités effectivement posées, pour le broadcast
+        /// "deployment_result".</summary>
+        private List<DeployedUnit> ResolveDeployment(PlayerConnection conn, int team)
+        {
+            bool valid = conn.HasSubmittedDeployment && IsRosterValid(conn.PendingDeployment);
+
+            if (valid)
+            {
+                foreach (var p in conn.PendingDeployment)
+                {
+                    Vector3 clamped = ClampToDeploymentZone(new Vector3(p.x, p.y, p.z), team);
+                    UnitSpawnerUI.Instance.SpawnUnitAt((UnitSpawnerUI.UnitType)p.unit_type, clamped, team);
+                }
+            }
+            else
+            {
+                UnitSpawnerUI.Instance.AutoDeployTeamFallback(team);
+            }
+
+            var placed = new List<DeployedUnit>();
+            foreach (var u in UnitAI.AllLivingUnits)
+            {
+                if (u.teamID != team) continue;
+                placed.Add(new DeployedUnit
+                {
+                    unit_id = u.gameObject.name,
+                    unit_type = InferUnitType(u),
+                    team_id = team,
+                    x = u.transform.position.x,
+                    y = u.transform.position.y,
+                    z = u.transform.position.z
+                });
+            }
+            foreach (var b in RoadBarrier.AllBarriers)
+            {
+                if (b == null || b.teamID != team) continue;
+                placed.Add(new DeployedUnit
+                {
+                    unit_id = b.gameObject.name,
+                    unit_type = (int)UnitSpawnerUI.UnitType.BarricadeRoutiere,
+                    team_id = team,
+                    x = b.transform.position.x,
+                    y = b.transform.position.y,
+                    z = b.transform.position.z
+                });
+            }
+            return placed;
+        }
+
         private IEnumerator RunPlanningPhase(PlayerConnection p1, PlayerConnection p2, int turnNumber)
         {
             p1.HasSubmittedThisTurn = false;
@@ -305,6 +458,11 @@ namespace Novgov.Server
                 else if (msg.type == "heartbeat")
                 {
                     conn.LastHeartbeat = DateTime.UtcNow;
+                }
+                else if (msg.type == "submit_deployment")
+                {
+                    conn.PendingDeployment = msg.placements ?? Array.Empty<UnitPlacement>();
+                    conn.HasSubmittedDeployment = true;
                 }
             }
         }

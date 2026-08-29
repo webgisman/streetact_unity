@@ -26,6 +26,8 @@ namespace Novgov.Server
         public DateTime LastHeartbeat = DateTime.UtcNow;
         public bool HasSubmittedThisTurn = false;
         public UnitOrder[] PendingOrders = Array.Empty<UnitOrder>();
+        public bool HasSubmittedDeployment = false;
+        public UnitPlacement[] PendingDeployment = null;
 
         private readonly ConcurrentQueue<NetMessage> incoming = new ConcurrentQueue<NetMessage>();
         private readonly object sendLock = new object();

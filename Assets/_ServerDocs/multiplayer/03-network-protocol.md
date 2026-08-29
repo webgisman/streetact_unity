@@ -68,10 +68,34 @@ moment où il appuie sur "FIN TOUR" (`TacticalPathManager.LancerExecutionTour`).
 4=Escalade, 11=TirMortier, etc. — voir l'enum complet dans le code).
 
 ### `heartbeat`
-Envoyé toutes les ~5s pendant la phase de planification, pour détecter une déconnexion avant
-l'expiration du timer de tour.
+Envoyé toutes les ~5s **en continu tant que la connexion TCP est ouverte** (pas seulement pendant
+la planification) par `GameServerClient.Update()`. Le serveur applique un `ReceiveTimeout` fini sur
+le socket après l'authentification (voir `GameServerBootstrap.HandleHandshake`) — sans ce heartbeat
+régulier, un joueur simplement silencieux pendant sa réflexion serait pris pour un client
+déconnecté dès que ce timeout expire.
 ```json
 { "type": "heartbeat" }
+```
+
+### `submit_deployment`
+Placement manuel choisi par le joueur pendant la phase de déploiement (voir
+`MatchSessionManager.RunDeploymentPhase`, jusqu'à 45s, en parallèle pour les deux joueurs — pas de
+tour par tour ici). `unit_type` = valeur brute de `UnitSpawnerUI.UnitType` (0=Fantassin,
+1=CharLeopard, 2=VehiculeCanon, 3=Mortier, 4=BarricadeRoutiere). Budget autorisé : jusqu'à 4 unités
+de combat (n'importe quel mélange) + jusqu'à 8 barricades — une soumission qui dépasse ce budget,
+ou contient un type hors de l'enum, est rejetée EN BLOC côté serveur (repli automatique pour tout
+ce camp, voir `deployment_result` ci-dessous) plutôt que partiellement acceptée. Chaque position est
+de toute façon recadrée dans la zone de déploiement légale du camp (cercle de 22m autour du même
+point d'ancrage que l'auto-déploiement) avant d'être utilisée — jamais rejetée pour une simple
+imprécision de tap, mais impossible de déployer au contact immédiat de l'adversaire.
+```json
+{
+  "type": "submit_deployment",
+  "placements": [
+    { "unit_type": 0, "x": -23.4, "y": 0.0, "z": -24.1 },
+    { "unit_type": 3, "x": -28.0, "y": 0.0, "z": -22.5 }
+  ]
+}
 ```
 
 ## Messages Serveur → Client
@@ -93,6 +117,22 @@ Notifie qu'un joueur est passé en mode Ghost (déconnecté ou timeout) — voir
 [04-unity-headless-server.md](04-unity-headless-server.md).
 ```json
 { "type": "opponent_ghosted", "team_id": 2, "reason": "timeout" }
+```
+
+### `deployment_result`
+Diffusé aux DEUX clients une fois la phase de déploiement résolue (soumission validée+recadrée, ou
+repli automatique par camp, voir `submit_deployment` ci-dessus) — les DEUX camps y figurent, y
+compris le sien propre : le client ne fait jamais confiance à ses propres positions candidates
+locales et respawn exactement cette liste (`MultiplayerMatchController.OnDeploymentResult`,
+`unit_id` réutilisé tel quel par `UnitSpawnerUI.SpawnUnitAt(..., forcedName: ...)` pour que
+`turn_result`/`PlaySnapshotsCoroutine` retrouve ensuite chaque unité par ce même nom).
+```json
+{
+  "type": "deployment_result",
+  "deployed_units": [
+    { "unit_id": "Fantassin_1_1", "unit_type": 0, "team_id": 1, "x": -23.4, "y": 0.0, "z": -24.1 }
+  ]
+}
 ```
 
 ### `turn_result`

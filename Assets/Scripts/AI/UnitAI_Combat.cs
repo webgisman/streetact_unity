@@ -20,80 +20,95 @@ public partial class UnitAI
         if (!isDead)
         {
             UpdateCoverAura();
-            
+
             // --- COMBAT LOGIC (TEMPS REEL) ---
             if (shootCooldown > 0) shootCooldown -= Time.deltaTime;
 
-            // Le mortier du joueur obéit strictement aux coordonnées ciblées et n'engage pas de cibles aléatoires
-            if (!isMortar || !isPlayerControlled)
+            // MULTIJOUEUR : ce bloc entier (scan de cible, rotation de visée, tir, contrôle direct de
+            // l'Animator) ne doit JAMAIS tourner côté client pendant un match réseau — le combat est
+            // entièrement calculé côté serveur et rejoué via les snapshots reçus (voir
+            // MultiplayerMatchController.PlaySnapshotsCoroutine / UnitAI.SetNetworkAnimState). Sans ce
+            // garde, chaque client faisait tourner sa PROPRE simulation de combat locale (basée sur ses
+            // propres positions/raycasts, légèrement désynchronisées de l'autre appareil à cause du
+          // rejeu par intervalles de 100ms) dès que TacticalPathManager.phaseActuelle passait à
+            // "Execution" sur CE client (LancerExecutionTour() le fait AVANT même de vérifier le mode
+            // multijoueur) — d'où un tir/de la fumée visible sur un seul des deux téléphones, sans
+            // aucun rapport avec le résultat réellement décidé par le serveur. `MultiplayerMatchController.IsActive`
+            // vaut toujours `false` côté serveur headless (cette classe n'y est jamais active), donc la
+            // simulation réelle continue de tourner normalement là où elle doit avoir lieu.
+            if (!Novgov.Network.MultiplayerMatchController.IsActive)
             {
-                lookUpdateTimer -= Time.deltaTime;
-                if (lookUpdateTimer <= 0f)
+                // Le mortier du joueur obéit strictement aux coordonnées ciblées et n'engage pas de cibles aléatoires
+                if (!isMortar || !isPlayerControlled)
                 {
-                    currentLookTarget = GetVisibleEnemy();
-                    lookUpdateTimer = 0.25f; // Scan 4 fois par seconde pour une réactivité maximale
-                }
-            }
-            else
-            {
-                currentLookTarget = null;
-            }
-
-            // Détection si nous sommes en phase d'exécution globale du tour (Zéro allocation)
-            TacticalPathManager pathManager = TacticalPathManager.Instance;
-            bool isExecutionPhase = (pathManager != null && pathManager.phaseActuelle == TacticalPathManager.GamePhase.Execution) || isExecuting;
-
-            if (currentLookTarget != null && !currentLookTarget.isDead)
-            {
-                Vector3 lookDir = currentLookTarget.transform.position - transform.position;
-                lookDir.y = 0; // Rester bien droit
-
-                if (lookDir.sqrMagnitude > 0.01f)
-                {
-                    // Rotation rapide et réactive pour éviter le désavantage du temps de visée
-                    if (isTank && turretBone != null)
+                    lookUpdateTimer -= Time.deltaTime;
+                    if (lookUpdateTimer <= 0f)
                     {
-                        turretBone.rotation = Quaternion.RotateTowards(turretBone.rotation, Quaternion.LookRotation(lookDir), Time.deltaTime * 180f);
-                    }
-                    else if (!isTank)
-                    {
-                        transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(lookDir), Time.deltaTime * 360f);
+                        currentLookTarget = GetVisibleEnemy();
+                        lookUpdateTimer = 0.25f; // Scan 4 fois par seconde pour une réactivité maximale
                     }
                 }
-
-                if (isExecutionPhase)
+                else
                 {
-                    float dist = Vector3.Distance(transform.position, currentLookTarget.transform.position);
-                    float effectiveRange = isRooftopSniper ? (porteeDetection + 20f) : porteeDetection;
-                    if (dist <= effectiveRange)
+                    currentLookTarget = null;
+                }
+
+                // Détection si nous sommes en phase d'exécution globale du tour (Zéro allocation)
+                TacticalPathManager pathManager = TacticalPathManager.Instance;
+                bool isExecutionPhase = (pathManager != null && pathManager.phaseActuelle == TacticalPathManager.GamePhase.Execution) || isExecuting;
+
+                if (currentLookTarget != null && !currentLookTarget.isDead)
+                {
+                    Vector3 lookDir = currentLookTarget.transform.position - transform.position;
+                    lookDir.y = 0; // Rester bien droit
+
+                    if (lookDir.sqrMagnitude > 0.01f)
                     {
-                        // Animation de tir pour l'infanterie
-                        if (animator != null && !isTank)
+                        // Rotation rapide et réactive pour éviter le désavantage du temps de visée
+                        if (isTank && turretBone != null)
                         {
-                            animator.SetBool("IsShooting", true);
+                            turretBone.rotation = Quaternion.RotateTowards(turretBone.rotation, Quaternion.LookRotation(lookDir), Time.deltaTime * 180f);
                         }
-
-                        // Cadence d'action intense et nerveuse
-                        float cooldownLimit = isTank ? (isCanonVehicle ? 1.4f : 1.8f) : 0.35f;
-                        float aimAngle = Vector3.Angle(isTank && turretBone != null ? turretBone.forward : transform.forward, lookDir);
-
-                        // Tir immédiat et dynamique sans bloquer le véhicule
-                        if (shootCooldown <= 0f && aimAngle < 65f)
+                        else if (!isTank)
                         {
-                            ShootAt(currentLookTarget);
-                            shootCooldown = cooldownLimit; 
+                            transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(lookDir), Time.deltaTime * 360f);
                         }
                     }
-                }
-            }
-            else
-            {
-                // Pas de cible visible
-                if (combatAudioSource != null && combatAudioSource.isPlaying) combatAudioSource.Stop();
 
-                if (animator != null && !isTank)
+                    if (isExecutionPhase)
+                    {
+                        float dist = Vector3.Distance(transform.position, currentLookTarget.transform.position);
+                        float effectiveRange = isRooftopSniper ? (porteeDetection + 20f) : porteeDetection;
+                        if (dist <= effectiveRange)
+                        {
+                            // Animation de tir pour l'infanterie
+                            if (animator != null && !isTank)
+                            {
+                                animator.SetBool("IsShooting", true);
+                            }
+
+                            // Cadence d'action intense et nerveuse
+                            float cooldownLimit = isTank ? (isCanonVehicle ? 1.4f : 1.8f) : 0.35f;
+                            float aimAngle = Vector3.Angle(isTank && turretBone != null ? turretBone.forward : transform.forward, lookDir);
+
+                            // Tir immédiat et dynamique sans bloquer le véhicule
+                            if (shootCooldown <= 0f && aimAngle < 65f)
+                            {
+                                ShootAt(currentLookTarget);
+                                shootCooldown = cooldownLimit;
+                            }
+                        }
+                    }
+                }
+                else
                 {
-                    animator.SetBool("IsShooting", false);
+                    // Pas de cible visible
+                    if (combatAudioSource != null && combatAudioSource.isPlaying) combatAudioSource.Stop();
+
+                    if (animator != null && !isTank)
+                    {
+                        animator.SetBool("IsShooting", false);
+                    }
                 }
             }
 

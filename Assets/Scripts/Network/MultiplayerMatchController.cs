@@ -43,6 +43,25 @@ namespace Novgov.Network
         /// </summary>
         public static bool IsFlowActive { get; private set; }
 
+        /// <summary>
+        /// Vrai UNIQUEMENT pendant le tour-par-tour effectif (état InMatch) — distinct de
+        /// IsFlowActive (vrai aussi pendant login/matchmaking/fin de partie) : la barre du bas
+        /// (TacticalPathManager_UI, bouton FIN DE TOUR/squad-bar) doit rester masquée pendant les
+        /// écrans de login/matchmaking, mais bien réapparaître une fois la partie commencée, alors
+        /// que le dock de déploiement manuel (UnitSpawnerUI), lui, doit rester masqué pendant TOUTE
+        /// la session multijoueur y compris en jeu (auto-déploiement serveur, jamais de placement
+        /// manuel en PvP) — d'où deux indicateurs distincts plutôt qu'un seul.
+        /// </summary>
+        public static bool IsInMatch { get; private set; }
+
+        /// <summary>
+        /// Vrai UNIQUEMENT pendant la phase de placement manuel PvP (entre "match_found" et l'envoi
+        /// de "submit_deployment") — utilisé par UnitSpawnerUI.RefreshDeploymentDockUI pour afficher
+        /// exceptionnellement son dock de déploiement (normalement masqué pendant tout le reste du
+        /// flux multijoueur, voir IsInMatch), verrouillé sur le seul camp du joueur local.
+        /// </summary>
+        public static bool IsDeploymentPhaseActive { get; private set; }
+
         public static MultiplayerMatchController EnsureInstance()
         {
             if (Instance == null)
@@ -55,7 +74,7 @@ namespace Novgov.Network
         }
 
 #if !UNITY_SERVER
-        private enum UiState { Hidden, ModeSelect, Login, SignUp, Connecting, Matchmaking, InMatch, MatchOver }
+        private enum UiState { Hidden, ModeSelect, Login, SignUp, Connecting, Matchmaking, Deployment, InMatch, MatchOver }
         private UiState uiState = UiState.Hidden;
 
         private string selectedMode = "deathmatch";
@@ -172,6 +191,13 @@ namespace Novgov.Network
                 client = go.AddComponent<GameServerClient>();
             }
 
+            // Défensif : ce contrôleur ET GameServerClient sont tous deux DontDestroyOnLoad, donc
+            // survivent à un rechargement de scène (ex. bouton "Rejouer" après match_over). Sans ce
+            // retrait préalable, rejouer une deuxième partie dans la même session ajoutait un
+            // abonnement SUPPLÉMENTAIRE à chaque connexion, faisant traiter chaque message serveur
+            // (donc chaque relecture de snapshot de combat) en double, triple, etc. au fil des parties.
+            client.OnMessage -= HandleServerMessage;
+            client.OnDisconnected -= HandleServerDisconnected;
             client.OnMessage += HandleServerMessage;
             client.OnDisconnected += HandleServerDisconnected;
             client.Connect(SupabaseAuthClient.CurrentSession.access_token);
@@ -183,11 +209,12 @@ namespace Novgov.Network
 
         private void HandleServerDisconnected(string reason)
         {
-            if (uiState == UiState.InMatch || uiState == UiState.Matchmaking)
+            if (uiState == UiState.InMatch || uiState == UiState.Matchmaking || uiState == UiState.Deployment)
             {
                 statusMessage = "Connexion au serveur perdue (" + reason + ").";
                 SetUiState(UiState.Login);
                 IsActive = false;
+                IsDeploymentPhaseActive = false;
             }
         }
 
@@ -200,6 +227,7 @@ namespace Novgov.Network
             switch (msg.type)
             {
                 case "match_found": OnMatchFound(msg); break;
+                case "deployment_result": OnDeploymentResult(msg); break;
                 case "turn_timer": lastServerSecondsRemaining = msg.seconds_remaining; break;
                 case "opponent_ghosted": OnOpponentGhosted(msg); break;
                 case "turn_result": StartCoroutine(PlaySnapshotsCoroutine(msg)); break;
@@ -222,8 +250,82 @@ namespace Novgov.Network
                 return;
             }
 
+            // Placement manuel (voir 03-network-protocol.md, "submit_deployment"/"deployment_result") :
+            // chaque joueur choisit où poser sa PROPRE escouade, dans son propre dock, verrouillé sur
+            // son camp — voir UnitSpawnerUI.OpenDockForMultiplayerDeployment. Le serveur valide et
+            // diffuse le résultat final (les DEUX camps) via "deployment_result" (OnDeploymentResult
+            // ci-dessous), qui est ce qui spawn réellement les unités sur CE client — y compris les
+            // siennes, au cas où le serveur ait dû recadrer une position hors de la zone légale.
             UnitSpawnerUI.Instance.ClearAllUnits();
-            UnitSpawnerUI.Instance.AutoDeployBattlefield();
+            UnitSpawnerUI.Instance.maxUnitsPerTeam = 4;
+            UnitSpawnerUI.Instance.OpenDockForMultiplayerDeployment(localTeamId);
+            IsDeploymentPhaseActive = true;
+
+            MusicManager.SetGameplayVolume();
+            SetUiState(UiState.Deployment);
+        }
+
+        /// <summary>Rassemble le placement local (unités + barricades de mon seul camp) et l'envoie
+        /// au serveur — appelé par UnitSpawnerUI quand le joueur tape "CONFIRMER LE DÉPLOIEMENT".
+        /// Le dock se cache aussitôt (IsDeploymentPhaseActive=false) : toute modification locale
+        /// après ce point ne serait de toute façon jamais transmise au serveur.</summary>
+        public void SubmitLocalDeployment()
+        {
+            var placements = new List<UnitPlacement>();
+            foreach (var unit in UnitAI.AllLivingUnits)
+            {
+                if (unit.teamID != localTeamId) continue;
+                placements.Add(new UnitPlacement
+                {
+                    unit_type = InferUnitType(unit),
+                    x = unit.transform.position.x,
+                    y = unit.transform.position.y,
+                    z = unit.transform.position.z
+                });
+            }
+            foreach (var barrier in RoadBarrier.AllBarriers)
+            {
+                if (barrier == null || barrier.teamID != localTeamId) continue;
+                placements.Add(new UnitPlacement
+                {
+                    unit_type = (int)UnitSpawnerUI.UnitType.BarricadeRoutiere,
+                    x = barrier.transform.position.x,
+                    y = barrier.transform.position.y,
+                    z = barrier.transform.position.z
+                });
+            }
+
+            GameServerClient.Instance.Send(new NetMessage { type = "submit_deployment", placements = placements.ToArray() });
+
+            IsDeploymentPhaseActive = false;
+            statusMessage = "Déploiement envoyé — en attente de l'adversaire...";
+            SetUiState(UiState.Matchmaking);
+        }
+
+        private static int InferUnitType(UnitAI u)
+        {
+            if (u.isMortar) return (int)UnitSpawnerUI.UnitType.Mortier;
+            if (u.isCanonVehicle) return (int)UnitSpawnerUI.UnitType.VehiculeCanon;
+            if (u.isTank) return (int)UnitSpawnerUI.UnitType.CharLeopard;
+            return (int)UnitSpawnerUI.UnitType.Fantassin;
+        }
+
+        /// <summary>Positions FINALES validées par le serveur pour les DEUX camps — spawn réellement
+        /// les unités sur ce client (y compris les miennes, jamais mes propres positions candidates
+        /// locales, au cas où le serveur ait dû les recadrer) puis démarre la partie.</summary>
+        private void OnDeploymentResult(NetMessage msg)
+        {
+            UnitSpawnerUI.Instance.ClearAllUnits();
+
+            if (msg.deployed_units != null)
+            {
+                foreach (var u in msg.deployed_units)
+                {
+                    var type = (UnitSpawnerUI.UnitType)u.unit_type;
+                    Vector3 pos = new Vector3(u.x, u.y, u.z);
+                    UnitSpawnerUI.Instance.SpawnUnitAt(type, pos, u.team_id, forcedName: u.unit_id);
+                }
+            }
 
             // Le client ne simule jamais de mouvement localement en multijoueur : les NavMeshAgent
             // sont désactivés pour ne jamais entrer en conflit avec les positions reçues du serveur.
@@ -394,6 +496,7 @@ namespace Novgov.Network
         {
             uiState = newState;
             IsFlowActive = newState != UiState.Hidden;
+            IsInMatch = newState == UiState.InMatch;
             switch (newState)
             {
                 case UiState.Login:
@@ -408,6 +511,13 @@ namespace Novgov.Network
                 case UiState.Matchmaking:
                     waitingStatusLabel.text = statusMessage;
                     UIScreenManager.Instance.Show("Waiting");
+                    break;
+                case UiState.Deployment:
+                    // Rien à afficher ici : le dock de déploiement (UnitSpawnerUI, écran
+                    // "DeploymentDock") gère seul son affichage pendant cette phase — voir
+                    // UnitSpawnerUI.RefreshDeploymentDockUI(). On masque juste les écrans propres à
+                    // ce contrôleur (ex: l'écran "Recherche d'adversaire...").
+                    UIScreenManager.Instance.HideAll();
                     break;
                 case UiState.InMatch:
                     RefreshHudStaticFields();

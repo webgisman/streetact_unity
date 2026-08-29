@@ -8,10 +8,9 @@
                 <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/city.png');" />
                 <ui:VisualElement class="btn-text-col">
                     <ui:Label text="MODE SOLO" />
-                    <ui:Label text="Carte déjà présente — vs IA ou à deux sur cet appareil" class="btn-subtitle" />
+                    <ui:Label text="Carte déjà présente — contre l'IA" class="btn-subtitle" />
                 </ui:VisualElement>
             </ui:Button>
-            <ui:Toggle name="hotseat-toggle" label="Équipe adverse contrôlée par un second joueur (même appareil)" style="margin-bottom: 14px; margin-left: 4px;" />
 
             <ui:Button name="btn-multiplayer" class="btn-primary btn-with-icon" style="min-height: 96px; margin-bottom: 14px;">
                 <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/satellite.png'); -unity-background-image-tint-color: var(--color-accent-text);" />

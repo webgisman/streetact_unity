@@ -885,6 +885,7 @@ public partial class UnitAI : MonoBehaviour
     {
         isExecuting = false;
         isPerformingCheckpointAction = false;
+        isClimbing = false;
         tacticalPath.Clear();
         currentNodeIndex = 0;
         if (tacticalLineRenderer != null) tacticalLineRenderer.positionCount = 0;

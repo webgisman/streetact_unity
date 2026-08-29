@@ -19,13 +19,6 @@ public class UnitSpawnerUI : MonoBehaviour
     public int maxUnitsPerTeam = 12;
     public int selectedTeam = 1; // 1 = Joueur (Bleu), 2 = Ennemi (Rouge)
 
-    /// <summary>Mode "à deux sur le même appareil" (case à cocher du menu de démarrage, voir
-    /// GameManagerUI) : les DEUX équipes sont contrôlées manuellement, aucune IA n'agit pour
-    /// l'équipe 2 — chaque joueur se relaie sur l'appareil pour donner ses ordres à son camp
-    /// pendant la phase de Planification. Remis à false par défaut à chaque lancement (mode
-    /// normal solo vs IA), activé explicitement au clic sur MODE SOLO si la case est cochée.</summary>
-    public static bool HotseatMode = false;
-
     // Les barricades n'ont pas de UnitAI (voir RoadBarrier), donc jamais comptées par
     // GetTeamLivingUnitsCount/maxUnitsPerTeam ci-dessus — sans cette limite dédiée, un camp pouvait
     // en poser un nombre illimité.
@@ -415,6 +408,17 @@ public class UnitSpawnerUI : MonoBehaviour
             return;
         }
 
+        // Armer le placement d'un AUTRE type pendant qu'une ancre de barricade est encore active
+        // (barricade posée puis dock retapé sur un autre type sans avoir confirmé de nouveau
+        // placement au sol) laissait l'ancre en place ; un retour ultérieur sur "Barricade" traitait
+        // alors le tap suivant comme une extension de cette ligne périmée au lieu d'un placement
+        // neuf. CancelPlacement() gère déjà le cas d'un placement confirmé/annulé explicitement.
+        if (type != UnitType.BarricadeRoutiere)
+        {
+            lastPlacedBarricadeAnchor = null;
+            pendingBarricadeExtension = null;
+        }
+
         activePlacingType = type;
         IsPlacingUnit = true;
         isPanelOpen = false; // Ferme le dock pour libérer tout l'écran tactile
@@ -447,7 +451,14 @@ public class UnitSpawnerUI : MonoBehaviour
 #endif
     }
 
-    public void SpawnUnitAt(UnitType type, Vector3 position, int team)
+    /// <param name="forcedName">
+    /// Utilisé UNIQUEMENT côté client en multijoueur, en rejouant "deployment_result" : le nom doit
+    /// être EXACTEMENT celui que le serveur a assigné (voir MatchSessionManager.ResolveDeployment)
+    /// pour que PlaySnapshotsCoroutine retrouve la bonne unité par nom plus tard. Laissé à null
+    /// partout ailleurs (solo, hotseat, et les appels serveur eux-mêmes) : le nom auto-généré
+    /// habituel (ex: "Fantassin_1_2") reste inchangé.
+    /// </param>
+    public void SpawnUnitAt(UnitType type, Vector3 position, int team, string forcedName = null)
     {
         int teamCount = GetTeamLivingUnitsCount(team);
         if (teamCount >= maxUnitsPerTeam)
@@ -479,7 +490,7 @@ public class UnitSpawnerUI : MonoBehaviour
                 newUnitObj.AddComponent<NavMeshAgent>();
                 newUnitObj.AddComponent<UnitAI>();
             }
-            newUnitObj.name = $"Fantassin_{team}_{(teamCount + 1)}";
+            newUnitObj.name = forcedName ?? $"Fantassin_{team}_{(teamCount + 1)}";
         }
         else if (type == UnitType.CharLeopard)
         {
@@ -513,7 +524,7 @@ public class UnitSpawnerUI : MonoBehaviour
                     newUnitObj.AddComponent<UnitAI>();
                 }
             }
-            newUnitObj.name = $"Leopard2_{team}_{(teamCount + 1)}";
+            newUnitObj.name = forcedName ?? $"Leopard2_{team}_{(teamCount + 1)}";
         }
         else if (type == UnitType.VehiculeCanon)
         {
@@ -534,7 +545,7 @@ public class UnitSpawnerUI : MonoBehaviour
                     newUnitObj.AddComponent<UnitAI>();
                 }
             }
-            newUnitObj.name = $"Canon_Vehicule_{team}_{(teamCount + 1)}";
+            newUnitObj.name = forcedName ?? $"Canon_Vehicule_{team}_{(teamCount + 1)}";
         }
         else if (type == UnitType.Mortier)
         {
@@ -593,7 +604,7 @@ public class UnitSpawnerUI : MonoBehaviour
             agent.height = 2f;
             agent.stoppingDistance = 0.5f;
 
-            newUnitObj.name = $"Mortier_{team}_{(teamCount + 1)}";
+            newUnitObj.name = forcedName ?? $"Mortier_{team}_{(teamCount + 1)}";
         }
         else if (type == UnitType.BarricadeRoutiere)
         {
@@ -618,7 +629,7 @@ public class UnitSpawnerUI : MonoBehaviour
             RoadBarrier barrier = newUnitObj.GetComponent<RoadBarrier>();
             if (barrier == null) barrier = newUnitObj.AddComponent<RoadBarrier>();
             barrier.teamID = team;
-            newUnitObj.name = $"Barricade_{team}_{(RoadBarrier.AllBarriers.Count)}";
+            newUnitObj.name = forcedName ?? $"Barricade_{team}_{(RoadBarrier.AllBarriers.Count)}";
 
             // Son de pose de barricade
             AudioClip clickClip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
@@ -641,11 +652,8 @@ public class UnitSpawnerUI : MonoBehaviour
             if (unitAI == null) unitAI = newUnitObj.AddComponent<UnitAI>();
 
             unitAI.teamID = team;
-            // En hotseat (second joueur humain sur ce même appareil, voir HotseatMode), l'équipe 2
-            // est AUSSI contrôlée manuellement — TacticalAIPlanner ignore déjà toute unité
-            // isPlayerControlled quel que soit son équipe (voir PlanifierTourIA), donc ce seul
-            // indicateur suffit à faire sauter l'IA pour ce camp sans toucher au reste du code.
-            unitAI.isPlayerControlled = (team == 1) || HotseatMode;
+            // Mode solo strictement joueur (équipe 1) contre IA (équipe 2, voir TacticalAIPlanner).
+            unitAI.isPlayerControlled = (team == 1);
             unitAI.teamAssignedBySpawner = true;
             unitAI.isDead = false;
 
@@ -863,9 +871,45 @@ public class UnitSpawnerUI : MonoBehaviour
         statusMessageTimer = duration;
     }
 
+    // Mêmes points d'ancrage que AutoDeployBattlefield/SpawnEnemyWave, mais scopés à un seul camp —
+    // utilisé par MatchSessionManager.ResolveDeployment comme repli serveur si un joueur n'a pas
+    // soumis de placement manuel valide avant l'expiration du timer de déploiement (voir
+    // 03-network-protocol.md, "submit_deployment"/"deployment_result").
+    public void AutoDeployTeamFallback(int team)
+    {
+        Vector3 anchor = FindGroundLevelNavPoint(team == 1 ? new Vector3(-25f, 0f, -25f) : new Vector3(25f, 0f, 25f), 40f);
+        if (team == 1)
+        {
+            SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(-2f, 0, -2f), 1);
+            SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(2f, 0, 2f), 1);
+            SpawnUnitAt(UnitType.CharLeopard, anchor + new Vector3(5f, 0, -3f), 1);
+            SpawnUnitAt(UnitType.Mortier, anchor + new Vector3(-5f, 0, -4f), 1);
+        }
+        else
+        {
+            SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(-3f, 0, 3f), 2);
+            SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(3f, 0, -3f), 2);
+            SpawnUnitAt(UnitType.CharLeopard, anchor + new Vector3(6f, 0, 4f), 2);
+            SpawnUnitAt(UnitType.Mortier, anchor + new Vector3(-6f, 0, 5f), 2);
+        }
+    }
+
+    /// <summary>Appelé par MultiplayerMatchController au tout début de la phase de déploiement PvP :
+    /// ouvre directement le dock (pas besoin de taper sur l'onglet DÉPLOIEMENT) et verrouille
+    /// l'équipe sur celle du joueur local — impossible pour un client de placer des unités pour
+    /// l'équipe adverse depuis son propre appareil (le serveur ignorerait de toute façon toute
+    /// unité hors de la zone/de l'effectif autorisés pour ce camp, voir MatchSessionManager).</summary>
+    public void OpenDockForMultiplayerDeployment(int team)
+    {
+        selectedTeam = team;
+        isPanelOpen = true;
+        CancelPlacement();
+    }
+
 #if !UNITY_SERVER
     private VisualElement dockPanel;
     private Button tabButton, team1Button, team2Button;
+    private Button aiSquadButton, autoDeployButton, mpConfirmButton;
     private Label effectifsLabel, placingBanner, statusMessageLabel, tabButtonLabel;
     private bool deploymentUiBound = false;
 
@@ -925,9 +969,30 @@ public class UnitSpawnerUI : MonoBehaviour
             root.Q<Button>("btn-canon").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.VehiculeCanon); };
             root.Q<Button>("btn-mortier").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.Mortier); };
             root.Q<Button>("btn-barricade").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.BarricadeRoutiere); };
-            root.Q<Button>("btn-ai-squad").clicked += () => { lastUIClickTime = Time.time; SpawnEnemyWave(); };
-            root.Q<Button>("btn-auto-deploy").clicked += () => { lastUIClickTime = Time.time; AutoDeployBattlefield(); };
+            aiSquadButton = root.Q<Button>("btn-ai-squad");
+            aiSquadButton.clicked += () => { lastUIClickTime = Time.time; SpawnEnemyWave(); };
+            autoDeployButton = root.Q<Button>("btn-auto-deploy");
+            autoDeployButton.clicked += () => { lastUIClickTime = Time.time; AutoDeployBattlefield(); };
             root.Q<Button>("btn-clear").clicked += () => { lastUIClickTime = Time.time; ClearAllUnits(); };
+
+            // Multijoueur uniquement (voir OpenDockForMultiplayerDeployment) : bouton ajouté dans
+            // DeploymentDockScreen.uxml, caché par défaut (display:none), affiché UNIQUEMENT pendant
+            // la phase de déploiement PvP (voir RefreshDeploymentDockUI) — btn-ai-squad/btn-auto-
+            // deploy n'ont pas de sens en PvP (ils manipuleraient le camp adverse depuis mon propre
+            // appareil) et sont donc masqués à la place pendant cette même phase.
+            mpConfirmButton = root.Q<Button>("btn-mp-confirm");
+            if (mpConfirmButton != null)
+            {
+                mpConfirmButton.clicked += () =>
+                {
+                    lastUIClickTime = Time.time;
+                    Novgov.Network.MultiplayerMatchController.Instance?.SubmitLocalDeployment();
+                };
+            }
+            else
+            {
+                Debug.LogError("[UnitSpawnerUI] Bouton 'btn-mp-confirm' introuvable dans DeploymentDockScreen.uxml — la confirmation de déploiement multijoueur restera inopérante.");
+            }
 
             // Pas de SetVisible(true) ici : RefreshDeploymentDockUI() (appelé chaque frame depuis
             // Update) décide seul de la visibilité dès la première frame, startup menu inclus.
@@ -955,12 +1020,15 @@ public class UnitSpawnerUI : MonoBehaviour
         }
 
         // Masqué en vue 3D Action, pendant l'exécution du tour, et pendant tout écran multijoueur
-        // (login/mode/matchmaking/HUD/fin de partie — le dock de déploiement manuel n'a pas de sens
-        // en PvP, les unités y sont toujours auto-déployées, voir MultiplayerMatchController).
+        // SAUF la phase de déploiement PvP elle-même (voir OpenDockForMultiplayerDeployment/
+        // MultiplayerMatchController.IsDeploymentPhaseActive) — login/mode/matchmaking/HUD/fin de
+        // partie restent masqués comme avant, seule cette phase précise réutilise ce même dock,
+        // verrouillé sur le camp local (voir plus bas).
         bool hidden = (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action);
         TacticalPathManager pathManager = TacticalPathManager.Instance;
         if (pathManager != null && pathManager.phaseActuelle == TacticalPathManager.GamePhase.Execution) hidden = true;
-        if (Novgov.Network.MultiplayerMatchController.IsFlowActive) hidden = true;
+        bool mpDeployment = Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive;
+        if (Novgov.Network.MultiplayerMatchController.IsFlowActive && !mpDeployment) hidden = true;
         // Le menu de démarrage (choix de carte hors-ligne/GPS/multijoueur) n'a encore chargé aucune
         // carte ni unité — sans ce garde-fou, ce dock plein écran (même vide) reste au-dessus du
         // menu de démarrage dans l'arbre UI Toolkit et intercepte silencieusement tous les taps
@@ -970,6 +1038,16 @@ public class UnitSpawnerUI : MonoBehaviour
 
         UIScreenManager.Instance.SetVisible("DeploymentDock", !hidden);
         if (hidden) return;
+
+        // Verrouillage du choix de camp + boutons solo-only pendant le déploiement PvP : impossible
+        // de basculer sur le camp adverse, et ESCOUADE IA/DÉPLOIEMENT AUTO n'ont pas de sens ici
+        // (ils manipuleraient l'équipe adverse depuis mon propre appareil) — remplacés par
+        // CONFIRMER LE DÉPLOIEMENT (voir mpConfirmButton, câblé dans BindDeploymentUI).
+        team1Button.style.display = mpDeployment ? DisplayStyle.None : DisplayStyle.Flex;
+        team2Button.style.display = mpDeployment ? DisplayStyle.None : DisplayStyle.Flex;
+        if (aiSquadButton != null) aiSquadButton.style.display = mpDeployment ? DisplayStyle.None : DisplayStyle.Flex;
+        if (autoDeployButton != null) autoDeployButton.style.display = mpDeployment ? DisplayStyle.None : DisplayStyle.Flex;
+        if (mpConfirmButton != null) mpConfirmButton.style.display = mpDeployment ? DisplayStyle.Flex : DisplayStyle.None;
 
         int playerUnits = GetTeamLivingUnitsCount(1);
         int enemyUnits = GetTeamLivingUnitsCount(2);

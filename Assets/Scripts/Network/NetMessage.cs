@@ -41,6 +41,17 @@ namespace Novgov.Network
         // turn_result
         public int snapshot_interval_ms;
         public Snapshot[] snapshots;
+
+        // submit_deployment (client -> serveur) : placement manuel choisi par le joueur pendant la
+        // phase de déploiement PvP, voir 03-network-protocol.md.
+        public UnitPlacement[] placements;
+
+        // deployment_result (serveur -> client) : positions FINALES validées par le serveur pour
+        // les DEUX camps (zone de déploiement respectée, effectif autorisé) — voir
+        // MatchSessionManager.RunDeploymentPhase. Le client ne fait jamais confiance à ses propres
+        // positions candidates : il efface tout et respawn exactement cette liste (y compris pour
+        // son propre camp, au cas où le serveur ait dû recadrer une position hors zone).
+        public DeployedUnit[] deployed_units;
     }
 
     [Serializable]
@@ -76,6 +87,30 @@ namespace Novgov.Network
         public int health;
         public bool dead;
         public bool shooting;
+    }
+
+    /// <summary>Une unité que le joueur souhaite placer, envoyée dans "submit_deployment". Le
+    /// serveur ne fait JAMAIS confiance à cette position telle quelle (voir MatchSessionManager.
+    /// ResolveDeployment) : elle est recadrée dans la zone de déploiement légale du camp avant
+    /// d'être réellement instanciée.</summary>
+    [Serializable]
+    public class UnitPlacement
+    {
+        // Valeur brute de UnitSpawnerUI.UnitType (0=Fantassin, 1=CharLeopard, 2=VehiculeCanon,
+        // 3=Mortier, 4=BarricadeRoutiere).
+        public int unit_type;
+        public float x, y, z;
+    }
+
+    /// <summary>Une unité réellement déployée après résolution serveur (diffusée dans
+    /// "deployment_result", aux DEUX clients, pour les DEUX camps).</summary>
+    [Serializable]
+    public class DeployedUnit
+    {
+        public string unit_id;
+        public int unit_type;
+        public int team_id;
+        public float x, y, z;
     }
 
     /// <summary>

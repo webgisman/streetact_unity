@@ -29,7 +29,7 @@ public partial class TacticalPathManager
         // tapée pour l'unité PRÉCÉDENTE : sélectionner une unité neuve la faisait alors prévisualiser
         // (voir DessinerTousLesChemins) un trajet fantôme vers ce point resté en mémoire, jamais
         // demandé pour cette unité-ci.
-        positionClicTemporaire = Vector3.zero;
+        positionClicTemporaire = Vector3.positiveInfinity;
 #if !UNITY_SERVER
         if (invokeCancelAction) currentMenuCancelAction?.Invoke();
         currentMenuCancelAction = null;

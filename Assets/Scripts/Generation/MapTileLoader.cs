@@ -35,6 +35,7 @@ public class MapTileLoader : MonoBehaviour
         if (Application.isPlaying)
         {
             CancelActiveMapLoad();
+            isMapLoaded = false;
             activeMapLoad = StartCoroutine(DownloadAndApplyMap());
         }
         else
@@ -227,6 +228,7 @@ public class MapTileLoader : MonoBehaviour
     {
         CancelActiveMapLoad();
         EnsureSolObject();
+        isMapLoaded = false;
 
         Texture2D globalTexture = Resources.Load<Texture2D>("DefaultMapTexture");
         if (globalTexture == null)

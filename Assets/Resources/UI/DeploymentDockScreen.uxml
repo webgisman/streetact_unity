@@ -60,6 +60,10 @@
                         <ui:VisualElement class="icon" style="width: 16px; height: 16px; background-image: url('/Assets/UI/Icons/broom.png'); -unity-background-image-tint-color: var(--color-text-dim); margin-right: 6px;" />
                         <ui:Label text="NETTOYER TERRAIN" />
                     </ui:Button>
+                    <ui:Button name="btn-mp-confirm" class="dock-action-btn warning-btn btn-with-icon" style="justify-content: center; display: none;">
+                        <ui:VisualElement class="icon" style="width: 16px; height: 16px; background-image: url('/Assets/UI/Icons/lightning.png'); -unity-background-image-tint-color: var(--color-accent); margin-right: 6px;" />
+                        <ui:Label text="CONFIRMER LE DÉPLOIEMENT" />
+                    </ui:Button>
                 </ui:ScrollView>
             </ui:VisualElement>
         </ui:VisualElement>

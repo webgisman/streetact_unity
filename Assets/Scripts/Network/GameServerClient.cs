@@ -28,6 +28,12 @@ namespace Novgov.Network
         private readonly object sendLock = new object();
         private volatile bool isConnected = false;
         private volatile string pendingDisconnectReason = null;
+        // Toutes les ~5s (voir 03-network-protocol.md, message "heartbeat") : sans cet envoi
+        // régulier, le serveur (une fois son propre timeout de lecture rendu fini, voir
+        // GameServerBootstrap.HandleHandshake) considérerait un joueur simplement silencieux
+        // pendant sa phase de planification comme déconnecté.
+        private const float HeartbeatIntervalSeconds = 5f;
+        private float heartbeatTimer = 0f;
 
         public bool IsConnected => isConnected;
 
@@ -50,6 +56,16 @@ namespace Novgov.Network
             {
                 pendingDisconnectReason = null;
                 OnDisconnected?.Invoke(reason);
+            }
+
+            if (isConnected)
+            {
+                heartbeatTimer += Time.deltaTime;
+                if (heartbeatTimer >= HeartbeatIntervalSeconds)
+                {
+                    heartbeatTimer = 0f;
+                    Send(new NetMessage { type = "heartbeat" });
+                }
             }
         }
 
@@ -122,6 +138,22 @@ namespace Novgov.Network
         private void OnDestroy()
         {
             Disconnect("destroyed");
+        }
+
+        // Sans ces deux callbacks, fermer l'app (bouton Accueil, tâche tuée, écran verrouillé) ne
+        // fermait proprement la socket que si Unity détruisait l'objet en sortie normale — jamais
+        // en mise en arrière-plan Android/iOS. La connexion restait alors ouverte côté serveur
+        // jusqu'à ce qu'un envoi/une lecture finisse par expirer (voir GameServerBootstrap et le
+        // timeout ajouté sur PlayerConnection), au lieu d'être immédiatement traitée comme une
+        // vraie déconnexion (Ghost dès le tour suivant).
+        private void OnApplicationQuit()
+        {
+            Disconnect("app_quit");
+        }
+
+        private void OnApplicationPause(bool pauseStatus)
+        {
+            if (pauseStatus) Disconnect("app_paused");
         }
     }
 }

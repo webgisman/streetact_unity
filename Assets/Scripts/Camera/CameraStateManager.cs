@@ -50,10 +50,18 @@ public class CameraStateManager : MonoBehaviour
         {
             // En vue 3D : On voit tout SAUF les marqueurs 2D
             actionViewMask = ~(1 << markersLayer);
-            
+
             // En vue 2D : On voit tout SAUF les modèles 3D complexes des unités (remplacés par les icônes)
             if (units3DLayer != -1) commandViewMask = ~(1 << units3DLayer);
             else commandViewMask = -1;
+        }
+        else
+        {
+            // Layer "Units_UI_Markers" introuvable (renommé/supprimé) : tout cacher (masque à 0) rendrait
+            // l'écran totalement noir dans les deux vues sans le moindre indice visuel du problème —
+            // tout afficher est un repli beaucoup plus sûr (au pire quelques marqueurs 2D visibles en 3D).
+            actionViewMask = -1;
+            commandViewMask = -1;
         }
 
         // Maximiser le framerate sur mobile
@@ -163,9 +171,12 @@ public class CameraStateManager : MonoBehaviour
 
         if (!actionViewUiBound)
         {
-            actionViewUiBound = true;
             var root = UIScreenManager.Instance.GetScreen("ActionViewBack");
-            root.Q<UnityEngine.UIElements.Button>("back-button").clicked += ReturnTo2DView;
+            if (root == null) return;
+            actionViewUiBound = true;
+
+            var backBtn = root.Q<UnityEngine.UIElements.Button>("back-button");
+            if (backBtn != null) backBtn.clicked += ReturnTo2DView;
 
             // Fin de tour reste joignable sans quitter la vue 3D — s'applique à toutes les unités,
             // pas seulement à celle actuellement suivie ici (voir TacticalPathManager.LancerExecutionTour).
@@ -180,7 +191,10 @@ public class CameraStateManager : MonoBehaviour
 
         if (newState == CameraState.Action)
         {
-            var banner = UIScreenManager.Instance.GetScreen("ActionViewBack").Q<UnityEngine.UIElements.Label>("focus-banner");
+            var actionScreen = UIScreenManager.Instance.GetScreen("ActionViewBack");
+            var banner = actionScreen?.Q<UnityEngine.UIElements.Label>("focus-banner");
+            if (banner == null) return;
+
             if (focusedUnit != null)
             {
                 banner.text = $"ACTION 3D : {focusedUnit.name.ToUpper()}";

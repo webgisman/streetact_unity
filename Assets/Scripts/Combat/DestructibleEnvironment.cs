@@ -120,14 +120,39 @@ public class DestructibleEnvironment : MonoBehaviour
                 }
             }
 
+            // Empreinte locale (alignée sur la rotation réelle du bâtiment) plutôt que l'AABB monde
+            // de totalBounds : Collider.bounds est TOUJOURS un AABB monde même pour un collider
+            // tourné, donc pour un bâtiment à ~45° ce test surestimait largement la silhouette
+            // réelle et tuait des unités clairement à l'extérieur des décombres visuels.
+            Bounds localFootprint = new Bounds(Vector3.zero, Vector3.zero);
+            bool hasLocalFootprint = false;
+            foreach (var c in allCols)
+            {
+                if (c == null) continue;
+                Bounds wb = c.bounds;
+                for (int cx = 0; cx <= 1; cx++)
+                for (int cy = 0; cy <= 1; cy++)
+                for (int cz = 0; cz <= 1; cz++)
+                {
+                    Vector3 corner = new Vector3(
+                        cx == 0 ? wb.min.x : wb.max.x,
+                        cy == 0 ? wb.min.y : wb.max.y,
+                        cz == 0 ? wb.min.z : wb.max.z);
+                    Vector3 localCorner = transform.InverseTransformPoint(corner);
+                    if (!hasLocalFootprint) { localFootprint = new Bounds(localCorner, Vector3.zero); hasLocalFootprint = true; }
+                    else localFootprint.Encapsulate(localCorner);
+                }
+            }
+
             for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
             {
                 UnitAI u = UnitAI.AllLivingUnits[i];
                 if (u != null && !u.isDead && !casualties.Contains(u))
                 {
-                    Vector3 pos = u.transform.position;
-                    if (pos.x >= totalBounds.min.x - 1.0f && pos.x <= totalBounds.max.x + 1.0f &&
-                        pos.z >= totalBounds.min.z - 1.0f && pos.z <= totalBounds.max.z + 1.0f)
+                    Vector3 localPos = transform.InverseTransformPoint(u.transform.position);
+                    if (hasLocalFootprint &&
+                        localPos.x >= localFootprint.min.x - 1.0f && localPos.x <= localFootprint.max.x + 1.0f &&
+                        localPos.z >= localFootprint.min.z - 1.0f && localPos.z <= localFootprint.max.z + 1.0f)
                     {
                         casualties.Add(u);
                     }

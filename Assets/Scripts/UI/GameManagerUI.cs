@@ -15,6 +15,15 @@ public class GameManagerUI : MonoBehaviour
     private static GameManagerUI instance;
     public static GameManagerUI Instance { get { return instance; } }
 
+    // Statique : survit à un rechargement de scène (ex. bouton "Rejouer" en fin de partie solo ou
+    // multijoueur). GameManagerUI lui-même est recréé à chaque rechargement (pas de
+    // DontDestroyOnLoad), mais les Button qu'il câble viennent de UIScreenManager, qui LUI est
+    // persistant — sans ce garde, chaque rechargement rajoutait un abonnement `clicked +=`
+    // supplémentaire sur les MÊMES boutons "MODE SOLO"/"MODE CAMPAGNE MULTIJOUEUR", faisant
+    // déclencher leurs actions (chargement de carte, connexion serveur) une fois par rechargement
+    // vécu depuis le lancement de l'app.
+    private static bool startupButtonsBound = false;
+
     [Header("Map Selector Startup")]
     private bool isMapSelectorOpen = true; // S'ouvre automatiquement au lancement du jeu
     public bool IsStartupSelectionActive => isMapSelectorOpen;
@@ -89,34 +98,34 @@ public class GameManagerUI : MonoBehaviour
             return;
         }
 
-        try
+        if (!startupButtonsBound)
         {
-            // Menu réduit à 2 choix : MODE SOLO (carte déjà présente, vs IA ou vs un second joueur
-            // sur le même appareil via la case à cocher ci-dessous) et MODE CAMPAGNE MULTIJOUEUR
-            // (géolocalisation GPS — anciennement un 3e bouton séparé "btn-gps" — puis connexion
-            // PvP, anciennement déclenchée directement sans passer par le GPS).
-            UnityEngine.UIElements.Toggle hotseatToggle = root.Q<UnityEngine.UIElements.Toggle>("hotseat-toggle");
-
-            root.Q<UnityEngine.UIElements.Button>("btn-offline").clicked += () =>
+            try
             {
-                isMapSelectorOpen = false;
-                UnitSpawnerUI.HotseatMode = hotseatToggle != null && hotseatToggle.value;
-                UIScreenManager.Instance.HideAll();
-                MusicManager.SetGameplayVolume();
-                OnClickLoadDefaultOfflineMap();
-            };
-            root.Q<UnityEngine.UIElements.Button>("btn-multiplayer").clicked += () =>
+                // Menu réduit à 2 choix : MODE SOLO (carte déjà présente, contre l'IA) et MODE CAMPAGNE
+                // MULTIJOUEUR (géolocalisation GPS — anciennement un 3e bouton séparé "btn-gps" — puis
+                // connexion PvP, anciennement déclenchée directement sans passer par le GPS).
+                root.Q<UnityEngine.UIElements.Button>("btn-offline").clicked += () =>
+                {
+                    isMapSelectorOpen = false;
+                    UIScreenManager.Instance.HideAll();
+                    MusicManager.SetGameplayVolume();
+                    GameManagerUI.Instance?.OnClickLoadDefaultOfflineMap();
+                };
+                root.Q<UnityEngine.UIElements.Button>("btn-multiplayer").clicked += () =>
+                {
+                    MusicManager.SetGameplayVolume();
+                    GameManagerUI.Instance?.StartCoroutine(GameManagerUI.Instance.StartDeviceGPS(thenConnectMultiplayer: true));
+                };
+                startupButtonsBound = true;
+            }
+            catch (System.Exception ex)
             {
-                MusicManager.SetGameplayVolume();
-                StartCoroutine(StartDeviceGPS(thenConnectMultiplayer: true));
-            };
+                Debug.LogError($"[GameManagerUI] Liaison des boutons du menu de démarrage échouée : {ex.GetType().Name} — {ex.Message}");
+            }
+        }
 
-            gpsStatusLabel = root.Q<Label>("gps-status-label");
-        }
-        catch (System.Exception ex)
-        {
-            Debug.LogError($"[GameManagerUI] Liaison des boutons du menu de démarrage échouée : {ex.GetType().Name} — {ex.Message}");
-        }
+        gpsStatusLabel = root.Q<Label>("gps-status-label");
 
         // Menu de démarrage prioritaire : ce Show() doit s'exécuter même si l'écran "Error"
         // (non critique) échoue à se lier plus bas — sans ce garde-fou, une seule exception dans
@@ -135,12 +144,21 @@ public class GameManagerUI : MonoBehaviour
         }
         errorTextLabel = errorRoot.Q<Label>("error-text");
         UnityEngine.UIElements.Button btnLoadOffline = errorRoot.Q<UnityEngine.UIElements.Button>("btn-load-offline");
-        if (btnLoadOffline != null)
+        // userData sert de marqueur anti double-abonnement (même pattern que
+        // TacticalPathManager_Execution.ShowSoloGameOver) : ce bouton persistant serait sinon rebranché
+        // à chaque rechargement de scène, comme "btn-offline"/"btn-multiplayer" ci-dessus.
+        if (btnLoadOffline != null && btnLoadOffline.userData == null)
         {
+            btnLoadOffline.userData = true;
             btnLoadOffline.clicked += () =>
             {
+                // Même reset que "btn-offline" ci-dessus : sans lui, UnitSpawnerUI.IsStartupSelectionActive
+                // resterait vrai et le dock de déploiement resterait caché après ce chemin de secours.
+                GameManagerUI self = GameManagerUI.Instance;
+                if (self == null) return;
+                self.isMapSelectorOpen = false;
                 UIScreenManager.Instance.SetVisible("Error", false);
-                OnClickLoadDefaultOfflineMap();
+                self.OnClickLoadDefaultOfflineMap();
             };
         }
     }

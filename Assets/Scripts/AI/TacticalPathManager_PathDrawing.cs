@@ -96,7 +96,7 @@ public partial class TacticalPathManager
             lr.colorGradient = isSelected ? selectedGradient : normalGradient;
 
             // Recalculer le chemin uniquement s'il est marqué 'dirty'
-            if (unitAI.isPathDirty || isPathsDirty || unitAI.cachedDrawPoints.Count == 0 || (isSelected && positionClicTemporaire != Vector3.zero))
+            if (unitAI.isPathDirty || isPathsDirty || unitAI.cachedDrawPoints.Count == 0 || (isSelected && positionClicTemporaire != Vector3.positiveInfinity))
             {
                 unitAI.cachedDrawPoints.Clear();
                 Vector3 positionCourante = unitAI.transform.position;
@@ -137,7 +137,7 @@ public partial class TacticalPathManager
                 }
 
                 // Prévisualisation pour l'unité sélectionnée vers la position du clic temporaire
-                if (isSelected && (phaseActuelle == GamePhase.Planification || phaseActuelle == GamePhase.CreationPath) && positionClicTemporaire != Vector3.zero)
+                if (isSelected && (phaseActuelle == GamePhase.Planification || phaseActuelle == GamePhase.CreationPath) && positionClicTemporaire != Vector3.positiveInfinity)
                 {
                     if (UnityEngine.AI.NavMesh.CalculatePath(positionCourante, positionClicTemporaire, areaMask, cachedNavPath) && cachedNavPath.corners.Length > 1)
                     {

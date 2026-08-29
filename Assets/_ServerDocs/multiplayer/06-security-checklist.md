@@ -96,20 +96,26 @@ corrigés (code + base de données live) :
       toujours. Corrigé : plafond de 60 tours, départage par unités vivantes puis PV totaux,
       égalité parfaite = match nul.
 
+## Audit de production (2026-08-29) — corrigés
+
+- [x] **Pas de timeout d'écriture socket côté serveur, pas de TCP keepalive** (voir l'item
+      correspondant ci-dessous, déplacé ici) — trouvé lors du premier vrai test à 2 téléphones
+      (bugs de déconnexion rapportés par l'utilisateur). Corrigé dans
+      `GameServerBootstrap.HandleHandshake` : `ReceiveTimeout=20000`/`SendTimeout=10000` appliqués
+      après l'auth (au lieu de `0`/infini), plus `SocketOptionName.KeepAlive`. Complété côté client
+      par un vrai heartbeat toutes les 5s (`GameServerClient.Update()` — décrit dans
+      `03-network-protocol.md` depuis le début mais jamais réellement implémenté avant cette
+      session) pour ne jamais couper un joueur juste silencieux en pleine réflexion, et par
+      `OnApplicationPause`/`OnApplicationQuit` pour fermer proprement la connexion à la mise en
+      veille/fermeture de l'app. Voir `08-known-issues-and-todo.md` §10.3 pour le détail complet.
+
 ## Audit de production (2026-08-23) — restant à faire avant diffusion large
 
 Trouvés lors du même audit, pas encore corrigés (pas critiques, mais à traiter avant une
 diffusion au-delà de tests restreints) :
 
-- [ ] **Pas de timeout d'écriture socket côté serveur, pas de TCP keepalive.**
-      `client.ReceiveTimeout` repasse à `0` (infini) après l'authentification
-      (`GameServerBootstrap.cs`), et rien n'est configuré côté envoi. Si un client mobile perd le
-      réseau ou s'endort sans fermeture propre (FIN/RST), et que son tampon socket se remplit,
-      `PlayerConnection.Send()` (appelé depuis le thread principal, ex. le tick `turn_timer`
-      chaque seconde) peut bloquer indéfiniment — gelant tout le serveur puisqu'un seul match
-      tourne à la fois. Fix : fixer `SendTimeout` et un `ReceiveTimeout` raisonnable (30-60s)
-      même après l'auth, traiter un timeout comme une déconnexion ; activer
-      `SocketOptionName.KeepAlive` à l'acceptation.
+- [ ] ~~Pas de timeout d'écriture socket côté serveur, pas de TCP keepalive~~ **Corrigé le
+      2026-08-29** — voir "Audit de production (2026-08-29) — corrigés" ci-dessus.
 - [ ] **Aucune limite de connexions/débit sur le port 7777 (type Slowloris).**
       `AcceptLoop` crée un thread par connexion entrante sans plafond, et rien ne limite le
       nombre de connexions par IP. Un client peut garder un socket ouvert indéfiniment en
