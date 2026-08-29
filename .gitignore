@@ -6,6 +6,14 @@
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
 *_BurstDebugInformation_DoNotShip/
+*_BackUpThisFolder_ButDontShipItWithYourGame/
+
+# Cache de build natif Android (CMake/Gradle, arm64-v8a/armeabi-v7a incrémental) — régénéré
+# automatiquement à chaque build Android, aucune raison d'être versionné.
+.utmp/
+
+# Fichier de solution Visual Studio 2022+ (équivalent .slnx du .sln déjà ignoré ci-dessous)
+*.slnx
 
 # Identifiants serveur (VPS, Supabase, clé SSH) — ne JAMAIS committer, voir CREDENTIALS.md.
 /CREDENTIALS.md
