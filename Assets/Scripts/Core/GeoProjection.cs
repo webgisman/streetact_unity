@@ -75,5 +75,41 @@ namespace Novgov.Core
             double n = Math.PI - 2.0 * Math.PI * y / (double)(1 << zoom);
             return 180.0 / Math.PI * Math.Atan(0.5 * (Math.Exp(n) - Math.Exp(-n)));
         }
+
+        /// <summary>
+        /// GPS -> index de tuile Slippy Map. Point d'entrée unique du GPS dans le nouveau système de
+        /// Zones de Conquête : appelé une seule fois au premier lancement du joueur, puis le jeu ne
+        /// raisonne plus qu'en (tileX, tileY, zoom).
+        /// </summary>
+        public static void TileIndexFromCoordinate(double lat, double lon, int zoom, out int tileX, out int tileY)
+        {
+            tileX = LonToTileX(lon, zoom);
+            tileY = LatToTileY(lat, zoom);
+        }
+
+        /// <summary>
+        /// Bounding box géographique (S, W, N, E) d'une tuile — ordre attendu par le filtre bbox
+        /// d'Overpass QL : "(south,west,north,east)". tileY augmente vers le Sud dans le schéma Slippy
+        /// Map, donc le bord Nord vient de TileYToLat(tileY) et le bord Sud de TileYToLat(tileY + 1).
+        /// </summary>
+        public static void TileBoundingBox(int tileX, int tileY, int zoom, out double south, out double west, out double north, out double east)
+        {
+            west = TileXToLon(tileX, zoom);
+            east = TileXToLon(tileX + 1, zoom);
+            north = TileYToLat(tileY, zoom);
+            south = TileYToLat(tileY + 1, zoom);
+        }
+
+        /// <summary>
+        /// Convertit l'index d'une tuile d'un zoom source vers le coin (min X, min Y) du bloc de tuiles
+        /// qu'elle recouvre à un zoom cible plus fin. Une tuile couvre exactement (2^(zoomCible-zoomSource))²
+        /// tuiles au zoom cible — ex : Z16 -> Z18 (écart de 2) donne un bloc 4x4 de 16 tuiles Z18.
+        /// </summary>
+        public static void TileToSubTileRange(int tileX, int tileY, int sourceZoom, int targetZoom, out int minSubX, out int minSubY, out int subTileCount)
+        {
+            subTileCount = 1 << (targetZoom - sourceZoom); // ex: 2^(18-16) = 4
+            minSubX = tileX * subTileCount;
+            minSubY = tileY * subTileCount;
+        }
     }
 }

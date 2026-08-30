@@ -19,6 +19,17 @@ namespace Novgov.Server
         public static string RestUrl { get; private set; }
         public static string ServiceRoleKey { get; private set; }
 
+        /// <summary>Identifiant unique de CETTE instance parmi le pool (voir docker-compose.yml,
+        /// une variable INSTANCE_ID distincte par service game-server-N) — clé primaire de sa ligne
+        /// dans la table "server_instances" (schema.sql §7), que MatchSessionManager tient à jour
+        /// pour que les clients sachent vers quelle instance libre se connecter.</summary>
+        public static string InstanceId { get; private set; }
+
+        /// <summary>Port PUBLIC (mappé côté hôte Docker) de cette instance — peut différer du port
+        /// interne GAME_PORT (toujours 7777 à l'intérieur de chaque conteneur, isolé). C'est ce port
+        /// que les clients utilisent réellement pour se connecter.</summary>
+        public static int PublicPort { get; private set; }
+
         public static readonly ConcurrentQueue<PlayerConnection> AuthenticatedConnections = new ConcurrentQueue<PlayerConnection>();
 
         private static TcpListener listener;
@@ -31,6 +42,8 @@ namespace Novgov.Server
             JwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET") ?? "";
             RestUrl = Environment.GetEnvironmentVariable("REST_URL") ?? "http://rest:3000";
             ServiceRoleKey = Environment.GetEnvironmentVariable("SERVICE_ROLE_KEY") ?? "";
+            InstanceId = Environment.GetEnvironmentVariable("INSTANCE_ID") ?? "game-server-default";
+            PublicPort = GetEnvInt("PUBLIC_PORT", port);
 
             if (string.IsNullOrEmpty(JwtSecret))
             {
@@ -47,7 +60,7 @@ namespace Novgov.Server
 
             listener = new TcpListener(IPAddress.Any, port);
             listener.Start();
-            Debug.Log($"[GameServerBootstrap] Serveur de jeu Novgov à l'écoute sur le port {port}.");
+            Debug.Log($"[GameServerBootstrap] Instance '{InstanceId}' à l'écoute sur le port interne {port} (public : {PublicPort}).");
 
             Thread acceptThread = new Thread(AcceptLoop) { IsBackground = true };
             acceptThread.Start();

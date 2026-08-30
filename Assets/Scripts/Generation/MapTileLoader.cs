@@ -9,9 +9,10 @@ using UnityEngine.Networking;
 public class MapTileLoader : MonoBehaviour
 {
     [Header("Settings")]
-    [Tooltip("Zoom level for OpenStreetMap tiles (18 is optimal for high precision ~0.6m/pixel).")]
-    [Range(10, 19)]
-    public int zoom = 18;
+    [Tooltip("Zoom des tuiles raster (texture du sol). Fixé à ZONE_ZOOM+2 (19) : chaque Zone de Conquête " +
+             "(1 tuile Zoom 17) est donc composée d'exactement 16 sous-tuiles raster (grille 4x4, ~0.19m/px).")]
+    [Range(10, 20)]
+    public int zoom = CityGenerator.ZONE_ZOOM + 2;
     
     [Header("References")]
     [Tooltip("The ground plane. If left empty, will search for a GameObject named 'Sol' or create one.")]
@@ -85,31 +86,19 @@ public class MapTileLoader : MonoBehaviour
 
         float latitude = cityGen.latitude;
         float longitude = cityGen.longitude;
-        float radius = cityGen.radius;
 
         GeoProjection.SetCenter(latitude, longitude);
 
-        double latRad = latitude * Mathf.Deg2Rad;
-        double metersPerDegLat = 111320.0;
-        double metersPerDegLon = (40075000.0 * Mathf.Cos((float)latRad)) / 360.0;
+        // Les 16 sous-tuiles (grille 4x4) qui composent exactement cette Zone de Conquête — plus de
+        // calcul de rectangle englobant à partir d'un rayon, uniquement de l'arithmétique de tuiles.
+        GeoProjection.TileToSubTileRange(cityGen.zoneTileX, cityGen.zoneTileY, CityGenerator.ZONE_ZOOM, zoom, out int minTileX, out int minTileY, out int subTileCount);
+        int maxTileX = minTileX + subTileCount - 1;
+        int maxTileY = minTileY + subTileCount - 1;
 
-        double deltaLat = radius / metersPerDegLat;
-        double deltaLon = radius / metersPerDegLon;
+        int numTilesX = subTileCount;
+        int numTilesY = subTileCount;
 
-        double minLat = latitude - deltaLat;
-        double maxLat = latitude + deltaLat;
-        double minLon = longitude - deltaLon;
-        double maxLon = longitude + deltaLon;
-
-        int minTileX = GeoProjection.LonToTileX(minLon, zoom);
-        int maxTileX = GeoProjection.LonToTileX(maxLon, zoom);
-        int minTileY = GeoProjection.LatToTileY(maxLat, zoom);
-        int maxTileY = GeoProjection.LatToTileY(minLat, zoom);
-
-        int numTilesX = maxTileX - minTileX + 1;
-        int numTilesY = maxTileY - minTileY + 1;
-
-        Debug.Log($"[MapTileLoader] Chargement de {numTilesX * numTilesY} tuiles OSM (Zoom {zoom})...");
+        Debug.Log($"[MapTileLoader] Chargement de {numTilesX * numTilesY} tuiles OSM (Zoom {zoom}) pour la Zone Z{CityGenerator.ZONE_ZOOM} ({cityGen.zoneTileX},{cityGen.zoneTileY})...");
 
         int tileSize = 256;
         Texture2D[,] tiles = new Texture2D[numTilesX, numTilesY];
@@ -191,9 +180,18 @@ public class MapTileLoader : MonoBehaviour
                         }
                     }
                 }
+
+                // La branche "déjà en cache" ci-dessus (lecture disque + décodage PNG, sans le moindre
+                // yield) pouvait bloquer un tick entier de la boucle des 16 sous-tuiles d'une Zone sans
+                // jamais rendre la main — un vrai risque d'ANR mobile, et depuis que
+                // MatchSessionManager.LoadZoneOnServer appelle ce même chemin côté serveur headless à
+                // chaque combat de conquête, ça bloquait aussi la disponibilité du serveur de jeu lui-
+                // même (voir rapport d'audit §1.6). Un yield par sous-tuile suffit à répartir le coût
+                // sur plusieurs frames sans changer le résultat.
+                yield return null;
             }
         }
-        
+
         Debug.Log($"<color=cyan>[MapTileLoader] {downloadedCount} tuiles téléchargées, {numTilesX * numTilesY - downloadedCount} chargées du cache.</color>");
 
         Texture2D globalTexture = new Texture2D(numTilesX * tileSize, numTilesY * tileSize, TextureFormat.RGB24, false);
@@ -237,30 +235,25 @@ public class MapTileLoader : MonoBehaviour
             return;
         }
 
-        CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
-        if (cityGen != null)
-        {
-            float latitude = cityGen.latitude;
-            float longitude = cityGen.longitude;
-            float radius = cityGen.radius;
+        // Position et clé fixes, indépendantes de la Zone de Conquête actuellement chargée (si le
+        // serveur vient de restaurer cette carte après un combat de conquête, cityGen.zoneTileX/Y
+        // pointent encore vers CETTE Zone-là, pas vers la ville par défaut — voir le commentaire
+        // équivalent sur CityGenerator.DefaultOfflineLatitude/Longitude).
+        float latitude = CityGenerator.DefaultOfflineLatitude;
+        float longitude = CityGenerator.DefaultOfflineLongitude;
+        GeoProjection.SetCenter(latitude, longitude);
 
-            GeoProjection.SetCenter(latitude, longitude);
+        // Tuile "virtuelle" centrée sur ce même point, uniquement pour dimensionner/positionner le
+        // quad avec la même fonction que pour une vraie Zone — la ville par défaut n'est rattachée
+        // à aucune vraie tuile Slippy Map.
+        int defaultTileX = GeoProjection.LonToTileX(longitude, CityGenerator.ZONE_ZOOM);
+        int defaultTileY = GeoProjection.LatToTileY(latitude, CityGenerator.ZONE_ZOOM);
+        GeoProjection.TileToSubTileRange(defaultTileX, defaultTileY, CityGenerator.ZONE_ZOOM, zoom, out int minTileX, out int minTileY, out int subTileCount);
+        int maxTileX = minTileX + subTileCount - 1;
+        int maxTileY = minTileY + subTileCount - 1;
 
-            double latRad = latitude * Mathf.Deg2Rad;
-            double metersPerDegLat = 111320.0;
-            double metersPerDegLon = (40075000.0 * Mathf.Cos((float)latRad)) / 360.0;
-
-            double deltaLat = radius / metersPerDegLat;
-            double deltaLon = radius / metersPerDegLon;
-
-            int minTileX = GeoProjection.LonToTileX(longitude - deltaLon, zoom);
-            int maxTileX = GeoProjection.LonToTileX(longitude + deltaLon, zoom);
-            int minTileY = GeoProjection.LatToTileY(latitude + deltaLat, zoom);
-            int maxTileY = GeoProjection.LatToTileY(latitude - deltaLat, zoom);
-
-            GenerateQuadMesh(latitude, longitude, minTileX, maxTileX, minTileY, maxTileY);
-            ApplyTextureToMaterial(globalTexture);
-        }
+        GenerateQuadMesh(latitude, longitude, minTileX, maxTileX, minTileY, maxTileY);
+        ApplyTextureToMaterial(globalTexture);
     }
 
     private void ApplyTextureToMaterial(Texture2D globalTexture)

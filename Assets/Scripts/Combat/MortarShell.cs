@@ -207,7 +207,7 @@ namespace Novgov.Combat
                     Vector3 closestPt = col.ClosestPoint(center);
                     float dist = Vector3.Distance(center, closestPt);
                     float damagePercent = Mathf.Clamp01(1f - (dist / explosionRadius));
-                    float damage = Mathf.Lerp(100f, maxDamage * 2.5f, damagePercent); // Dégâts lourds de démolition (100 à 500 dégâts par obus)
+                    float damage = Mathf.Lerp(100f, maxDamage * 2.5f, damagePercent); // Dégâts lourds de démolition (100 à 375 dégâts par obus, maxDamage=150 -> 150*2.5=375)
                     env.TakeDamage(damage);
                 }
             }

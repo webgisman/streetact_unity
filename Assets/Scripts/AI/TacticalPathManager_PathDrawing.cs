@@ -1,5 +1,7 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using Novgov.TacticalCore;
 
 public partial class TacticalPathManager
 {
@@ -116,9 +118,22 @@ public partial class TacticalPathManager
                         targetPos = hitTarget.position;
                     }
 
+                    bool isMultiplayer = Novgov.Network.MultiplayerMatchController.IsActive;
+
                     if (isNodeOnRoof || positionCourante.y > 1.8f || DestructibleEnvironment.IsPositionInRubble(targetPos))
                     {
                         unitAI.cachedDrawPoints.Add(targetPos + Vector3.up * 0.2f);
+                        positionCourante = targetPos;
+                    }
+                    else if (isMultiplayer)
+                    {
+                        // Brouillon différent de NavMesh (voir AppendGridPathSegment) : en
+                        // multijoueur, le déplacement RÉEL est calculé par TacticalCore.Pathfinding
+                        // (grille A* déterministe), jamais par le NavMeshAgent — la ligne bleue doit
+                        // suivre EXACTEMENT ce même calcul, sinon elle montre un chemin que l'unité
+                        // ne suit pas réellement à l'exécution (bug remonté en jeu, 2026-08-30).
+                        if (!AppendGridPathSegment(unitAI.cachedDrawPoints, positionCourante, targetPos))
+                            unitAI.cachedDrawPoints.Add(targetPos + Vector3.up * 0.2f);
                         positionCourante = targetPos;
                     }
                     else if (UnityEngine.AI.NavMesh.CalculatePath(positionCourante, targetPos, areaMask, cachedNavPath) && cachedNavPath.corners.Length > 1)
@@ -139,7 +154,12 @@ public partial class TacticalPathManager
                 // Prévisualisation pour l'unité sélectionnée vers la position du clic temporaire
                 if (isSelected && (phaseActuelle == GamePhase.Planification || phaseActuelle == GamePhase.CreationPath) && positionClicTemporaire != Vector3.positiveInfinity)
                 {
-                    if (UnityEngine.AI.NavMesh.CalculatePath(positionCourante, positionClicTemporaire, areaMask, cachedNavPath) && cachedNavPath.corners.Length > 1)
+                    if (Novgov.Network.MultiplayerMatchController.IsActive)
+                    {
+                        if (!AppendGridPathSegment(unitAI.cachedDrawPoints, positionCourante, positionClicTemporaire))
+                            unitAI.cachedDrawPoints.Add(positionClicTemporaire + Vector3.up * 0.2f);
+                    }
+                    else if (UnityEngine.AI.NavMesh.CalculatePath(positionCourante, positionClicTemporaire, areaMask, cachedNavPath) && cachedNavPath.corners.Length > 1)
                     {
                         for (int j = 1; j < cachedNavPath.corners.Length; j++)
                         {
@@ -162,6 +182,32 @@ public partial class TacticalPathManager
             }
         }
         isPathsDirty = false;
+    }
+
+    /// <summary>Ajoute à <paramref name="drawPoints"/> le chemin RÉELLEMENT calculé par
+    /// TacticalCore.Pathfinding entre deux points — le même algorithme (grille A* déterministe,
+    /// voir Pathfinding.cs) que celui utilisé côté serveur pour le résultat officiel du
+    /// déplacement en multijoueur. Avant ce correctif, l'aperçu (ligne bleue) utilisait
+    /// NavMesh.CalculatePath (précis, suit les rues) alors que l'exécution réelle suivait cette
+    /// grille bien plus grossière (1m/cellule) — les deux pouvaient diverger nettement, surtout
+    /// dans les virages, donnant l'impression que l'unité "ignore" le chemin dessiné (bug remonté
+    /// en jeu, 2026-08-30). TacticalGridBuilder.BuildFromScene() est mis en cache en interne (voir
+    /// ce fichier) : l'appeler ici à chaque frame où le tracé est "dirty" reste bon marché après le
+    /// tout premier appel. Retourne false si aucun chemin n'a été trouvé (grille non chargée,
+    /// point hors zone, etc.) — l'appelant doit alors se rabattre sur une ligne droite.</summary>
+    private static bool AppendGridPathSegment(List<Vector3> drawPoints, Vector3 from, Vector3 to)
+    {
+        TacticalWorldState previewState = TacticalGridBuilder.BuildFromScene();
+        if (previewState.grid == null) return false;
+
+        List<Vector2> gridPath = Pathfinding.FindPath(previewState.grid, new Vector2(from.x, from.z), new Vector2(to.x, to.z));
+        if (gridPath.Count < 2) return false;
+
+        for (int j = 1; j < gridPath.Count; j++)
+        {
+            drawPoints.Add(new Vector3(gridPath[j].x, from.y, gridPath[j].y) + Vector3.up * 0.2f);
+        }
+        return true;
     }
 
     private Vector3 GetMousePositionOnNavMesh()

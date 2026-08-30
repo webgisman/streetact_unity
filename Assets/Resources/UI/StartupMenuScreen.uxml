@@ -20,6 +20,14 @@
                 </ui:VisualElement>
             </ui:Button>
 
+            <ui:Button name="btn-zone-map" class="btn-secondary btn-with-icon" style="min-height: 72px; margin-bottom: 14px; display: none;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/flag.png');" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="CARTE DES ZONES" />
+                    <ui:Label text="Étendre votre territoire" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
+
             <ui:Label name="gps-status-label" text="" style="-unity-text-align: middle-center; color: var(--color-accent); font-size: 26px; margin-bottom: 14px; white-space: normal;" />
         </ui:VisualElement>
     </ui:VisualElement>

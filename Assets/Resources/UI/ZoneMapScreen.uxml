@@ -1,0 +1,21 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.9); picking-mode: Ignore;">
+        <ui:VisualElement class="panel" style="width: 75%; max-width: 620px;">
+            <ui:Label text="ZONES DE CONQUÊTE" class="title" style="margin-bottom: 6px;" />
+            <ui:Label name="zone-current-label" text="Zone actuelle : (?,?)" style="-unity-text-align: middle-center; color: var(--color-accent); margin-bottom: 20px;" />
+
+            <ui:VisualElement style="flex-direction: row; justify-content: center; margin-bottom: 10px;">
+                <ui:Button name="btn-attack-north" text="⬆ NORD&#10;(…)" class="btn-team2" style="width: 48%; margin-right: 4%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
+                <ui:Button name="btn-attack-south" text="⬇ SUD&#10;(…)" class="btn-team2" style="width: 48%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
+            </ui:VisualElement>
+            <ui:VisualElement style="flex-direction: row; justify-content: center; margin-bottom: 20px;">
+                <ui:Button name="btn-attack-west" text="⬅ OUEST&#10;(…)" class="btn-team1" style="width: 48%; margin-right: 4%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
+                <ui:Button name="btn-attack-east" text="➡ EST&#10;(…)" class="btn-team1" style="width: 48%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
+            </ui:VisualElement>
+
+            <ui:Label name="zone-status-label" text="" style="-unity-text-align: middle-center; white-space: normal; margin-bottom: 16px; min-height: 40px;" />
+
+            <ui:Button name="btn-zone-back" text="RETOUR" class="btn-secondary" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

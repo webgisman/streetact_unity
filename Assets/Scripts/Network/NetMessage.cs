@@ -19,7 +19,7 @@ namespace Novgov.Network
         // auth
         public string access_token;
 
-        // join_matchmaking / match_found : "deathmatch" ou "zone_control"
+        // join_matchmaking / match_found : "deathmatch", "zone_control" ou "conquest"
         public string mode;
 
         // match_found / opponent_ghosted / turn_timer / match_over
@@ -29,6 +29,27 @@ namespace Novgov.Network
         public int seconds_remaining;
         public string reason;
         public int winner_team;
+
+        // join_matchmaking (mode="conquest") / match_found / zone_captured / zone_attack_result :
+        // index de tuile Slippy Map (Zoom CityGenerator.ZONE_ZOOM) de la Zone de Conquête concernée.
+        // join_matchmaking (mode="deathmatch"/"zone_control", 2026-08-30, "des milliers de cartes") :
+        // tuile "domicile" du joueur (Novgov.Generation.ZoneManager.HomeTileX/Y côté client) si
+        // has_home_tile est vrai — voir has_home_tile ci-dessous, ces deux champs ne veulent rien dire
+        // seuls pour ce mode. match_found (deathmatch/zone_control) : tuile RÉELLEMENT retenue pour la
+        // partie par le serveur (voir MatchSessionManager.TryStartMatch) — (0,0) signifie la carte
+        // "Default" partagée, jamais une vraie tuile GPS (voir has_home_tile).
+        public int zone_tile_x;
+        public int zone_tile_y;
+
+        // join_matchmaking (deathmatch/zone_control uniquement, 2026-08-30) : vrai si zone_tile_x/y
+        // ci-dessus est une vraie tuile domicile du joueur. Champ séparé plutôt que de surcharger le
+        // sentinel (0,0) — (0,0) est une tuile Slippy Map réelle (bien qu'improbable, en plein océan),
+        // et ce champ devient une vraie donnée de matchmaking (pas seulement documentaire) une fois
+        // que Deathmatch/Zone de Contrôle l'utilisent réellement (voir PlayerConnection.HasHomeTile).
+        public bool has_home_tile;
+
+        // zone_captured / zone_attack_result : résultat de la demande d'attaque/capture d'une Zone.
+        public bool success;
 
         // match_over
         public int your_new_rating;
@@ -87,6 +108,14 @@ namespace Novgov.Network
         public int health;
         public bool dead;
         public bool shooting;
+
+        // Brouillard de guerre réseau (2026-08-30) : une unité ADVERSE n'apparaît plus jamais dans
+        // "turn_result" tant qu'elle n'est pas repérée (voir MatchSessionManager.
+        // ComputeVisibleUnitIds) — la première fois qu'elle l'est, elle n'existe pas encore côté
+        // client (voir MultiplayerMatchController.PlaySnapshotsCoroutine), qui a donc besoin de son
+        // type/camp pour la faire apparaître, pas seulement de sa position.
+        public int unit_type;
+        public int team_id;
     }
 
     /// <summary>Une unité que le joueur souhaite placer, envoyée dans "submit_deployment". Le

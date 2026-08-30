@@ -47,7 +47,7 @@ namespace Novgov.Auth
         // lancement de l'app — le mot de passe reste vérifié normalement par GoTrue à la
         // première connexion, seule la ré-authentification silencieuse ultérieure est basée
         // sur ce token (comme "rester connecté" dans n'importe quelle app mobile).
-        private const string RefreshTokenPrefKey = "streetact_refresh_token";
+        private const string RefreshTokenPrefKey = "novgov_refresh_token";
 
         public static bool HasSavedSession() => PlayerPrefs.HasKey(RefreshTokenPrefKey);
 

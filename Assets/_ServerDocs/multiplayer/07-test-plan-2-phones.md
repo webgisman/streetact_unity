@@ -7,6 +7,22 @@ récent avec les scripts réseau (doc 05), jamais encore testé sur un appareil 
 À exécuter une fois : VPS déployé (doc 01), auth fonctionnelle (doc 02), serveur de jeu
 démarré (doc 04), client modifié (doc 05).
 
+## Test rapide en local (Éditeur + 1 téléphone)
+
+**Ajouté le 2026-08-29** pour itérer plus vite qu'avec 2 vrais téléphones :
+- `GameManagerUI.StartDeviceGPS()` simule désormais automatiquement une position GPS fixe (Lille
+  Sud, ~50.5975°N 3.0553°E) quand le code tourne dans l'Éditeur (`#if UNITY_EDITOR`) — le service
+  `Input.location` d'Unity n'a de toute façon jamais fonctionné en Play Mode (pas de matériel GPS),
+  donc ce court-circuit ne change rien sur un vrai build Android/iOS.
+- Deux comptes de test existent déjà sur `novgov.com` (auto-confirmés,
+  `GOTRUE_MAILER_AUTOCONFIRM=true`) : `testlille1@novgov.test` / `TestLille1!` et
+  `testlille2@novgov.test` / `TestLille2!`.
+- Lancer l'Éditeur en Play (compte 1) et l'app sur le téléphone (compte 2) en parallèle — même
+  principe que le scénario 1 ci-dessous, juste sans avoir à re-signup à chaque fois.
+- **Attention** : si l'APK installé sur le téléphone date d'avant la session du 2026-08-29 (voir
+  `08-known-issues-and-todo.md` §10), il n'aura ni le dock de déploiement manuel ni les autres
+  correctifs — un nouveau build Android est nécessaire pour tester ces points-là spécifiquement.
+
 ## Pré-requis
 
 - Les deux téléphones ont un build récent de l'app pointant vers `https://novgov.com`

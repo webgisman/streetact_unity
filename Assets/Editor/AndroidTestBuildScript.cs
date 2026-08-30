@@ -18,7 +18,7 @@ public static class AndroidTestBuildScript
 {
     public static void BuildDebugApk()
     {
-        string outputPath = "build/Android/StreetAct-Test.apk";
+        string outputPath = "build/Android/Novgov-Test.apk";
 
         var scenes = EditorBuildSettings.scenes
             .Where(s => s.enabled)

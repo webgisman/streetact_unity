@@ -288,6 +288,34 @@ public class BuildingStructure : MonoBehaviour
     }
 
     /// <summary>
+    /// Variante de GetClosestWindow qui NE LIT JAMAIS win.isOccupied (champ partagé sur ce
+    /// GameObject, valide pour une seule partie à la fois) — l'appelant fournit son propre filtre de
+    /// disponibilité (voir MatchState.OccupiedWindows, 2026-08-30) : plusieurs parties concurrentes
+    /// utilisant la même carte gèrent chacune leur propre occupation de fenêtre en dehors de ce
+    /// composant, sans jamais se marcher dessus.
+    /// </summary>
+    public BuildingWindow GetClosestWindowIgnoringOccupancy(Vector3 fromPos, System.Func<int, bool> isFree)
+    {
+        if (windows == null || windows.Count == 0) return null;
+
+        BuildingWindow closest = null;
+        float minDist = float.MaxValue;
+
+        foreach (var win in windows)
+        {
+            if (isFree != null && !isFree(win.id)) continue;
+
+            float dist = Vector3.Distance(fromPos, win.position);
+            if (dist < minDist)
+            {
+                minDist = dist;
+                closest = win;
+            }
+        }
+        return closest;
+    }
+
+    /// <summary>
     /// Assigne une unité à une fenêtre de tir.
     /// </summary>
     public bool OccupyWindow(BuildingWindow window, UnitAI unit)

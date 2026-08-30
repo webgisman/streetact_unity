@@ -27,6 +27,8 @@ public class UIScreenManager : MonoBehaviour
         ("Error", "UI/ErrorScreen"),
         ("StartupMenu", "UI/StartupMenuScreen"),
         ("ModeSelect", "UI/ModeSelectScreen"),
+        ("ZoneMap", "UI/ZoneMapScreen"),
+        ("ZoneResult", "UI/ZoneResultScreen"),
         ("Auth", "UI/AuthScreen"),
         ("Waiting", "UI/WaitingScreen"),
         ("InMatchHud", "UI/InMatchHudScreen"),

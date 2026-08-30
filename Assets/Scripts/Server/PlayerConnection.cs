@@ -21,6 +21,14 @@ namespace Novgov.Server
 
         public int TeamId; // assigné par MatchSessionManager au début d'un match
         public string Mode; // "deathmatch" ou "zone_control", lu depuis join_matchmaking
+        // Tuile Slippy Map "domicile" du joueur (voir Novgov.Generation.ZoneManager côté client,
+        // calculée UNE FOIS via GPS puis jamais réinterrogée) — lue depuis join_matchmaking
+        // (NetMessage.has_home_tile/zone_tile_x/y) pour Deathmatch/Zone de Contrôle, 2026-08-30
+        // ("des milliers de cartes"). Absent (HasHomeTile=false) = joueur sans position GPS connue,
+        // repli sur la tuile de l'adversaire ou sur "Default" (voir MatchSessionManager.TryStartMatch).
+        public bool HasHomeTile = false;
+        public int HomeTileX;
+        public int HomeTileY;
         public int NewRating; // rempli par MatchSessionManager.UpdateRatings() en fin de partie
         public int RatingDelta;
         public DateTime LastHeartbeat = DateTime.UtcNow;
@@ -28,6 +36,11 @@ namespace Novgov.Server
         public UnitOrder[] PendingOrders = Array.Empty<UnitOrder>();
         public bool HasSubmittedDeployment = false;
         public UnitPlacement[] PendingDeployment = null;
+        // Vrai dès que CE client a fini de charger la carte et affiche réellement le dock de
+        // déploiement (message "deployment_ready", voir MultiplayerMatchController.OpenDeploymentDock)
+        // — le compte à rebours de 45s du déploiement n'attend plus qu'un joueur qui n'a même pas
+        // encore vu son propre dock à l'écran (voir MatchSessionManager.RunDeploymentPhase).
+        public bool MapReady = false;
 
         private readonly ConcurrentQueue<NetMessage> incoming = new ConcurrentQueue<NetMessage>();
         private readonly object sendLock = new object();

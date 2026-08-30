@@ -14,7 +14,7 @@
 # dans auth.schema_migrations pour que GoTrue démarre directement sans repasser par son
 # migrateur cassé.
 #
-# Usage : ./bootstrap-db.sh   (à lancer sur le VPS, dans /opt/streetact, après "docker compose up -d db")
+# Usage : ./bootstrap-db.sh   (à lancer sur le VPS, dans /opt/novgov, après "docker compose up -d db")
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -104,8 +104,8 @@ with open('insert_versions.sql','w') as out:
 "
 
 cd - > /dev/null
-docker cp "$WORKDIR/combined.sql" streetact-db-1:/tmp/combined.sql
-docker cp "$WORKDIR/insert_versions.sql" streetact-db-1:/tmp/insert_versions.sql
+docker cp "$WORKDIR/combined.sql" novgov-db-1:/tmp/combined.sql
+docker cp "$WORKDIR/insert_versions.sql" novgov-db-1:/tmp/insert_versions.sql
 
 $PSQL -v ON_ERROR_STOP=1 -f /tmp/combined.sql
 $PSQL -v ON_ERROR_STOP=1 -f /tmp/insert_versions.sql

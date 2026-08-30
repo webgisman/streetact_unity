@@ -13,7 +13,14 @@ using UnityEngine;
 public partial class TacticalPathManager : MonoBehaviour
 {
     public enum GamePhase { Planification, CreationPath, Execution }
-    public enum NodeAction { Continuer = 0, Attendre5Min = 1, Guetter = 2, Embuscade = 3, Escalade = 4, GarnisonFenetre = 5, EntrerBatiment = 6, SortirBatiment = 7, GuetterPorte = 8, Attendre30s = 9, SeCacher = 10, TirMortier = 11 }
+    // Valeur "1" volontairement absente : occupée jusqu'au 2026-08-30 par Attendre5Min, une action
+    // JAMAIS exposée dans aucun menu contextuel (voir TacticalPathManager_ContextMenu.cs — seul
+    // "ATTENDRE 30 SECONDES" existe côté UI) et dont le nom était de toute façon trompeur (son
+    // implémentation dans UnitAI_Movement.cs attendait 2.5s, jamais 5 minutes). Code mort supprimé
+    // plutôt que renommé. Les valeurs explicites des autres actions ne bougent PAS : elles restent
+    // strictement identiques pour ne pas casser la compatibilité du protocole réseau (NetMessage.
+    // PathNode.action transite en entier brut, jamais par nom).
+    public enum NodeAction { Continuer = 0, Guetter = 2, Embuscade = 3, Escalade = 4, GarnisonFenetre = 5, EntrerBatiment = 6, SortirBatiment = 7, GuetterPorte = 8, Attendre30s = 9, SeCacher = 10, TirMortier = 11 }
 
     [Header("Système")]
     public GamePhase phaseActuelle = GamePhase.Planification;

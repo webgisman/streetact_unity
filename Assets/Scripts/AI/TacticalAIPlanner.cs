@@ -12,9 +12,11 @@ public static class TacticalAIPlanner
     public static void PlanTurnForUnit(UnitAI unit)
     {
         if (unit == null || unit.isDead) return;
-        // Cette IA ne planifie jamais pour une unité du joueur : une unité sans trajectoire définie
-        // par le joueur reste simplement immobile ce tour-ci (pas de substitut IA).
-        if (unit.isPlayerControlled) return;
+        // Cette IA ne planifie jamais pour une unité du joueur SAUF si son propriétaire vient
+        // d'être marqué "ghost" ce tour-ci (absent/déconnecté/pas soumis à temps, voir
+        // MatchSessionManager.ApplyForPlayer) — dans ce cas précis, elle prend temporairement le
+        // relais plutôt que de laisser l'unité totalement immobile face à un adversaire humain.
+        if (unit.isPlayerControlled && !unit.isGhosted) return;
 
         unit.tacticalPath.Clear();
         unit.currentNodeIndex = 0;

@@ -13,6 +13,13 @@ public partial class UnitAI : MonoBehaviour
     [Header("Unit Settings")]
     public int teamID;
     public bool isPlayerControlled = true;
+    // Vrai UNIQUEMENT le temps d'un tour où le joueur propriétaire de cette unité
+    // (isPlayerControlled = true) est absent/déconnecté/n'a rien soumis à temps (voir
+    // MatchSessionManager.ApplyForPlayer) : TacticalAIPlanner.PlanTurnForUnit() planifie alors
+    // pour elle comme pour une IA ennemie, plutôt que de la laisser totalement immobile — remis à
+    // false dès que le joueur soumet à nouveau un ordre valide. Toujours false en solo/hotseat
+    // (jamais lu ni écrit hors du flux multijoueur).
+    public bool isGhosted = false;
     // Mis à true par UnitSpawnerUI.SpawnUnitAt juste après avoir fixé teamID/isPlayerControlled,
     // pour que Start() (qui s'exécute après, une fois Unity prêt) ne les écrase pas via la
     // détection par nom ci-dessous — voir Start().
@@ -549,6 +556,19 @@ public partial class UnitAI : MonoBehaviour
         if (!isVisible && footstepAudioSource != null && footstepAudioSource.isPlaying)
         {
             footstepAudioSource.Stop();
+        }
+
+        // Une unité masquée (brouillard de guerre réseau, voir MultiplayerMatchController.
+        // PlaySnapshotsCoroutine) ne doit pas seulement disparaître à l'écran : sans ceci, son
+        // collider restait actif et interceptait les raycasts de tap-pour-déplacer
+        // (TacticalPathManager_Input.cs, Physics.Raycast sans layer mask) — le joueur tapait la rue
+        // DERRIÈRE une unité ennemie invisible et le tap atterrissait sur son collider au lieu du
+        // sol, donnant l'impression d'un ordre de déplacement qui "part n'importe où"/d'une unité
+        // "encore là" alors qu'elle ne devrait plus exister visuellement pour ce joueur.
+        Collider[] allColliders = GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < allColliders.Length; i++)
+        {
+            if (allColliders[i] != null) allColliders[i].enabled = isVisible;
         }
     }
 

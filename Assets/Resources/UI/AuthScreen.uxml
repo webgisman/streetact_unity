@@ -24,6 +24,14 @@
             <ui:Button name="submit-button" text="Se connecter" class="btn-primary" style="min-height: 76px; margin-bottom: 12px;" />
             <ui:Button name="toggle-mode-button" text="Pas encore de compte ? Créer un compte" style="background-color: transparent; border-width: 0;" />
 
+            <!-- Éditeur uniquement (voir MultiplayerMatchController.BindUI, #if UNITY_EDITOR) : connexion
+                 rapide aux 2 comptes de test pour les sessions Éditeur+téléphone, caché par défaut et
+                 jamais affiché sur un vrai build. -->
+            <ui:VisualElement name="test-accounts-row" style="display: none; flex-direction: row; margin-top: 16px;">
+                <ui:Button name="btn-test-account-1" text="🧪 Compte test 1" class="btn-secondary" style="flex-grow: 1; margin-right: 8px;" />
+                <ui:Button name="btn-test-account-2" text="🧪 Compte test 2" class="btn-secondary" style="flex-grow: 1;" />
+            </ui:VisualElement>
+
             <ui:Label name="status-label" text="" class="error-text" style="margin-top: 12px;" />
         </ui:VisualElement>
     </ui:VisualElement>

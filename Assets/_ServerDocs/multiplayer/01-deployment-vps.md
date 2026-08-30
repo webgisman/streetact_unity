@@ -88,7 +88,7 @@ verrouillé dehors.
 ## 6. Déploiement de la stack Docker Compose
 
 ```bash
-mkdir -p /opt/streetact && cd /opt/streetact
+mkdir -p /opt/novgov && cd /opt/novgov
 # copier docker-compose.yml, .env, nginx/, schema.sql, bootstrap-db.sh, et le build headless Unity
 docker compose up -d db
 docker compose logs -f db   # attendre "database system is ready to accept connections"
@@ -143,7 +143,7 @@ directe"), en plus de la mise à jour de `schema.sql` pour les futurs déploieme
 
 ```bash
 # Dump quotidien de la base (cron)
-docker compose exec -T db pg_dump -U postgres postgres | gzip > /opt/backups/streetact-$(date +%F).sql.gz
+docker compose exec -T db pg_dump -U postgres postgres | gzip > /opt/backups/novgov-$(date +%F).sql.gz
 ```
 
 À automatiser via une tâche cron sur l'hôte une fois la stack stable.
@@ -160,16 +160,16 @@ nouvelle version du serveur de jeu Unity **sans toucher** aux 4 autres conteneur
 # 1. Depuis la machine de build, après un ServerBuildScript.BuildLinuxServer réussi
 #    (voir 04-unity-headless-server.md) :
 scp -i ~/.ssh/streetact_vps \
-    build/LinuxServer/StreetActServer.x86_64 \
+    build/LinuxServer/NovgovServer.x86_64 \
     build/LinuxServer/UnityPlayer.so \
-    ubuntu@<ip>:/opt/streetact/game-server/
+    ubuntu@<ip>:/opt/novgov/game-server/
 scp -i ~/.ssh/streetact_vps -r \
-    build/LinuxServer/StreetActServer_Data \
-    ubuntu@<ip>:/opt/streetact/game-server/
+    build/LinuxServer/NovgovServer_Data \
+    ubuntu@<ip>:/opt/novgov/game-server/
 
 # 2. Sur le VPS : reconstruire et redémarrer UNIQUEMENT ce conteneur
 ssh -i ~/.ssh/streetact_vps ubuntu@<ip>
-cd /opt/streetact
+cd /opt/novgov
 docker compose build game-server
 docker compose up -d game-server   # recrée seulement game-server, les 4 autres ne bougent pas
 
@@ -178,8 +178,8 @@ docker compose logs --tail=60 game-server   # doit montrer "à l'écoute sur le 
 nc -zv localhost 7777
 ```
 
-**Point d'attention** : `docker compose build game-server` copie `StreetActServer_Data`,
-`StreetActServer.x86_64` et `UnityPlayer.so` depuis `/opt/streetact/game-server/` (le contexte de
+**Point d'attention** : `docker compose build game-server` copie `NovgovServer_Data`,
+`NovgovServer.x86_64` et `UnityPlayer.so` depuis `/opt/novgov/game-server/` (le contexte de
 build, voir le `Dockerfile` à côté) — donc bien transférer les 3 avant de builder, sinon l'image
 reconstruite embarque encore l'ancien binaire silencieusement.
 

@@ -425,10 +425,10 @@ public partial class UnitAI
                 continue;
             }
 
-            if (nodeAction == TacticalPathManager.NodeAction.Attendre30s || nodeAction == TacticalPathManager.NodeAction.Attendre5Min)
+            if (nodeAction == TacticalPathManager.NodeAction.Attendre30s)
             {
                 isPerformingCheckpointAction = true;
-                float waitDuration = (nodeAction == TacticalPathManager.NodeAction.Attendre30s) ? 30.0f : 2.5f;
+                const float waitDuration = 30.0f;
                 Debug.Log($"<color=cyan>[{gameObject.name}] ⏳ Halte tactique au checkpoint : pause de {waitDuration}s.</color>");
                 if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
                 if (animator != null && !isTank) animator.SetFloat("Speed", 0f);

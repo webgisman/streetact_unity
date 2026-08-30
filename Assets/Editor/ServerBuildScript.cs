@@ -30,7 +30,7 @@ public static class ServerBuildScript
 {
     public static void BuildLinuxServer()
     {
-        string outputPath = "build/LinuxServer/StreetActServer.x86_64";
+        string outputPath = "build/LinuxServer/NovgovServer.x86_64";
 
         var scenes = EditorBuildSettings.scenes
             .Where(s => s.enabled)

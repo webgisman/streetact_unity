@@ -10,12 +10,39 @@ using Unity.AI.Navigation;
 
 public class CityGenerator : MonoBehaviour
 {
-    [Header("Settings")]
-    public float latitude = 50.6927f;
-    public float longitude = 3.1778f;
-    public float radius = 250f;
+    // Zoom de la grille "Zones de Conquête" : chaque Zone = exactement 1 tuile Slippy Map à ce zoom
+    // (~195m de côté à la latitude de Lille, cf. GeoProjection.TileBoundingBox). Le GPS de l'appareil
+    // ne sert plus qu'une seule fois, au tout premier lancement, pour calculer la Zone de départ via
+    // GeoProjection.TileIndexFromCoordinate — ensuite le jeu ne raisonne plus qu'en (zoneTileX, zoneTileY).
+    public const int ZONE_ZOOM = 17;
+
+    [Header("Zone de Conquête actuelle (index de tuile Slippy Map, Zoom 17)")]
+    public int zoneTileX;
+    public int zoneTileY;
+
+    // Conservés en lecture seule pour tout code externe qui affiche encore une position GPS (debug UI,
+    // logs) : recalculés à partir de (zoneTileX, zoneTileY) au centre de la Zone, jamais lus en entrée.
+    public float latitude { get; private set; } = 50.6927f;
+    public float longitude { get; private set; } = 3.1778f;
+
+    /// <summary>Clé stable identifiant la carte ACTUELLEMENT chargée — "Z{ZONE_ZOOM}_{tileX}_{tileY}"
+    /// pour une vraie Zone, "Default" pour la carte hors-ligne par défaut. Source de vérité unique
+    /// pour le cache disque de géométrie tactique (voir TacticalGridBuilder) : zoneTileX/zoneTileY
+    /// restent à leur dernière valeur même après un retour à la carte par défaut (LoadDefaultOfflineCity
+    /// ne les touche pas), donc les lire directement pour construire une clé de cache donnerait la
+    /// mauvaise réponse après un aller-retour Zone -> défaut.</summary>
+    public string CurrentGridCacheKey { get; private set; } = "Default";
+
     public float buildingHeight = 6f; // Hauteur moyenne des bâtiments (variation aléatoire de ±1.5m par lot)
     public Material buildingMaterial;
+
+    /// <summary>
+    /// Vrai une fois que la Zone courante (bâtiments + sol + NavMesh baké) est ENTIÈREMENT prête —
+    /// contrairement à MapTileLoader.isMapLoaded qui ne couvre que le sol. Nécessaire côté serveur
+    /// (MatchSessionManager) pour savoir précisément quand demander le déploiement des unités sans
+    /// deviner un délai fixe ; utile aussi côté client pour ne pas ouvrir un écran trop tôt.
+    /// </summary>
+    public bool IsCityReady { get; private set; }
 
     // Référence de la génération actuellement en cours (réseau OU hors-ligne). Sans ce suivi, un appel
     // à GenerateCity()/LoadDefaultOfflineCity() pendant que la génération par défaut du Start() est
@@ -57,29 +84,50 @@ public class CityGenerator : MonoBehaviour
             if (Application.isPlaying) Destroy(oldCity);
             else DestroyImmediate(oldCity);
         }
+
+        // Le cache de géométrie statique de TacticalGridBuilder (murs/grille de marche, voir ce
+        // fichier — introduit le 2026-08-30 pour éviter de reconstruire ~1500 murs à chaque tour)
+        // est un champ STATIQUE propre à CE processus : client et serveur tournent dans des
+        // processus séparés, chacun doit invalider SON PROPRE cache au moment où SA ville change,
+        // qu'il s'agisse du serveur (voir MatchSessionManager) ou du client (aperçu de trajectoire,
+        // voir TacticalPathManager_PathDrawing.AppendGridPathSegment) — sans ça, un ancien cache
+        // mettrait les murs de l'ANCIENNE carte au mauvais endroit sur la nouvelle.
+        Novgov.TacticalCore.TacticalGridBuilder.InvalidateCache();
     }
 
     [ContextMenu("Generate City")]
     public void GenerateCity()
     {
         CancelActiveGenerationAndClearCity();
+        IsCityReady = false;
         activeGeneration = StartCoroutine(FetchCityData());
     }
 
     private IEnumerator FetchCityData()
     {
-        Debug.Log("Fetching city data from Overpass API...");
-        
+        Debug.Log($"Fetching city data for Zone Z{ZONE_ZOOM} ({zoneTileX},{zoneTileY}) from Overpass API...");
+
+        // Bounding box EXACTE de la tuile Slippy Map (S,W,N,E) — remplace l'ancien filtre circulaire
+        // "around:250,lat,lon". Overpass QL attend l'ordre (south,west,north,east) pour un bbox.
+        GeoProjection.TileBoundingBox(zoneTileX, zoneTileY, ZONE_ZOOM, out double south, out double west, out double north, out double east);
+
+        // Centre de la Zone = milieu de sa bbox. Sert d'origine (0,0,0) Unity pour cette Zone : stable
+        // et déterministe (dérivé uniquement de l'index de tuile), contrairement à l'ancien centre GPS
+        // brut de l'appareil qui pouvait légèrement varier d'une lecture à l'autre.
+        double centerLat = (south + north) / 2.0;
+        double centerLon = (west + east) / 2.0;
+        latitude = (float)centerLat;
+        longitude = (float)centerLon;
+        GeoProjection.SetCenter(latitude, longitude);
+        CurrentGridCacheKey = $"Z{ZONE_ZOOM}_{zoneTileX}_{zoneTileY}";
+
         // Utilisation de InvariantCulture pour forcer le point '.' comme séparateur décimal
         // Ajout de [timeout:90] pour laisser plus de temps au serveur sur les grosses requêtes (le défaut est court)
         string query = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "[out:json][timeout:90];\n(\n  way[\"building\"](around:{0},{1},{2});\n  relation[\"building\"](around:{0},{1},{2});\n);\nout geom;",
-            radius, latitude, longitude);
+            "[out:json][timeout:90];\n(\n  way[\"building\"]({0},{1},{2},{3});\n  relation[\"building\"]({0},{1},{2},{3});\n);\nout geom;",
+            south, west, north, east);
 
         // Utilisation d'un POST et d'un WWWForm pour gérer automatiquement l'encodage URL et les requêtes longues
-        
-        // Initialiser la projection globale pour garantir l'alignement avec MapTileLoader
-        GeoProjection.SetCenter(latitude, longitude);
 
         WWWForm form = new WWWForm();
 
@@ -128,8 +176,11 @@ public class CityGenerator : MonoBehaviour
         {
                 Debug.Log("Data fetched successfully. Processing...");
 
-                // Sauvegarde automatique du cache disque local pour réutilisation hors-ligne
-                string cacheFileName = string.Format(System.Globalization.CultureInfo.InvariantCulture, "CityCache_{0:F4}_{1:F4}_{2:F0}.json", latitude, longitude, radius);
+                // Sauvegarde automatique du cache disque local pour réutilisation hors-ligne. Clé par
+                // index de tuile (Zone unique et déterministe) au lieu de lat/lon arrondis — deux appels
+                // pour la même Zone tombent maintenant TOUJOURS sur le même fichier, plus de risque de
+                // cache manqué à cause d'un léger écart de précision GPS.
+                string cacheFileName = ZoneCacheFileName(zoneTileX, zoneTileY);
                 string cachePath = System.IO.Path.Combine(Application.persistentDataPath, cacheFileName);
                 try
                 {
@@ -212,8 +263,27 @@ public class CityGenerator : MonoBehaviour
                 
                 GameManagerUI.OptimizeSceneMaterials();
                 if (GameManagerUI.Instance != null) GameManagerUI.Instance.HideLoading();
+                IsCityReady = true;
         }
     }
+
+    // Nom de fichier cache unique et déterministe pour une Zone de Conquête (index de tuile, pas de
+    // coordonnées GPS arrondies) : CityCache_Z17_{tileX}_{tileY}.json.
+    private static string ZoneCacheFileName(int tileX, int tileY)
+    {
+        return $"CityCache_Z{ZONE_ZOOM}_{tileX}_{tileY}.json";
+    }
+
+    // La carte "par défaut" (hors-ligne, secours réseau, écran de chargement du serveur au repos)
+    // est un contenu figé indépendant du système de Zones : elle garde sa PROPRE position/clé de
+    // cache fixes, sans jamais lire ni écrire zoneTileX/zoneTileY. Sans cette séparation, appeler
+    // LoadDefaultOfflineCity() juste après une Zone réelle (ex : le serveur restaure la carte par
+    // défaut après un combat de conquête, voir MatchSessionManager.RestoreDefaultMapOnServer)
+    // trouverait le cache disque de CETTE Zone (qui existe forcément, il vient d'être généré) et la
+    // rechargerait par erreur au lieu de la vraie ville par défaut embarquée dans Resources.
+    public const float DefaultOfflineLatitude = 50.6927f;
+    public const float DefaultOfflineLongitude = 3.1778f;
+    private const string DefaultOfflineCacheFileName = "CityCache_Default.json";
 
     public void LoadDefaultOfflineCity()
     {
@@ -221,10 +291,10 @@ public class CityGenerator : MonoBehaviour
         // ou directement depuis l'UI (bouton "Combat Urbain Hors-Ligne") : dans les deux cas on s'assure
         // qu'aucune autre génération ne continue en parallèle et ne vienne se superposer à celle-ci.
         CancelActiveGenerationAndClearCity();
+        IsCityReady = false;
 
-        // 1. Vérifier si un cache local persistant existe sur le disque
-        string cacheFileName = string.Format(System.Globalization.CultureInfo.InvariantCulture, "CityCache_{0:F4}_{1:F4}_{2:F0}.json", latitude, longitude, radius);
-        string cachePath = System.IO.Path.Combine(Application.persistentDataPath, cacheFileName);
+        // 1. Vérifier si un cache local persistant existe sur le disque pour la ville par défaut
+        string cachePath = System.IO.Path.Combine(Application.persistentDataPath, DefaultOfflineCacheFileName);
 
         if (System.IO.File.Exists(cachePath))
         {
@@ -233,7 +303,7 @@ public class CityGenerator : MonoBehaviour
                 string cachedJson = System.IO.File.ReadAllText(cachePath);
                 if (!string.IsNullOrEmpty(cachedJson) && cachedJson.Length > 20)
                 {
-                    Debug.Log($"<color=green>[CityGenerator] 📂 Ville restaurée avec succès depuis le cache disque local : {cacheFileName}</color>");
+                    Debug.Log($"<color=green>[CityGenerator] 📂 Ville par défaut restaurée depuis le cache disque local : {DefaultOfflineCacheFileName}</color>");
                     activeGeneration = StartCoroutine(ProcessOfflineData(cachedJson));
                     return;
                 }
@@ -259,8 +329,10 @@ public class CityGenerator : MonoBehaviour
 
     private IEnumerator ProcessOfflineData(string json)
     {
-        
+        latitude = DefaultOfflineLatitude;
+        longitude = DefaultOfflineLongitude;
         GeoProjection.SetCenter(latitude, longitude);
+        CurrentGridCacheKey = "Default";
         yield return ProcessDataCoroutine(json);
 
         
@@ -302,8 +374,9 @@ public class CityGenerator : MonoBehaviour
         yield return null;
 
         foreach (var unit in allUnits) { if (unit != null && unit.gameObject.activeSelf) unit.OnNavMeshReady(); }
-        
+
         if (GameManagerUI.Instance != null) GameManagerUI.Instance.HideLoading();
+        IsCityReady = true;
     }
 
     // Nombre d'éléments OSM traités entre deux "yield return null". Étale le travail de génération

@@ -458,14 +458,14 @@ public class UnitSpawnerUI : MonoBehaviour
     /// partout ailleurs (solo, hotseat, et les appels serveur eux-mêmes) : le nom auto-généré
     /// habituel (ex: "Fantassin_1_2") reste inchangé.
     /// </param>
-    public void SpawnUnitAt(UnitType type, Vector3 position, int team, string forcedName = null)
+    public UnitAI SpawnUnitAt(UnitType type, Vector3 position, int team, string forcedName = null)
     {
         int teamCount = GetTeamLivingUnitsCount(team);
         if (teamCount >= maxUnitsPerTeam)
         {
             string teamName = (team == 1) ? "Joueur (Bleu)" : "Ennemi (Rouge)";
             ShowMessage($"Limite de {maxUnitsPerTeam} unités atteinte pour l'équipe {teamName} !", 3.0f);
-            return;
+            return null;
         }
 
         GameObject newUnitObj = null;
@@ -611,7 +611,7 @@ public class UnitSpawnerUI : MonoBehaviour
             if (RemainingBarricadeStock(team) <= 0)
             {
                 ShowMessage($"Stock de barricades épuisé ({maxBarricadesPerTeam} max par camp) !", 2.5f);
-                return;
+                return null;
             }
 
             GameObject barrierPrefab = Resources.Load<GameObject>("Road_barrier");
@@ -631,11 +631,17 @@ public class UnitSpawnerUI : MonoBehaviour
             barrier.teamID = team;
             newUnitObj.name = forcedName ?? $"Barricade_{team}_{(RoadBarrier.AllBarriers.Count)}";
 
-            // Son de pose de barricade
+            // Son de pose de barricade — jamais sur le serveur headless (voir le garde équivalent
+            // plus bas dans cette méthode : pas de device audio en mode Dedicated Server, chaque
+            // AudioClip.Create()/SetData() y échoue avec "AudioClip contains no data", un warning
+            // répété à CHAQUE unité/barricade déployée, sur TOUTES les parties, en continu — trouvé
+            // en simulant une partie complète et en lisant les vrais logs serveur, 2026-08-30).
+#if !UNITY_SERVER
             AudioClip clickClip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
             if (clickClip != null) AudioSource.PlayClipAtPoint(clickClip, Camera.main.transform.position, 0.8f);
+#endif
             ShowMessage($"Barricade routière déployée avec succès !", 2.0f);
-            return;
+            return null; // une barricade n'est pas une UnitAI
         }
 
         if (newUnitObj != null)
@@ -704,8 +710,13 @@ public class UnitSpawnerUI : MonoBehaviour
                 anim.Update(0f);
             }
 
-            // Placement propre sur NavMesh
-            if (NavMesh.SamplePosition(position, out NavMeshHit hit, 5f, NavMesh.AllAreas))
+            // Placement propre sur NavMesh — FindGroundLevelNavPoint (pas un simple
+            // NavMesh.SamplePosition) : ce dernier renvoie le point de NavMesh le plus PROCHE, qui
+            // peut être un toit de bâtiment praticable pour l'IA mais faux pour un spawn (voir le
+            // doc-comment de FindGroundLevelNavPoint plus bas) — c'était la cause des unités
+            // "posées sur des polygones, difficiles à manier" rapportée en jeu.
+            Vector3 groundPos = FindGroundLevelNavPoint(position, 5f);
+            if (NavMesh.SamplePosition(groundPos, out NavMeshHit hit, 5f, NavMesh.AllAreas))
             {
                 NavMeshAgent agent = newUnitObj.GetComponent<NavMeshAgent>();
                 if (agent != null)
@@ -725,11 +736,17 @@ public class UnitSpawnerUI : MonoBehaviour
                 newUnitObj.AddComponent<FogOfWarEntity>();
             }
 
-            // Son de confirmation de déploiement
+            // Son de confirmation de déploiement — jamais sur le serveur headless (voir commentaire
+            // équivalent sur la branche Barricade plus haut : pas de device audio en Dedicated
+            // Server, ce warning se répétait à CHAQUE unité déployée sur TOUTES les parties).
+#if !UNITY_SERVER
             AudioClip confirmClip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
             if (confirmClip != null) AudioSource.PlayClipAtPoint(confirmClip, Camera.main.transform.position, 0.8f);
+#endif
             ShowMessage($"{newUnitObj.name} déployé avec succès !", 2.0f);
+            return unitAI;
         }
+        return null;
     }
 
     public void ClearAllUnits()
@@ -875,7 +892,7 @@ public class UnitSpawnerUI : MonoBehaviour
     // utilisé par MatchSessionManager.ResolveDeployment comme repli serveur si un joueur n'a pas
     // soumis de placement manuel valide avant l'expiration du timer de déploiement (voir
     // 03-network-protocol.md, "submit_deployment"/"deployment_result").
-    public void AutoDeployTeamFallback(int team)
+    public void AutoDeployTeamFallback(int team, int extraInfantry = 0)
     {
         Vector3 anchor = FindGroundLevelNavPoint(team == 1 ? new Vector3(-25f, 0f, -25f) : new Vector3(25f, 0f, 25f), 40f);
         if (team == 1)
@@ -891,6 +908,16 @@ public class UnitSpawnerUI : MonoBehaviour
             SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(3f, 0, -3f), 2);
             SpawnUnitAt(UnitType.CharLeopard, anchor + new Vector3(6f, 0, 4f), 2);
             SpawnUnitAt(UnitType.Mortier, anchor + new Vector3(-6f, 0, 5f), 2);
+        }
+
+        // Renfort de garnison (conquête, voir MatchSessionManager.GarrisonExtraInfantryForZoneCount) :
+        // fantassins supplémentaires disposés en éventail autour de l'ancrage, à un rayon plus large
+        // que l'escouade de base ci-dessus pour ne jamais se superposer avec elle.
+        for (int i = 0; i < extraInfantry; i++)
+        {
+            float angle = i * 47f; // pas non-régulier : évite un alignement visuel trop mécanique
+            Vector3 offset = Quaternion.Euler(0f, angle, 0f) * new Vector3(8f, 0f, 0f);
+            SpawnUnitAt(UnitType.Fantassin, anchor + offset, team);
         }
     }
 
@@ -1054,7 +1081,14 @@ public class UnitSpawnerUI : MonoBehaviour
 
         if (tabButtonLabel != null)
         {
-            tabButtonLabel.text = IsPlacingUnit ? "Annuler Placement" : (isPanelOpen ? "Fermer Menu" : $"DÉPLOIEMENT ({playerUnits} vs {enemyUnits})");
+            // "X vs Y" a du sens en Solo (comparer son escouade à celle, fixe, de l'IA) mais pas en
+            // multijoueur PvP : "enemyUnits" y vaut certes 0 pendant le déploiement depuis le
+            // brouillard de guerre réseau (l'adversaire n'existe pas encore côté client, voir
+            // MatchSessionManager.ComputeVisibleUnitIds), mais afficher "0" prête à confusion ("j'ai
+            // déjà gagné ?") plutôt que de simplement ne rien dire sur un camp qu'on ne peut pas voir.
+            bool isMultiplayer = Novgov.Network.MultiplayerMatchController.IsFlowActive;
+            string label = isMultiplayer ? $"DÉPLOIEMENT ({playerUnits}/{maxUnitsPerTeam})" : $"DÉPLOIEMENT ({playerUnits} vs {enemyUnits})";
+            tabButtonLabel.text = IsPlacingUnit ? "Annuler Placement" : (isPanelOpen ? "Fermer Menu" : label);
         }
         dockPanel.style.display = isPanelOpen ? DisplayStyle.Flex : DisplayStyle.None;
 

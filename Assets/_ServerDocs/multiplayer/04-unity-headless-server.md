@@ -32,7 +32,7 @@ Unity 6 (2023+) propose un target "Dedicated Server" natif dans Build Settings :
   cas ici (`com.unity.ai.navigation` est utilisé pour un bake en edit-time, à vérifier que la
   scène de jeu a bien son NavMesh sauvegardé avec la scène et non régénéré au runtime via un
   script qui dépendrait du rendu).
-- Lancement : `./StreetActServer.x86_64 -batchmode -nographics -logFile /dev/stdout` (nom réel de
+- Lancement : `./NovgovServer.x86_64 -batchmode -nographics -logFile /dev/stdout` (nom réel de
   l'exécutable produit par `ServerBuildScript.BuildLinuxServer` — voir le `Dockerfile` dans
   `Assets/_ServerDocs/multiplayer/game-server/`, qui utilise exactement cette commande en
   `ENTRYPOINT`).

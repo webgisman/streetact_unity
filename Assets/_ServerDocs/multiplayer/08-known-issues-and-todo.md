@@ -136,11 +136,11 @@ du projet.
 commandes et des logs obtenus.**
 
 1. ~~**Copier le build** dans `Assets/_ServerDocs/multiplayer/game-server/`~~ : le fichier exécutable
-   (`StreetActServer.x86_64`), le dossier `StreetActServer_Data/`, et **`UnityPlayer.so`** (facile
+   (`NovgovServer.x86_64`), le dossier `NovgovServer_Data/`, et **`UnityPlayer.so`** (facile
    à oublier — il est à côté de l'exécutable, pas dedans `_Data/`).
 2. ~~Transférer sur le VPS~~ (`scp`, voir §9 pour la commande exacte utilisée) dans
-   `/opt/streetact/game-server/`.
-3. ~~`docker compose build game-server && docker compose up -d game-server` sur le VPS.~~
+   `/opt/novgov/game-server/`.
+3. ~~`docker compose build game-server-1 && docker compose up -d game-server-1 game-server-2 game-server-3` sur le VPS.~~
 4. ~~**Vérifier les logs**~~ (`docker compose logs -f game-server`) : confirmé — le serveur charge
    la carte par défaut, génère 758 bâtiments, et affiche
    `[GameServerBootstrap] Serveur de jeu Novgov à l'écoute sur le port 7777.` +
@@ -511,7 +511,7 @@ deux raisons **de configuration Éditeur/projet, pas de code** :
    spécifiquement été configuré (voir ancien §2, point 10) pour éviter le sous-cible Dedicated
    Server à cause du CS0121 — qui ne s'est pas reproduit cette fois. **Solution : basculer
    `ServerBuildScript.cs` sur `StandaloneBuildSubtarget.Server`**, le seul réellement installé et
-   complet sur cette machine. Build immédiatement réussi (`build/LinuxServer/StreetActServer.x86_64`,
+   complet sur cette machine. Build immédiatement réussi (`build/LinuxServer/NovgovServer.x86_64`,
    ~118 Mo, `Build Finished, Result: Success.`).
 
 **Conclusion pour toute session future** : ne pas se fier à l'ancien §2 pour décider quel
@@ -523,9 +523,9 @@ Server, plutôt que de supposer que Server est cassé sur la base d'une session 
 
 Le nouveau build a été transféré et mis en production sur `novgov.com` (54.36.100.151) :
 ```bash
-scp -i ~/.ssh/streetact_vps StreetActServer.x86_64 UnityPlayer.so ubuntu@54.36.100.151:/opt/streetact/game-server/
-scp -i ~/.ssh/streetact_vps -r StreetActServer_Data ubuntu@54.36.100.151:/opt/streetact/game-server/
-ssh -i ~/.ssh/streetact_vps ubuntu@54.36.100.151 "cd /opt/streetact && docker compose build game-server && docker compose up -d game-server"
+scp -i ~/.ssh/streetact_vps NovgovServer.x86_64 UnityPlayer.so ubuntu@54.36.100.151:/opt/novgov/game-server/
+scp -i ~/.ssh/streetact_vps -r NovgovServer_Data ubuntu@54.36.100.151:/opt/novgov/game-server/
+ssh -i ~/.ssh/streetact_vps ubuntu@54.36.100.151 "cd /opt/novgov && docker compose build game-server-1 && docker compose up -d game-server-1 game-server-2 game-server-3"
 ```
 Vérifié après coup : `docker compose logs game-server` montre `[GameServerBootstrap] Serveur de
 jeu Novgov à l'écoute sur le port 7777.` et `[MatchSessionManager] Carte par défaut (hors-ligne)
@@ -664,3 +664,220 @@ simulation continue de tourner normalement là où elle doit avoir lieu.
   (dessiner le cercle de zone au sol pendant le déploiement), pas bloquant.
 - Pas de compte à rebours affiché pendant les 45s de déploiement (le serveur a bien un timeout,
   mais aucun message `deployment_timer` n'est envoyé) — amélioration UX possible plus tard.
+
+---
+
+## 11. Refonte GPS -> Zones de Conquête (grille Slippy Map fixe) — 2026-08-30
+
+**Remplace entièrement** l'ancienne génération procédurale à rayon dynamique (`around:250,lat,lon`
+Overpass + rectangle englobant lat/lon pour les tuiles raster). Motivation : en multijoueur, deux
+téléphones à des positions GPS légèrement différentes généraient chacun une ville OSM différente
+(bâtiments/NavMesh non identiques), désynchronisant le combat côté serveur. Voir §10.4 pour le
+symptôme originel ("un tour d'exécution local fantôme").
+
+**Nouvelle architecture :**
+- `CityGenerator.ZONE_ZOOM = 17` (const) : une "Zone de Conquête" = exactement 1 tuile Slippy Map à
+  ce zoom (~195m de côté à la latitude de Lille). Le GPS de l'appareil n'est converti en
+  `(tileX, tileY)` qu'**une seule fois**, au tout premier lancement (`ZoneManager.
+  InitializeHomeZoneFromGps`, persisté via PlayerPrefs) — ensuite le jeu ne raisonne plus qu'en
+  index de tuile, plus jamais en GPS brut.
+- `CityGenerator.zoneTileX/zoneTileY` remplacent `radius`/`latitude`/`longitude` (devenus une
+  propriété calculée en lecture seule = centre de la bbox de la Zone). La requête Overpass utilise
+  une bbox exacte `(south,west,north,east)` (voir `GeoProjection.TileBoundingBox`) au lieu de
+  `around:250,...`. Cache disque : `CityCache_Z17_{tileX}_{tileY}.json` (déterministe, plus de
+  troncature à 4 décimales GPS).
+- `MapTileLoader` charge les 16 sous-tuiles raster fixes (Zoom 19, grille 4x4) qui composent
+  exactement la Zone, via `GeoProjection.TileToSubTileRange` — plus de calcul de rectangle
+  englobant à partir d'un rayon.
+- **La ville par défaut (hors-ligne/secours réseau)** reste totalement indépendante de ce système
+  (constantes `CityGenerator.DefaultOfflineLatitude/Longitude` fixes, cache `CityCache_Default.json`
+  séparé) — sans cette séparation, `LoadDefaultOfflineCity()` appelée après une vraie Zone aurait
+  rechargé le cache disque de CETTE Zone au lieu de la ville par défaut de `Resources`.
+- Nouveau `CityGenerator.IsCityReady` (bâtiments + sol + NavMesh baké, pas juste le sol) — signal de
+  complétion propre, utilisé côté serveur pour savoir précisément quand ouvrir le déploiement.
+
+**Nouvelle jouabilité multijoueur — conquête territoriale (portée V1) :**
+- Nouvelle table `zones` (schema.sql §6, migration à appliquer sur le VPS + `grant select on
+  public.zones to authenticated;` — bootstrap-db.sh ne le fait pas automatiquement pour une table
+  ajoutée après coup, voir le commentaire dans schema.sql).
+- Nouveau mode `"conquest"` dans `join_matchmaking` (champs `zone_tile_x`/`zone_tile_y` ajoutés à
+  `NetMessage`) : Zone neutre -> capture instantanée (pas de combat) ; Zone déjà possédée par un
+  autre joueur -> combat contre une **garnison IA** (réutilise `TacticalAIPlanner`/
+  `UnitAI.PlanifierTourIA`, exactement le mécanisme des ennemis du mode Solo), sur la géométrie
+  RÉELLE de la Zone attaquée (chargée à la fois côté serveur et côté client via le même
+  `(tileX,tileY)`, jamais transmise sur le réseau). Voir `MatchSessionManager` §"Conquête
+  territoriale" et `ZoneManager.cs` (nouveau, `Assets/Scripts/Generation/`).
+- **PAS fait** (limitation V1 assumée) : combat PvP en direct contre le propriétaire réel d'une Zone
+  s'il est en ligne au moment de l'attaque — nécessiterait un système de notification/siège
+  asynchrone (le propriétaire n'est pas forcément connecté). Les modes `deathmatch`/`zone_control`
+  existants restent le seul vrai PvP humain pour l'instant, inchangés (gardent la carte par défaut
+  fixe).
+- ~~**PAS fait** : aucune UXML/UI pour attaquer une Zone~~ **CORRECTION (2026-08-30, §12) : fait plus
+  tard la même session** — `ZoneMapScreen.uxml`/`ZoneResultScreen.uxml`/`ZoneMapController.cs`
+  existent et sont câblés de bout en bout. Cette ligne était restée fausse dans ce fichier pendant un
+  moment (le doc n'avait pas été remis à jour après coup) — voir §12 pour l'audit qui l'a repéré.
+
+**À faire avant de tester :** migration `zones` + grant sur le VPS, rebuild client Android + rebuild
+`game-server` (voir gotcha Bee stale-build, §9.8/[[project-streetact-vps-live]]), redéployer.
+
+## 12. Audit jouabilité/gamification + corrections — 2026-08-30 (soir)
+
+Un audit demandé explicitement ("expert de gamification, trouve les bugs et problèmes de
+jouabilité") a relu directement le code (pas seulement cette doc) et trouvé plusieurs divergences
+doc/code + bugs + trous de game design. Toutes les corrections ci-dessous ont été appliquées dans la
+foulée (autorisation explicite reçue). Détail complet dans la transcription de la conversation de
+cette session — résumé ici pour la prochaine session.
+
+**Divergence doc/code trouvée et corrigée :**
+- Le Ghost/AFK (`UnitAI.isGhosted` + `TacticalAIPlanner`) avait disparu du code à un moment non
+  documenté — `MatchSessionManager.ApplyForPlayer` laissait un joueur absent totalement immobile,
+  sans IA de secours, contrairement à ce que cette doc et `04-unity-headless-server.md` décrivaient
+  encore. **Restauré** : `UnitAI.isGhosted` existe de nouveau, `TacticalAIPlanner.PlanTurnForUnit`
+  planifie pour une unité "ghost" comme pour un ennemi Solo, remis à `false` dès que le joueur soumet
+  de nouveau un ordre valide.
+
+**Bugs corrigés (voir `MatchSessionManager.cs` sauf mention contraire) :**
+1. **Course entre instances du pool sur la capture d'une Zone** — deux joueurs attaquant la même
+   Zone au même instant sur deux instances différentes pouvaient tous les deux "gagner" et écraser
+   silencieusement le résultat de l'autre (upsert `merge-duplicates` sans condition). `CaptureZoneInDb`
+   fait maintenant une écriture CONDITIONNELLE : INSERT strict pour une Zone neutre (échoue si prise
+   entre-temps), PATCH filtré sur `owner_user_id=eq.<propriétaire vu au début du combat>` pour une
+   Zone contestée (n'affecte aucune ligne si elle a changé de mains depuis) — voir aussi le nouveau
+   `reason="zone_lost_race"` sur `match_over` pour le cas "combat gagné mais Zone perdue à la course".
+2. **Aucune validation serveur de l'adjacence** — un client modifié pouvait attaquer/capturer
+   n'importe quelle Zone du monde. Le serveur exige maintenant que la Zone visée soit adjacente
+   (4 directions) à une Zone déjà possédée par l'attaquant, sauf pour sa toute première capture
+   (bootstrap, aucun territoire dont être adjacent). Nouveau `reason="not_adjacent"`.
+3. **Auto-appariement possible** — `TryStartMatch` ignorait que `queue[0]`/`queue[1]` puissent
+   partager le même `UserId` (double connexion avec le même JWT). Cherche maintenant la première
+   paire d'`UserId` distincts dans la file.
+4. Rating ELO jamais clampé à 0 (`UpdateRatings`) — `Mathf.Max(0, ...)` ajouté.
+5. `MapTileLoader.DownloadAndApplyMap` bloquait un tick entier sur la branche "tuile en cache" (pas
+   de yield) — impactait maintenant aussi le SERVEUR headless (`MatchSessionManager.LoadZoneOnServer`
+   appelle ce même chemin à chaque combat de conquête), pas seulement le mobile. Un `yield return
+   null;` par sous-tuile a été ajouté.
+6. Double-clic possible sur les boutons d'attaque de Zone (`ZoneMapController`) — verrou
+   `attackInFlight` ajouté, levé à chaque réouverture de l'écran.
+7. `match_over` en conquête ignorait `zone_tile_x/y`/`success` côté client — le chemin "victoire
+   avec combat" affichait un message générique moins informatif que la capture instantanée sans
+   combat. `MultiplayerMatchController.OnMatchOver` distingue maintenant les 4 issues (capturée /
+   garnison vaincue mais Zone perdue à la course / garnison vaincue / défaite) avec le détail de la
+   Zone concernée.
+
+**Trou de game design corrigé — la conquête n'avait AUCUNE récompense mesurable ni frein à
+l'expansion :**
+- **Renfort de garnison selon la taille du territoire du défenseur** (NOUVEAU,
+  `GarrisonExtraInfantryForZoneCount` dans `MatchSessionManager`) : +1 fantassin à partir de 3 Zones
+  possédées, +2 à partir de 6, +3 à partir de 10 — un empire plus grand devient mécaniquement plus
+  dur à continuer d'agrandir, sans construire un système d'économie complet. Combiné à la règle
+  d'adjacence ci-dessus (expansion forcément contiguë, plus "attaquer n'importe où"), ça referme
+  directement le scénario "rich get richer sans mécanique de retour" identifié par l'audit.
+- **Petit ajustement de classement pour les combats de conquête** (NOUVEAU,
+  `ApplyConquestRatingDelta`) : +8 si Zone réellement capturée, -4 si le combat est perdu, 0 si gagné
+  mais Zone perdue à la course (pas la faute du joueur) — un delta fixe, pas un calcul ELO complet
+  (l'"adversaire" est une garnison IA sans rating). Jusqu'ici capturer une Zone n'avait absolument
+  aucun effet visible pour le joueur (juste une ligne invisible dans la table `zones`).
+- **L'écran "CARTE DES ZONES" n'affichait aucune information avant d'attaquer** (4 boutons de
+  boussole + coordonnées de tuile brutes) — `ZoneMapController.RefreshNeighborOwnership` interroge
+  maintenant le statut des 4 Zones voisines (Neutre / À vous / Ennemi) et l'affiche directement sur
+  chaque bouton avant que le joueur ne clique. Reste volontairement simple (texte, pas une vraie
+  tuile de carte) — suffisant pour lever l'aveuglement total sans reconstruire tout l'écran.
+
+**Explicitement PAS traité dans cette session (décisions produit, pas des bugs) :**
+- Le vrai propriétaire d'une Zone attaquée n'est toujours pas notifié ni mis en jeu (siège
+  asynchrone PvP réel — limitation V1 déjà assumée en §11, toujours hors scope).
+- Pas de plafond dur sur le nombre de Zones qu'un joueur peut posséder — le frein reste la difficulté
+  croissante de la garnison, pas une limite explicite.
+- Pas de vraie tuile cartographique visuelle (juste du texte par bouton) — une vraie mini-carte
+  resterait un chantier UI à part entière si souhaité plus tard.
+
+**À faire avant de tester ces corrections :** rebuild `game-server` (Linux) ET client Android, puis
+redéployer sur le VPS (voir [[project-novgov-vps-live]]) — aucun de ces changements n'est encore en
+production au moment d'écrire cette section.
+
+## 13. Bug de déploiement PvP + vrai brouillard de guerre réseau — 2026-08-30 (suite)
+
+Retour utilisateur direct après le déploiement du §12 : en multijoueur (deathmatch/zone_control), le
+joueur voit la carte, peut faire quelques manipulations, puis reçoit D'UN COUP des unités bleues ET
+rouges, certaines posées sur des polygones de bâtiments difficiles à manier, sans avoir jamais pu
+placer les siennes ni distinguer clairement lesquelles étaient les siennes.
+
+### 13.1 Cause racine du déploiement "soudain"
+
+`MatchSessionManager.RunMatch` envoie `match_found` puis démarre IMMÉDIATEMENT le compte à rebours
+de 45s de `RunDeploymentPhase` — sans jamais attendre que le CLIENT ait fini de charger sa propre
+carte (génération procédurale OSM, potentiellement plus longue que 45s à elle seule). Résultat : le
+timer pouvait expirer avant même que `OpenDeploymentDock()` (appelé côté client seulement après
+`LoadDefaultMapThenOpenDeployment`/`LoadConquestZoneThenOpenDeployment`) ne s'exécute — le joueur
+n'avait alors JAMAIS vu son propre dock de placement, et le serveur appliquait le repli automatique
+(`AutoDeployTeamFallback`) aux DEUX camps à la fois, d'où l'apparition simultanée bleu+rouge sans
+étape de placement manuel.
+
+**Fix** : nouveau message `"deployment_ready"` (client -> serveur), envoyé par
+`MultiplayerMatchController.OpenDeploymentDock()` une fois le dock réellement affiché.
+`RunDeploymentPhase`/`RunConquestDeploymentPhase` attendent maintenant ce signal des DEUX joueurs
+(un seul pour la conquête) — plafonné à `MapReadyMaxWaitSeconds = 60f` en filet de sécurité — AVANT
+de démarrer le vrai compte à rebours de 45s. Nouveau champ `PlayerConnection.MapReady`.
+
+### 13.2 "Unités posées sur des polygones, difficiles à manier"
+
+`UnitSpawnerUI.SpawnUnitAt` plaçait les unités via un simple `NavMesh.SamplePosition` (point NavMesh
+le plus PROCHE, qui peut être un toit de bâtiment praticable pour l'IA mais faux pour un spawn) au
+lieu du helper existant `FindGroundLevelNavPoint` (échantillonne un anneau de points, garde le Y le
+plus bas) — déjà utilisé pour l'ancrage de `AutoDeployTeamFallback` mais PAS pour chaque unité
+individuelle. **Fix** : `SpawnUnitAt` appelle maintenant `FindGroundLevelNavPoint` avant son
+`NavMesh.SamplePosition` — corrige d'un coup TOUS les chemins de spawn (déploiement manuel, repli
+auto, renfort de garnison, apparition d'unité repérée en jeu) puisqu'ils passent tous par cette
+même méthode.
+
+### 13.3 Vrai brouillard de guerre réseau (demande explicite : "le joueur ne doit pas voir les unités ennemies avant qu'elles ne soient repérées")
+
+Avant cette session, le serveur envoyait l'état COMPLET des deux camps, identique, aux deux clients
+à CHAQUE tick (`turn_result`) et au déploiement (`deployment_result`) — un joueur voyait donc la
+position exacte de chaque unité ennemie en permanence, repérée ou non (confirmé par l'audit du
+§12, jamais corrigé jusqu'ici). Le calcul de repérage existait déjà (`IsUnitSpottedByTeam` en Solo,
+son jumeau `Novgov.TacticalCore.LineOfSight.CanBeSpotted` déjà porté dans le moteur multijoueur) mais
+n'était utilisé QUE pour le ciblage de l'IA, jamais pour décider quoi envoyer au réseau.
+
+**Fix (voir `MatchSessionManager.cs`) :**
+- `deployment_result` : chaque client ne reçoit plus que SA PROPRE escouade (les unités adverses
+  n'existent pas encore côté client) — SAUF les barricades, qui restent visibles des deux côtés dès
+  le départ (ce sont des éléments de terrain physiques comme un bâtiment, pas un renseignement sur
+  les forces adverses ; les cacher aurait créé des murs invisibles dont l'effet de couverture reste
+  bien réel côté serveur sans jamais se voir à l'écran).
+- `turn_result` : deux messages DISTINCTS construits par tick (`FilterSnapshotsForTeam` +
+  `ComputeVisibleUnitIds`) au lieu d'un seul partagé — chaque destinataire ne voit que ses propres
+  unités + les unités adverses VIVANTES repérées par au moins une de ses unités à cet instant précis
+  (`LineOfSight.CanBeSpotted`, portées/blocages muraux identiques au Solo). Un ennemi mort reste
+  visible (le résultat d'un combat ne doit pas disparaître).
+- Nouveaux champs `unit_type`/`team_id` sur `NetMessage.UnitState` : nécessaires pour que le client
+  puisse faire apparaître dynamiquement une unité ennemie la toute première fois qu'elle est
+  repérée (`MultiplayerMatchController.PlaySnapshotsCoroutine`), puisqu'elle n'existe pas encore en
+  scène à ce moment-là. Une unité ennemie déjà apparue mais absente d'un tick est masquée (jamais
+  détruite : peut réapparaître si elle redevient visible) via `UnitAI.SetVisualsVisibility(false)`.
+- `FogOfWarEntity` (jusqu'ici câblé "toujours visible à 100%", commentaire d'origine : "Fog of War
+  désactivé") force maintenant la visibilité en continu UNIQUEMENT hors multijoueur
+  (`!MultiplayerMatchController.IsActive`) — sinon il annulait le masquage ci-dessus dès la frame
+  suivante.
+- `UnitSpawnerUI.maxUnitsPerTeam` (plafonné à 4 pendant le dock de déploiement) est relevé à 8 une
+  fois `deployment_result` reçu — sans ça, une garnison de conquête renforcée (jusqu'à 4+3=7 unités,
+  voir §12) aurait pu se voir refuser silencieusement l'apparition de ses derniers renforts au
+  moment d'être repérée.
+
+**Approximation assumée (documentée dans le code)** : la géométrie des murs/barricades utilisée pour
+`CanBeSpotted` pendant la relecture tick par tick est celle de FIN de tour (après résolution), même
+pour les premiers ticks — un mur détruit PENDANT ce tour est donc traité comme déjà détruit pour
+TOUTE la relecture. Le sens de l'erreur reste toujours prudent (peut seulement masquer une unité un
+peu plus longtemps que la réalité, jamais révéler une position qui aurait dû rester cachée). De même,
+le camouflage utilisé pour le calcul est celui de FIN de tour (`worldState.units` post-résolution),
+pas l'état exact à chaque tick intermédiaire.
+
+**Non traité (hors scope de cette session)** : le mode Zone de Contrôle (`zone_control`) affiche déjà
+une barre de progression par équipe (`zone_progress_team1/2`) — ce chiffre reste communiqué aux DEUX
+joueurs sans brouillard (ce n'est pas une position d'unité), inchangé.
+
+**À faire avant de tester :** rebuild + redeploy serveur ET Android (aucun de ces changements n'est
+encore en production au moment d'écrire cette section) — puis un vrai test à 2 téléphones est le seul
+moyen de vérifier que le rythme de révélation "spotted/pas spotted" est satisfaisant en jeu (portées
+de repérage inchangées par rapport au Solo, mais jamais testées en conditions PvP réelles avant ce
+changement).

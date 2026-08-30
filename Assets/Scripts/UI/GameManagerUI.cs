@@ -78,9 +78,21 @@ public class GameManagerUI : MonoBehaviour
     }
 
 #if !UNITY_SERVER
+    private UnityEngine.UIElements.Button zoneMapButton;
+
     private void Update()
     {
         if (gpsStatusLabel != null) gpsStatusLabel.text = gpsStatus;
+
+        // Le bouton "CARTE DES ZONES" n'a de sens qu'une fois une Zone d'origine fixée (voir
+        // ZoneManager.InitializeHomeZoneFromGps, appelé au premier "MODE CAMPAGNE MULTIJOUEUR") —
+        // revérifié chaque frame plutôt qu'une seule fois au binding, puisque ça peut devenir vrai
+        // en cours de session.
+        if (zoneMapButton != null)
+        {
+            bool hasHomeZone = Novgov.Generation.ZoneManager.EnsureInstance().HasHomeZone;
+            zoneMapButton.style.display = hasHomeZone ? UnityEngine.UIElements.DisplayStyle.Flex : UnityEngine.UIElements.DisplayStyle.None;
+        }
     }
 
     private void BindStartupUI()
@@ -117,6 +129,10 @@ public class GameManagerUI : MonoBehaviour
                     MusicManager.SetGameplayVolume();
                     GameManagerUI.Instance?.StartCoroutine(GameManagerUI.Instance.StartDeviceGPS(thenConnectMultiplayer: true));
                 };
+                root.Q<UnityEngine.UIElements.Button>("btn-zone-map").clicked += () =>
+                {
+                    Novgov.UI.ZoneMapController.EnsureInstance().Show();
+                };
                 startupButtonsBound = true;
             }
             catch (System.Exception ex)
@@ -126,6 +142,7 @@ public class GameManagerUI : MonoBehaviour
         }
 
         gpsStatusLabel = root.Q<Label>("gps-status-label");
+        zoneMapButton = root.Q<UnityEngine.UIElements.Button>("btn-zone-map");
 
         // Menu de démarrage prioritaire : ce Show() doit s'exécuter même si l'écran "Error"
         // (non critique) échoue à se lier plus bas — sans ce garde-fou, une seule exception dans
@@ -248,85 +265,102 @@ public class GameManagerUI : MonoBehaviour
     /// <paramref name="thenConnectMultiplayer"/> est vrai (bouton MODE CAMPAGNE MULTIJOUEUR) —
     /// enchaîne directement sur la connexion PvP une fois la carte prête. En mode solo, le GPS
     /// n'est jamais utilisé : ce paramètre est donc toujours vrai pour l'unique appelant restant.</summary>
+    // Position simulée pour les tests en Éditeur (Lille Sud, à côté de l'Hôpital Sud) — le service
+    // Input.location d'Unity n'est de toute façon jamais fonctionnel dans l'Éditeur (pas de matériel
+    // GPS), donc ce court-circuit ne retire aucune fonctionnalité réelle : sans lui, StartDeviceGPS()
+    // finissait systématiquement par échouer après 20s d'attente ("Impossible de capter le signal
+    // GPS"), rendant tout test du flux multijoueur en Play Mode impossible sans passer par un vrai
+    // appareil. Uniquement actif en Éditeur (#if UNITY_EDITOR) : aucun effet sur un build Android/iOS.
+    private const float EditorMockLatitude = 50.5975f;
+    private const float EditorMockLongitude = 3.0553f;
+
     private IEnumerator StartDeviceGPS(bool thenConnectMultiplayer)
     {
-        gpsStatus = "Recherche du signal GPS de l'appareil...";
+        Novgov.Generation.ZoneManager zoneManager = Novgov.Generation.ZoneManager.EnsureInstance();
+
+        // Le GPS n'est consulté QUE tant qu'aucune Zone d'origine n'a encore été fixée — une fois
+        // ZoneManager.InitializeHomeZoneFromGps() appelé une première fois (persisté via
+        // PlayerPrefs, y compris entre deux lancements de l'app), tout ce bloc est sauté et le jeu
+        // ne raisonne plus qu'en (tileX, tileY), voir ZoneManager.
+        if (!zoneManager.HasHomeZone)
+        {
+            float lat, lon;
+
+#if UNITY_EDITOR
+            gpsStatus = "[Éditeur] Position simulée : Lille Sud.";
+            lat = EditorMockLatitude;
+            lon = EditorMockLongitude;
+            yield return new WaitForSeconds(0.3f);
+#else
+            gpsStatus = "Recherche du signal GPS de l'appareil...";
 
 #if UNITY_ANDROID
-        // Android 6+ : la permission déclarée dans le manifeste ne suffit pas, il faut la demander
-        // explicitement à l'exécution pour déclencher la boîte de dialogue système — sans ça,
-        // chaque joueur devrait aller l'activer à la main dans les paramètres de l'appareil comme
-        // il a fallu le faire manuellement pendant les tests.
-        if (!Permission.HasUserAuthorizedPermission(Permission.FineLocation))
-        {
-            gpsStatus = "Autorise l'accès à la position pour continuer...";
-            bool permissionResolved = false;
-            bool permissionGranted = false;
-
-            var callbacks = new PermissionCallbacks();
-            callbacks.PermissionGranted += _ => { permissionGranted = true; permissionResolved = true; };
-            callbacks.PermissionDenied += _ => { permissionResolved = true; };
-            Permission.RequestUserPermission(Permission.FineLocation, callbacks);
-
-            while (!permissionResolved) yield return null;
-
-            if (!permissionGranted)
+            // Android 6+ : la permission déclarée dans le manifeste ne suffit pas, il faut la demander
+            // explicitement à l'exécution pour déclencher la boîte de dialogue système — sans ça,
+            // chaque joueur devrait aller l'activer à la main dans les paramètres de l'appareil comme
+            // il a fallu le faire manuellement pendant les tests.
+            if (!Permission.HasUserAuthorizedPermission(Permission.FineLocation))
             {
-                gpsStatus = "Autorisation de localisation refusée. Active-la dans les paramètres de l'appareil pour utiliser le GPS.";
-                yield break;
+                gpsStatus = "Autorise l'accès à la position pour continuer...";
+                bool permissionResolved = false;
+                bool permissionGranted = false;
+
+                var callbacks = new PermissionCallbacks();
+                callbacks.PermissionGranted += _ => { permissionGranted = true; permissionResolved = true; };
+                callbacks.PermissionDenied += _ => { permissionResolved = true; };
+                Permission.RequestUserPermission(Permission.FineLocation, callbacks);
+
+                while (!permissionResolved) yield return null;
+
+                if (!permissionGranted)
+                {
+                    gpsStatus = "Autorisation de localisation refusée. Active-la dans les paramètres de l'appareil pour utiliser le GPS.";
+                    yield break;
+                }
             }
-        }
 #endif
 
-        if (!Input.location.isEnabledByUser)
-        {
-            gpsStatus = "GPS désactivé dans les paramètres du téléphone.";
-            yield break;
+            if (!Input.location.isEnabledByUser)
+            {
+                gpsStatus = "GPS désactivé dans les paramètres du téléphone.";
+                yield break;
+            }
+
+            Input.location.Start(10f, 10f);
+            int maxWait = 20;
+            while (Input.location.status == LocationServiceStatus.Initializing && maxWait > 0)
+            {
+                yield return new WaitForSeconds(1);
+                maxWait--;
+            }
+
+            if (maxWait < 1 || Input.location.status == LocationServiceStatus.Failed)
+            {
+                gpsStatus = "Impossible de capter le signal GPS.";
+                yield break;
+            }
+
+            lat = (float)Input.location.lastData.latitude;
+            lon = (float)Input.location.lastData.longitude;
+            Input.location.Stop();
+#endif
+
+            gpsStatus = "Coordonnées acquises ! Zone d'origine fixée.";
+            zoneManager.InitializeHomeZoneFromGps(lat, lon);
+            yield return new WaitForSeconds(0.3f);
         }
 
-        Input.location.Start(10f, 10f);
-        int maxWait = 20;
-        while (Input.location.status == LocationServiceStatus.Initializing && maxWait > 0)
-        {
-            yield return new WaitForSeconds(1);
-            maxWait--;
-        }
-
-        if (maxWait < 1 || Input.location.status == LocationServiceStatus.Failed)
-        {
-            gpsStatus = "Impossible de capter le signal GPS.";
-            yield break;
-        }
-
-        float lat = (float)Input.location.lastData.latitude;
-        float lon = (float)Input.location.lastData.longitude;
-        gpsStatus = "Coordonnées acquises ! Génération de votre ville...";
-        Input.location.Stop();
-
-        yield return new WaitForSeconds(0.6f);
+        gpsStatus = "Génération du champ de bataille...";
         isMapSelectorOpen = false;
 #if !UNITY_SERVER
         if (UIScreenManager.Instance != null) UIScreenManager.Instance.HideAll();
 #endif
 
-        // Générer la ville à la position GPS réelle avec 250m de rayon
-        CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
-        MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
-
         UIScreenManager.Instance?.SetVisible("Loading", true);
 
-        if (cityGen != null)
-        {
-            cityGen.latitude = lat;
-            cityGen.longitude = lon;
-            cityGen.radius = 250f;
-            cityGen.GenerateCity();
-        }
-
-        if (mapLoader != null)
-        {
-            mapLoader.LoadMap();
-        }
+        // Charge la Zone courante du joueur (son origine, ou la dernière Zone visitée) — plus aucune
+        // référence à une position GPS brute ici, uniquement l'index de tuile géré par ZoneManager.
+        zoneManager.LoadCurrentZone();
 
         yield return new WaitForSeconds(0.5f);
 

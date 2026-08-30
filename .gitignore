@@ -85,3 +85,11 @@ crashlytics-build.properties
 
 # Windows store builds
 AppPackages/
+
+# Logs de build Unity en mode batch (-logFile), écrits par erreur à la racine du projet au lieu du
+# scratchpad de session — pur diagnostic jetable, jamais du contenu à versionner (2026-08-30).
+/*.log
+
+# Dossier de récupération automatique de l'Éditeur Unity (scène restaurée après un crash/fermeture
+# inattendue) — jamais du contenu source réel.
+/Assets/_Recovery/

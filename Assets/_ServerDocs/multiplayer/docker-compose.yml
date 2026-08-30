@@ -1,4 +1,4 @@
-name: streetact
+name: novgov
 
 networks:
   internal:
@@ -6,6 +6,13 @@ networks:
 
 volumes:
   db-data:
+  # Cache disque L2 de géométrie tactique (murs/grille/portes/fenêtres par bâtiment, voir
+  # TacticalGridBuilder.cs) — survit à un redéploiement (contrairement au système de fichiers du
+  # conteneur, recréé à chaque "docker compose up -d"). Sans ce volume, un redéploiement payait à
+  # nouveau la reconstruction complète depuis la scène Unity (fetch OSM + bake NavMesh pour une
+  # tuile GPS réelle, jusqu'à ~60s) pour chaque carte déjà vue avant le redémarrage (2026-08-30).
+  # Utile même à une seule instance : conservé au travers des redéploiements du conteneur.
+  tactical-grid-cache:
 
 services:
   # ---------------------------------------------------------------------
@@ -72,12 +79,22 @@ services:
     networks: [internal]
 
   # ---------------------------------------------------------------------
-  # Serveur de jeu Unity Headless — AUTORITAIRE. Seul service (avec nginx)
-  # exposé sur l'hôte, sur le port de jeu.
+  # Serveur de jeu Unity Headless — AUTORITAIRE. UNE SEULE instance (2026-08-30, remplace le pool
+  # de 3 instances du même jour) : depuis "Option B" + le pool de threads (voir MatchSessionManager.
+  # RunExecutionPhasePure), UN processus fait tourner des centaines/milliers de parties Deathmatch/
+  # Zone de Contrôle EN PARALLÈLE — le pool de 3 processus ne servait plus qu'à payer 2x le coût de
+  # base d'un moteur Unity (RAM/CPU) sans gain de capacité réel. La table "server_instances"
+  # (schema.sql §7, mise à jour toutes les 2s via ReportInstanceStatus) et la logique côté client
+  # (MultiplayerMatchController.ConnectToGameServerCoroutine, "choisir une instance libre") sont
+  # conservées telles quelles — elles fonctionnent déjà correctement avec une seule ligne dans la
+  # table, aucun changement nécessaire pour repasser à plusieurs instances plus tard si le besoin
+  # (résilience, pas capacité) s'en faisait sentir : copier-coller ce bloc avec un nouveau port et un
+  # nouvel INSTANCE_ID suffirait.
   # ---------------------------------------------------------------------
-  game-server:
+  game-server-1:
     build:
       context: ./game-server
+    image: novgov-game-server:latest
     restart: unless-stopped
     depends_on:
       db:
@@ -89,8 +106,12 @@ services:
       GAME_PORT: 7777
       REST_URL: https://novgov.com/rest/v1
       SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      INSTANCE_ID: game-server-1
+      PUBLIC_PORT: 7777
+    volumes:
+      - tactical-grid-cache:/root/.config/unity3d/DefaultCompany/Novgov/TacticalGridCache
     ports:
-      - "${GAME_SERVER_PORT}:7777"
+      - "7777:7777"
     networks: [internal]
 
   # ---------------------------------------------------------------------

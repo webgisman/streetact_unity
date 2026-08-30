@@ -129,8 +129,22 @@ create table public.match_turn_orders (
 
 create index on public.match_turn_orders (match_id, turn_number);
 
--- Pas de RLS select/insert pour "authenticated" : les intentions transitent par le protocole
--- TCP du serveur de jeu (voir 03-network-protocol.md), pas par PostgREST.
+alter table public.match_turn_orders enable row level security;
+
+-- CORRECTION (audit sécurité 2026-08-30) : le commentaire d'origine ci-dessous ("pas de RLS,
+-- les intentions transitent par TCP pas par PostgREST") était une justification erronée — PostgREST
+-- expose AUTOMATIQUEMENT toute table du schéma "public" (PGRST_DB_SCHEMAS: public,
+-- docker-compose.yml), quel que soit le chemin d'écriture VOULU. Sans RLS ici, combiné au grant
+-- large "insert, update, delete ... to authenticated" de bootstrap-db.sh, n'importe quel joueur
+-- authentifié pouvait écrire/modifier/supprimer des lignes pour N'IMPORTE QUELLE partie via un
+-- simple appel REST — trouvé et corrigé en production le 2026-08-30 (RLS activée, aucune policy
+-- nécessaire puisque personne ne doit écrire ici via PostgREST -> default-deny total). Revoke
+-- explicite ci-dessous en défense en profondeur, même pattern que "zones"/"server_instances".
+revoke insert, update, delete on public.match_turn_orders from authenticated;
+
+-- Aucune policy select/insert pour "authenticated" : les intentions transitent par le protocole
+-- TCP du serveur de jeu (voir 03-network-protocol.md), pas par PostgREST — mais voir la correction
+-- ci-dessus : RLS default-deny reste nécessaire pour que cette intention soit réellement appliquée.
 
 -- =========================================================================
 -- 5. Log d'événements résolus (ce que le serveur renvoie pour rejouer l'animation)
@@ -160,6 +174,76 @@ create policy "Un participant voit le log de sa propre partie"
             where mp.match_id = match_event_log.match_id and mp.user_id = auth.uid()
         )
     );
+
+-- =========================================================================
+-- 6. Zones de Conquête (grille Slippy Map fixe, Zoom 17 — voir CityGenerator.ZONE_ZOOM)
+-- Remplace l'ancien système de génération GPS à rayon dynamique : chaque Zone est une tuile
+-- Slippy Map identifiée par (tile_x, tile_y, zoom), possédée par au plus un joueur à la fois.
+-- =========================================================================
+create table public.zones (
+    tile_x integer not null,
+    tile_y integer not null,
+    zoom smallint not null,
+    owner_user_id uuid references auth.users(id) on delete set null,
+    captured_at timestamptz,
+    primary key (tile_x, tile_y, zoom)
+);
+
+alter table public.zones enable row level security;
+
+create policy "Une Zone est visible par tous les joueurs authentifiés"
+    on public.zones for select
+    to authenticated
+    using (true);
+
+-- Pas de policy insert/update pour "authenticated" : seul le serveur de jeu (connexion directe
+-- Postgres avec le rôle "postgres", ou service_role via PostgREST) capture/transfère une Zone,
+-- jamais le client directement — voir MatchSessionManager.CaptureZoneInDb.
+--
+-- IMPORTANT pour le déploiement VPS (vérifié en migrant novgov.com le 2026-08-30, une table créée
+-- APRÈS le bootstrap initial) : `ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public`
+-- (mis en place par bootstrap-db.sh) accorde AUTOMATIQUEMENT select/insert/update/delete à
+-- "authenticated" sur toute nouvelle table créée par supabase_admin dans public — donc une table
+-- migrée après coup avec ce rôle N'A PAS besoin d'un `grant select` manuel, contrairement à ce
+-- qu'on pourrait croire. En revanche RLS seul (la policy SELECT ci-dessus) ne suffit pas à
+-- restreindre insert/update/delete comme prévu pour les autres tables (RLS bloque bien ces
+-- commandes sans policy dédiée, mais par défense en profondeur, resserrer aussi le GRANT lui-même
+-- comme pour "profiles" plus haut) :
+revoke insert, update, delete on public.zones from authenticated;
+
+-- =========================================================================
+-- 7. Registre d'instances du serveur de jeu (pool multi-serveurs, 2026-08-30)
+-- Remplace le modèle "un seul serveur pour tout le monde" (portée V1 initiale, un match à la
+-- fois) : plusieurs instances du même conteneur game-server tournent en parallèle (voir
+-- docker-compose.yml, services game-server-1/2/3), chacune ne gérant toujours qu'UN match à la
+-- fois EN INTERNE (le code de simulation n'a pas changé). Chaque instance publie ici son état
+-- toutes les 2s (MatchSessionManager.ReportInstanceStatus) ; le client lit cette table AVANT de
+-- se connecter pour choisir une instance libre — voir MultiplayerMatchController.
+-- PickServerInstance. C'est la même logique qu'une flotte de serveurs de partie (Fortnite,
+-- Valorant, etc.) : un matchmaking léger devant un pool de processus de jeu, sans toucher au
+-- moteur de simulation lui-même.
+-- =========================================================================
+create table public.server_instances (
+    id text primary key,                       -- ex: 'game-server-1', doit matcher INSTANCE_ID
+    public_port integer not null,              -- port réellement utilisé par le client pour se connecter
+    status text not null default 'free',       -- 'free' ou 'busy' (un match tourne déjà dessus)
+    waiting_deathmatch integer not null default 0,   -- joueurs déjà en file d'attente Deathmatch SUR CETTE instance
+    waiting_zone_control integer not null default 0, -- idem pour Zone de Contrôle
+    updated_at timestamptz not null default now()    -- passé un certain âge (voir requête client), l'instance
+                                                       -- est considérée morte/plantée et ignorée
+);
+
+alter table public.server_instances enable row level security;
+
+create policy "Le registre d'instances est visible par tous les joueurs authentifiés"
+    on public.server_instances for select
+    to authenticated
+    using (true);
+
+-- Pas de policy insert/update pour "authenticated" : seule chaque instance de jeu écrit sa PROPRE
+-- ligne (service_role via PostgREST) — jamais le client, qui ne fait que lire pour choisir où se
+-- connecter.
+revoke insert, update, delete on public.server_instances from authenticated;
 
 -- =========================================================================
 -- Note sur les écritures : le serveur de jeu Unity headless se connecte à Postgres

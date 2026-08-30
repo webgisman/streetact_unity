@@ -32,7 +32,7 @@ fichiers/classes ci-dessus ont changé en pratique.
 
 ## Ce qui change dans le flux existant
 
-Aujourd'hui (`GameManagerUI.OnGUI`) : au lancement, l'écran "STREETACT : CHAMP DE BATAILLE"
+Aujourd'hui (`GameManagerUI.OnGUI`) : au lancement, l'écran "NOVGOV : CHAMP DE BATAILLE"
 propose directement "Combat urbain hors-ligne" ou "Ma position GPS réelle" — pas d'auth, pas de
 matchmaking, tout est local et instantané.
 
