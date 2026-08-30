@@ -12,12 +12,18 @@ using UnityEngine.Networking;
 namespace Novgov.Server
 {
     /// <summary>
-    /// Orchestre UN match à la fois (voir README.md, "Portée V1"). Réutilise tel quel le moteur de
-    /// simulation existant (UnitAI / TacticalAIPlanner / NavMesh) — voir 04-unity-headless-server.md.
+    /// Orchestre les parties Deathmatch/Zone de Contrôle (concurrentes, en donnée pure — voir
+    /// MatchState.cs et 04-unity-headless-server.md, "Option B" 2026-08-30 — un seul processus en
+    /// fait tourner des centaines/milliers en parallèle) ET les combats de Conquête (INCHANGÉS,
+    /// toujours 1 combat à la fois, basés sur de vraies UnitAI/BuildingStructure — voir
+    /// RunConquestSkirmish). "Portée V1" mentionnée par endroits ci-dessous dans le code réfère à
+    /// l'ancienne contrainte "un seul match total sur le processus" — dépassée pour Deathmatch/
+    /// Zone de Contrôle, toujours vraie pour la Conquête seule.
     ///
-    /// Limitation connue V1 : pas de reprise de partie après coupure TCP complète — un joueur qui se
-    /// déconnecte puis se reconnecte rejoint la file d'attente pour un NOUVEAU match, il ne réintègre
-    /// pas la partie en cours (qui continue avec son camp en mode Ghost jusqu'à la victoire/défaite).
+    /// Limitation connue, toujours vraie : pas de reprise de partie après coupure TCP complète — un
+    /// joueur qui se déconnecte puis se reconnecte rejoint la file d'attente pour un NOUVEAU match,
+    /// il ne réintègre pas la partie en cours (qui continue avec son camp en mode Ghost jusqu'à la
+    /// victoire/défaite).
     /// </summary>
     public class MatchSessionManager : MonoBehaviour
     {
@@ -46,10 +52,10 @@ namespace Novgov.Server
         private const int MaxDeployedCombatUnits = 4;
         private const int MaxDeployedBarricades = 8;
         private const int ZoneControlTurnCap = 20;
-        // Sans plafond, deux joueurs qui se contentent de se cacher chaque tour pouvaient bloquer
-        // indéfiniment l'unique emplacement de match du serveur (une seule partie à la fois, voir
-        // "Portée V1" en tête de classe) — le Deathmatch avait ce plafond en Zone de Contrôle mais
-        // pas ici.
+        // Sans plafond, deux joueurs qui se contentent de se cacher chaque tour pouvaient faire
+        // durer une partie indéfiniment (occupant inutilement une connexion/de la mémoire pour
+        // rien, même si d'autres parties concurrentes ne sont plus bloquées par ça depuis l'Option
+        // B) — le Deathmatch avait ce plafond en Zone de Contrôle mais pas ici.
         private const int DeathmatchTurnCap = 60;
         private const int MaxOrderPathNodes = 200;
 
@@ -90,9 +96,12 @@ namespace Novgov.Server
         // Vrai tant que la scène du serveur affiche la carte par défaut hors-ligne (deathmatch/
         // zone_control). Un combat de conquête (RunConquestSkirmish) remplace temporairement cette
         // géométrie par celle de la Zone réellement attaquée (LoadZoneOnServer) — sans restauration,
-        // le PROCHAIN deathmatch/zone_control hériterait silencieusement de cette dernière Zone au
-        // lieu de la carte par défaut attendue, la scène étant un singleton partagé entre tous les
-        // modes (un seul match à la fois, voir "Portée V1" en tête de classe).
+        // le PROCHAIN deathmatch/zone_control voulant la carte "Default" (ou une tuile GPS jamais
+        // encore vue, voir GenerateAndCacheTile) hériterait silencieusement de cette dernière Zone
+        // au lieu de la carte attendue — la scène reste un singleton partagé, MAIS depuis l'Option B
+        // (2026-08-30) seul l'instant bref de génération/snapshot d'une partie y touche encore ;
+        // une partie déjà démarrée (son MatchState.World déjà figé) n'est plus jamais affectée par
+        // ce que la scène affiche ensuite.
         private bool defaultMapLoaded = true;
 
         private void Start()
@@ -304,12 +313,12 @@ namespace Novgov.Server
 
         /// <summary>
         /// Enveloppe RunMatch() pour qu'une exception non prévue (message client malformé,
-        /// coordonnée invalide, etc.) ne laisse jamais matchInProgress bloqué à "true" pour
-        /// toujours — vu qu'un seul match tourne à la fois (voir "Portée V1"), une exception
-        /// non rattrapée y bloquait le serveur en entier, silencieusement, sans crash ni
-        /// redémarrage Docker possible. `yield return` n'est pas autorisé dans un bloc
-        /// try/catch en C#, d'où ce pompage manuel de l'énumérateur plutôt qu'un try/catch
-        /// direct autour du corps de RunMatch.
+        /// coordonnée invalide, etc.) n'abandonne jamais CETTE partie dans un état incohérent, et
+        /// ne laisse jamais matchInProgress bloqué à "true" pour toujours si le crash survient
+        /// pendant la section critique brève de RunMatch (voir EnsureTileLoadedAndSnapshot) — ce qui
+        /// bloquerait alors le démarrage de TOUTE nouvelle partie sur ce processus, pas seulement
+        /// celle-ci. `yield return` n'est pas autorisé dans un bloc try/catch en C#, d'où ce
+        /// pompage manuel de l'énumérateur plutôt qu'un try/catch direct autour du corps de RunMatch.
         /// </summary>
         private IEnumerator RunMatchGuarded(PlayerConnection p1, PlayerConnection p2, string cacheKey, string owningUserId)
         {

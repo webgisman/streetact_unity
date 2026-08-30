@@ -97,7 +97,7 @@ chmod +x bootstrap-db.sh && ./bootstrap-db.sh   # rôles Supabase + migrations G
 docker compose exec -T db psql -h 127.0.0.1 -U supabase_admin -d postgres -v ON_ERROR_STOP=1 -f /dev/stdin < schema.sql
 
 docker compose up -d auth rest
-docker compose up -d game-server
+docker compose up -d game-server-1
 docker compose up -d nginx
 ```
 
@@ -146,7 +146,13 @@ directe"), en plus de la mise à jour de `schema.sql` pour les futurs déploieme
 docker compose exec -T db pg_dump -U postgres postgres | gzip > /opt/backups/novgov-$(date +%F).sql.gz
 ```
 
-À automatiser via une tâche cron sur l'hôte une fois la stack stable.
+**Toujours pas automatisé (2026-08-30)** : la tâche cron ci-dessus n'a jamais été mise en place —
+seules des sauvegardes MANUELLES ont été faites jusqu'ici (dernière en date : dump complet
+`pg_dumpall` + config VPS entière, téléchargés en local le 2026-08-30, voir la note de mémoire de
+session pour l'emplacement exact). À faire avant toute diffusion au-delà de tests restreints :
+créer `/opt/backups/`, la tâche cron ci-dessus, ET une synchronisation régulière de ces dumps vers
+un stockage hors du VPS (une sauvegarde qui reste sur la même machine ne protège pas contre une
+panne disque/un incident fournisseur).
 
 ---
 
@@ -170,20 +176,20 @@ scp -i ~/.ssh/streetact_vps -r \
 # 2. Sur le VPS : reconstruire et redémarrer UNIQUEMENT ce conteneur
 ssh -i ~/.ssh/streetact_vps ubuntu@<ip>
 cd /opt/novgov
-docker compose build game-server
-docker compose up -d game-server   # recrée seulement game-server, les 4 autres ne bougent pas
+docker compose build game-server-1
+docker compose up -d game-server-1   # recrée seulement game-server-1, les 4 autres ne bougent pas
 
 # 3. Vérification
-docker compose logs --tail=60 game-server   # doit montrer "à l'écoute sur le port 7777"
+docker compose logs --tail=60 game-server-1   # doit montrer "à l'écoute sur le port 7777"
 nc -zv localhost 7777
 ```
 
-**Point d'attention** : `docker compose build game-server` copie `NovgovServer_Data`,
+**Point d'attention** : `docker compose build game-server-1` copie `NovgovServer_Data`,
 `NovgovServer.x86_64` et `UnityPlayer.so` depuis `/opt/novgov/game-server/` (le contexte de
 build, voir le `Dockerfile` à côté) — donc bien transférer les 3 avant de builder, sinon l'image
 reconstruite embarque encore l'ancien binaire silencieusement.
 
-Pendant les quelques secondes de `docker compose up -d game-server`, toute partie en cours sur ce
+Pendant les quelques secondes de `docker compose up -d game-server-1`, toute partie en cours sur ce
 serveur est interrompue (pas de bascule à chaud) — à faire hors d'une partie active, ou en
 prévenant les joueurs testant en même temps.
 

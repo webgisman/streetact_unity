@@ -137,3 +137,32 @@ diffusion au-delà de tests restreints) :
 - [ ] **Un mode de matchmaking invalide/mal orthographié tombe silencieusement en Deathmatch**
       (`MatchSessionManager.cs`, aucune liste blanche de modes acceptés) — pas de crash, mais
       aucune erreur n'est renvoyée si un futur client envoie une valeur inattendue.
+
+## Audit du 2026-08-30 — vérifié en direct sur le VPS (pas juste supposé)
+
+- [x] **`PasswordAuthentication` réellement désactivée** — confirmé via la config SSH effective
+      (`sshd -T`), pas juste en lisant un fichier de config parmi plusieurs qui se surchargent
+      (`00-harden-password-auth.conf` gagne bien sur `50-cloud-init.conf` qui, lui, la réactivait —
+      ordre alphabétique des `Include`). `permitrootlogin without-password`, `pubkeyauthentication
+      yes` également confirmés.
+- [x] **RLS sur `match_turn_orders`** — activée, zéro politique définie (donc refus par défaut pour
+      `anon`/`authenticated`, conforme à l'intention : seul `service_role` doit y toucher).
+- [x] Pare-feu (`ufw status`) : seuls 22/80/443/7777 ouverts, conforme à l'instance unique actuelle
+      (7778/7779 fermés après la consolidation Docker). Aucun port Postgres/GoTrue/PostgREST
+      exposé sur l'hôte (`docker ps` vérifié).
+- [x] `.env` en permissions `600` (propriétaire seul), pas de secret dans un fichier world-readable.
+- [x] Aucun résidu de conteneur/fichier compose de test laissé sur le VPS après les sessions de
+      vérification du jour.
+- [ ] **Nouvelle surface d'attaque (2026-08-30, "des milliers de cartes") — partiellement
+      mitigée, pas fermée** : `zone_tile_x/y` pour Deathmatch/Zone de Contrôle (`join_matchmaking`)
+      n'est validé nulle part côté serveur, contrairement à la Conquête (propriété de Zone
+      vérifiée en base). Une tuile jamais vue déclenche un vrai fetch OpenStreetMap + bake NavMesh
+      synchrone (jusqu'à ~60s, gèle tout le processus le temps de l'opération). Mitigé par une
+      limite de fréquence PAR UTILISATEUR (`MatchSessionManager.CanTriggerTileGeneration`, 30s) et
+      un anti-doublon — mais PAS par IP : plusieurs comptes jetables pourraient quand même
+      déclencher des générations en rafale et ralentir le démarrage de nouvelles parties pour tout
+      le monde pendant un moment (jamais un crash, toujours plafonné à 60s par génération). Fix
+      possible si besoin : limite par IP en plus, ou CAPTCHA à l'inscription.
+- [ ] **4 comptes de test restent en base** (`testlille1-4@novgov.test`) — sans risque en soi
+      (comptes normaux, pas de privilège), mais à supprimer avant une diffusion publique si on ne
+      veut pas de comptes de test visibles dans les données de production.

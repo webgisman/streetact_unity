@@ -1,5 +1,17 @@
 # État des lieux, problèmes rencontrés et travail restant
 
+> **⚠️ ARCHITECTURE DÉPASSÉE PAR LE TRAVAIL DU 2026-08-30 — lire
+> [04-unity-headless-server.md](04-unity-headless-server.md) et le README d'abord.** Ce document
+> est un JOURNAL HISTORIQUE (jusqu'au 2026-08-29) — utile pour comprendre le cheminement et les
+> bugs déjà résolus, mais il décrit une architecture depuis remplacée : simulation temps réel
+> NavMeshAgent (remplacée par `TacticalResolver`, un calcul instantané), "un seul match à la fois"
+> (remplacé par des parties concurrentes en donnée pure, voir `MatchState.cs`), pool de 3 instances
+> Docker (revenu à 1 seule instance + un pool de threads), déploiement toujours sur la carte
+> "Default" (Deathmatch/Zone de Contrôle supportent désormais la vraie position GPS du joueur).
+> Les mentions ci-dessous de `game-server-2`/`game-server-3`, "un seul match actif", etc. sont
+> des artefacts historiques, pas l'état actuel. Le reste du contenu (bugs trouvés/corrigés avant
+> le 2026-08-29, détail du build headless) reste fiable en tant qu'historique.
+
 Dernière mise à jour : 2026-08-29 (voir §9 pour le build Linux headless, désormais fonctionnel et
 déployé, et **§10 pour le premier vrai test à 2 téléphones** — fait, 4 bugs trouvés et corrigés en
 lisant le code, mais correctifs pas encore rebuild/redéployés ni retestés). Ce document liste

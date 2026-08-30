@@ -30,6 +30,19 @@ Le reste de ce document (flux cible, répartition des responsabilités serveur/c
 bonne description de l'intention et de ce qui a effectivement été construit — seuls les noms de
 fichiers/classes ci-dessus ont changé en pratique.
 
+**Mise à jour du 2026-08-30 ("des milliers de cartes")** : Deathmatch/Zone de Contrôle peuvent
+désormais se dérouler sur la vraie position GPS du joueur (comme la Conquête), pas seulement la
+carte "Default". `MultiplayerMatchController` envoie la tuile domicile du joueur
+(`Novgov.Generation.ZoneManager.HomeTileX/HomeTileY`, déjà calculée une fois via GPS au premier
+lancement — voir `GameManagerUI.StartDeviceGPS`, aucun nouveau code GPS côté client) dans
+`join_matchmaking` (`NetMessage.has_home_tile`/`zone_tile_x`/`zone_tile_y`). Le serveur répond
+dans `match_found` avec la tuile RÉELLEMENT retenue pour la partie (peut être celle de
+l'adversaire, voir `MatchSessionManager.DetermineMatchCacheKey`) ; le client charge cette tuile
+précise avant d'ouvrir le déploiement via `LoadMatchMapThenOpenDeployment` (généralisation de
+l'ancien couple `LoadDefaultMapThenOpenDeployment`/`LoadConquestZoneThenOpenDeployment`, avec un
+délai d'attente adaptatif et un message d'échec explicite si la carte n'est jamais prête). Voir
+[04-unity-headless-server.md](04-unity-headless-server.md) pour le détail côté serveur.
+
 ## Ce qui change dans le flux existant
 
 Aujourd'hui (`GameManagerUI.OnGUI`) : au lancement, l'écran "NOVGOV : CHAMP DE BATAILLE"

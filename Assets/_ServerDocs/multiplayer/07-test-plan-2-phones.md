@@ -34,9 +34,13 @@ démarré (doc 04), client modifié (doc 05).
   même mode (`join_matchmaking.mode`), deux files d'attente séparées. Se tromper de mode fait
   attendre indéfiniment dans deux files différentes.
 - L'appariement est **FIFO public**, pas une invitation privée entre les deux téléphones : les 2
-  premiers joueurs en attente sur le même mode sont appariés ensemble. Tant que vous êtes seuls
-  sur le serveur (un seul match actif à la fois, voir "Portée V1" du README), vous serez
-  forcément appariés l'un avec l'autre.
+  premiers joueurs distincts en attente sur le même mode sont appariés ensemble. **Mise à jour du
+  2026-08-30** : ce n'est plus "un seul match actif à la fois" (voir README, "Portée V1" —
+  dépassée) — le serveur fait maintenant tourner des parties concurrentes. Si quelqu'un d'autre
+  teste en même temps sur le même mode, vous pourriez être appariés avec cette personne au lieu de
+  votre second téléphone ; pour un test isolé à 2 téléphones, vérifiez qu'aucun autre testeur n'est
+  connecté au même moment, ou utilisez des comptes de test dédiés dont vous seul(e) avez les
+  identifiants.
 
 ## Scénario 1 — Inscription et connexion
 
