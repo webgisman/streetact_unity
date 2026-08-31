@@ -43,6 +43,9 @@ public class UnitSpawnerUI : MonoBehaviour
 
     // UI State
     private bool isPanelOpen = false; // Fermé par défaut pour libérer l'écran
+    // Suivi de transition pour le contournement du bug de rendu du dock (voir RefreshDeploymentDockUI).
+    private bool dockShownLastFrame = false;
+    private bool dockPanelOpenLastFrame = false;
     private string statusMessage = "";
     private float statusMessageTimer = 0f;
     private float ignorePlacementTime = 0f;
@@ -985,7 +988,14 @@ public class UnitSpawnerUI : MonoBehaviour
                 {
                     isPanelOpen = !isPanelOpen;
                 }
-                AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+                // Protégé (voir team1Button/team2Button/etc. plus bas, non protégés) : un
+                // Camera.main introuvable (ex: transition de caméra en cours) ou un souci
+                // d'initialisation audio ne doit jamais empêcher le dock de s'ouvrir/fermer.
+                try
+                {
+                    AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+                }
+                catch (System.Exception) { }
             };
 
             team1Button.clicked += () => { lastUIClickTime = Time.time; selectedTeam = 1; AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position); };
@@ -1064,7 +1074,29 @@ public class UnitSpawnerUI : MonoBehaviour
         if (TacticalPathManager.IsSoloGameOver) hidden = true;
 
         UIScreenManager.Instance.SetVisible("DeploymentDock", !hidden);
-        if (hidden) return;
+
+        // Un écart entre la position visuelle du tab-button et sa vraie zone cliquable (worldBound)
+        // a été observé sur un émulateur Android 16 pendant les tests du 2026-08-31, non reproduit
+        // sur appareil réel — probablement un artefact du rendu logiciel de l'émulateur plutôt qu'un
+        // vrai bug du jeu. Ce MarkDirtyRepaint() sur transition (jamais chaque frame) ne coûte rien
+        // et sert de filet de sécurité au cas où un appareil réel présenterait un jour un symptôme
+        // similaire (ex: après un redimensionnement de fenêtre en mode multi-fenêtré Android).
+        bool justShown = !hidden && dockShownLastFrame == false;
+        dockShownLastFrame = !hidden;
+        if (hidden)
+        {
+            dockPanelOpenLastFrame = false; // repartira à zéro à la prochaine ouverture
+            return;
+        }
+        bool panelToggled = isPanelOpen != dockPanelOpenLastFrame;
+        dockPanelOpenLastFrame = isPanelOpen;
+        if (justShown || panelToggled)
+        {
+            tabButton.MarkDirtyRepaint();
+            VisualElement wrapper = dockPanel.parent;
+            wrapper?.MarkDirtyRepaint();
+            UIScreenManager.Instance.RootVisualElement.MarkDirtyRepaint();
+        }
 
         // Verrouillage du choix de camp + boutons solo-only pendant le déploiement PvP : impossible
         // de basculer sur le camp adverse, et ESCOUADE IA/DÉPLOIEMENT AUTO n'ont pas de sens ici

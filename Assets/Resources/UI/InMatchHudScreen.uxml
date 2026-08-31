@@ -1,7 +1,14 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
-    <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore;">
+    <!-- padding-top dégage la bande réservée par TacticalBottomBarScreen.uxml en haut d'écran
+         (portraits d'escouade + cloche + FIN DE TOUR + colonne radar, "top-dashboard" : height 16%,
+         plafonné à 175px) — les deux écrans sont superposés en permanence pendant un match PvP (voir
+         UIScreenManager.Show("InMatchHud") + SetVisible("TacticalBottomBar", true) simultanés), et
+         la bannière équipe/timer/phase ci-dessous se dessinait PAR-DESSUS ce dashboard sans ce
+         dégagement — chevauchement direct, jamais visible en solo puisque InMatchHud n'y est jamais
+         affiché (voir rapport utilisateur : "chevauchement... dans le mode multijoueur"). -->
+    <ui:VisualElement name="root" style="flex-grow: 1; padding-top: 180px; picking-mode: Ignore;">
 
-        <ui:VisualElement name="top-bar" style="flex-direction: row; justify-content: space-between; align-items: flex-start; padding: 24px; picking-mode: Ignore;">
+        <ui:VisualElement name="top-bar" style="flex-direction: row; justify-content: space-between; align-items: flex-start; padding: 12px 24px; picking-mode: Ignore;">
             <ui:Label name="team-banner" text="ÉQUIPE BLEUE" class="team1-badge" style="font-size: 30px; picking-mode: Ignore;" />
             <ui:Label name="timer-label" text="" class="panel" style="font-size: 32px; -unity-font-style: bold; padding: 8px 20px; picking-mode: Ignore;" />
         </ui:VisualElement>
@@ -17,7 +24,7 @@
             </ui:VisualElement>
         </ui:VisualElement>
 
-        <ui:Label name="ghost-banner" text="" class="panel" style="display: none; align-self: center; margin-top: 16px; color: var(--color-accent); font-size: 26px; -unity-font-style: bold; picking-mode: Ignore;" />
+        <ui:Label name="ghost-banner" text="" class="panel" style="display: none; align-self: center; margin-top: 16px; color: var(--color-danger); font-size: 26px; -unity-font-style: bold; picking-mode: Ignore;" />
 
     </ui:VisualElement>
 </ui:UXML>

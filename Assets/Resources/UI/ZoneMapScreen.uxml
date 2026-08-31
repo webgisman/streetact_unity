@@ -5,12 +5,12 @@
             <ui:Label name="zone-current-label" text="Zone actuelle : (?,?)" style="-unity-text-align: middle-center; color: var(--color-accent); margin-bottom: 20px;" />
 
             <ui:VisualElement style="flex-direction: row; justify-content: center; margin-bottom: 10px;">
-                <ui:Button name="btn-attack-north" text="⬆ NORD&#10;(…)" class="btn-team2" style="width: 48%; margin-right: 4%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
-                <ui:Button name="btn-attack-south" text="⬇ SUD&#10;(…)" class="btn-team2" style="width: 48%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
+                <ui:Button name="btn-attack-north" text="⬆ NORD&#10;(…)" class="btn-zone-neutral" style="width: 48%; margin-right: 4%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
+                <ui:Button name="btn-attack-south" text="⬇ SUD&#10;(…)" class="btn-zone-neutral" style="width: 48%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
             </ui:VisualElement>
             <ui:VisualElement style="flex-direction: row; justify-content: center; margin-bottom: 20px;">
-                <ui:Button name="btn-attack-west" text="⬅ OUEST&#10;(…)" class="btn-team1" style="width: 48%; margin-right: 4%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
-                <ui:Button name="btn-attack-east" text="➡ EST&#10;(…)" class="btn-team1" style="width: 48%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
+                <ui:Button name="btn-attack-west" text="⬅ OUEST&#10;(…)" class="btn-zone-neutral" style="width: 48%; margin-right: 4%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
+                <ui:Button name="btn-attack-east" text="➡ EST&#10;(…)" class="btn-zone-neutral" style="width: 48%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
             </ui:VisualElement>
 
             <ui:Label name="zone-status-label" text="" style="-unity-text-align: middle-center; white-space: normal; margin-bottom: 16px; min-height: 40px;" />

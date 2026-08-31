@@ -1,7 +1,7 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.92); picking-mode: Ignore;">
         <ui:VisualElement class="panel" style="width: 75%; max-width: 600px; align-items: center;">
-            <ui:Label text="ERREUR" class="title" style="margin-bottom: 16px; color: rgb(224, 110, 96); font-size: 32px;" />
+            <ui:Label text="ERREUR" class="title" style="margin-bottom: 16px; color: rgb(224, 110, 96);" />
             <ui:Label name="error-text" text="" class="error-text" style="margin-bottom: 24px; -unity-text-align: middle-center;" />
             <ui:Button name="btn-load-offline" text="CHARGER LE MODE HORS-LIGNE" class="btn-primary" style="width: 100%;" />
         </ui:VisualElement>

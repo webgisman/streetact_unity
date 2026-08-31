@@ -168,7 +168,13 @@ namespace Novgov.UI
                 yield return req.SendWebRequest();
 
                 var owners = new System.Collections.Generic.Dictionary<(int, int), string>();
-                if (req.result == UnityWebRequest.Result.Success)
+                // Distingue "requête réussie" de "échec réseau/parsing" : auparavant un échec
+                // laissait le dictionnaire vide sans le signaler, et DescribeOwner affichait alors
+                // silencieusement "Neutre" pour les 4 Zones (aucune entrée trouvée = statut par
+                // défaut) — une fausse information plutôt qu'une erreur visible (voir rapport
+                // d'audit interface, défaut bloquant #3).
+                bool ok = req.result == UnityWebRequest.Result.Success;
+                if (ok)
                 {
                     try
                     {
@@ -180,13 +186,25 @@ namespace Novgov.UI
                     catch (System.Exception ex)
                     {
                         Debug.LogWarning($"[ZoneMapController] Parsing du statut des Zones voisines échoué : {ex.Message}");
+                        ok = false;
                     }
                 }
 
-                SetNeighborStatus(btnAttackNorth, "⬆ NORD", DescribeOwner(owners, north, myUserId));
-                SetNeighborStatus(btnAttackSouth, "⬇ SUD", DescribeOwner(owners, south, myUserId));
-                SetNeighborStatus(btnAttackEast, "➡ EST", DescribeOwner(owners, east, myUserId));
-                SetNeighborStatus(btnAttackWest, "⬅ OUEST", DescribeOwner(owners, west, myUserId));
+                if (!ok)
+                {
+                    Debug.LogWarning($"[ZoneMapController] Statut des Zones voisines indisponible : {req.error}");
+                    if (statusLabel != null) statusLabel.text = "Statut des Zones indisponible (erreur réseau). Réessayez.";
+                    SetNeighborStatus(btnAttackNorth, "⬆ NORD", "?", "btn-zone-neutral");
+                    SetNeighborStatus(btnAttackSouth, "⬇ SUD", "?", "btn-zone-neutral");
+                    SetNeighborStatus(btnAttackEast, "➡ EST", "?", "btn-zone-neutral");
+                    SetNeighborStatus(btnAttackWest, "⬅ OUEST", "?", "btn-zone-neutral");
+                    yield break;
+                }
+
+                ApplyNeighborStatus(btnAttackNorth, "⬆ NORD", owners, north, myUserId);
+                ApplyNeighborStatus(btnAttackSouth, "⬇ SUD", owners, south, myUserId);
+                ApplyNeighborStatus(btnAttackEast, "➡ EST", owners, east, myUserId);
+                ApplyNeighborStatus(btnAttackWest, "⬅ OUEST", owners, west, myUserId);
             }
         }
 
@@ -196,9 +214,34 @@ namespace Novgov.UI
             return owner == myUserId ? "À vous" : "Ennemi";
         }
 
-        private static void SetNeighborStatus(Button btn, string label, string status)
+        private static readonly string[] ZoneStatusClasses = { "btn-zone-neutral", "btn-team1", "btn-team2" };
+
+        /// <summary>Bascule aussi la classe CSS du bouton selon le statut réel (neutre/allié/ennemi)
+        /// — auparavant Nord/Sud portaient toujours la classe "ennemi" (rouge) et Est/Ouest toujours
+        /// "allié" (bleu), fixé par direction dans l'UXML et jamais mis à jour : une Zone neutre au
+        /// Nord s'affichait en rouge "ennemi" (voir rapport d'audit interface, défaut important #4).</summary>
+        private static void ApplyNeighborStatus(Button btn, string label, System.Collections.Generic.Dictionary<(int, int), string> owners, (int x, int y) tile, string myUserId)
         {
-            if (btn != null) btn.text = $"{label}\n({status})";
+            string status = DescribeOwner(owners, tile, myUserId);
+            string cssClass = status switch
+            {
+                "À vous" => "btn-team1",
+                "Ennemi" => "btn-team2",
+                _ => "btn-zone-neutral",
+            };
+            SetNeighborStatus(btn, label, status, cssClass);
+        }
+
+        private static void SetNeighborStatus(Button btn, string label, string status, string cssClass = null)
+        {
+            if (btn == null) return;
+            btn.text = $"{label}\n({status})";
+            if (cssClass != null)
+            {
+                foreach (string c in ZoneStatusClasses)
+                    if (c != cssClass) btn.RemoveFromClassList(c);
+                if (!btn.ClassListContains(cssClass)) btn.AddToClassList(cssClass);
+            }
         }
     }
 #endif

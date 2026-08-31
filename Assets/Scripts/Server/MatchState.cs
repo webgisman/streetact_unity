@@ -265,5 +265,26 @@ namespace Novgov.Server
                 default: return "Fantassin";
             }
         }
+
+        /// <summary>Coût en points de déploiement d'une unité de combat (voir
+        /// MatchSessionManager.CombatPointBudget). Le combat n'a aucun aléa de précision/esquive
+        /// (TacticalResolver.ApplyDamage applique des dégâts fixes), donc la composition la plus
+        /// lourde autorisée gagnait systématiquement tant que seul le NOMBRE d'unités était plafonné
+        /// (jusqu'à 4 CharLeopard, 2000 PV/~330 DPS cumulés, contre 1050 PV pour le repli par défaut
+        /// mixte) — aucune raison rationnelle de jamais varier sa composition (voir rapport d'audit
+        /// jouabilité, défaut bloquant #1). Barème approximatif basé sur (PV + DPS×10)/50, arrondi :
+        /// Fantassin 100PV/43DPS→1, VehiculeCanon 250PV/54DPS→2, Mortier 350PV (portée/utilité
+        /// indirecte)→2, CharLeopard 500PV/83DPS→3.</summary>
+        public static int DeploymentCost(UnitSpawnerUI.UnitType type)
+        {
+            switch (type)
+            {
+                case UnitSpawnerUI.UnitType.CharLeopard: return 3;
+                case UnitSpawnerUI.UnitType.VehiculeCanon: return 2;
+                case UnitSpawnerUI.UnitType.Mortier: return 2;
+                case UnitSpawnerUI.UnitType.BarricadeRoutiere: return 0;
+                default: return 1; // Fantassin
+            }
+        }
     }
 }

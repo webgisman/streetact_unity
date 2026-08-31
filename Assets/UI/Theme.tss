@@ -308,6 +308,14 @@ Button.btn-team2 {
     border-width: 3px;
 }
 
+/* Zone neutre (jamais capturée) sur l'écran Carte des Zones — distinct de btn-team1/btn-team2
+   pour ne pas laisser croire à une appartenance "alliée" ou "ennemie" qui n'existe pas encore. */
+Button.btn-zone-neutral {
+    border-top-color: var(--color-panel-border-dim);
+    border-left-color: var(--color-panel-border-dim);
+    border-width: 3px;
+}
+
 /* --- Barre d'escouade (portraits d'unités, coin haut-droit — cf. Commandos) --- */
 
 .squad-portrait {
@@ -368,6 +376,27 @@ Button.squad-portrait-btn.selected {
 
 .squad-portrait-hp-fill.low {
     background-color: var(--color-danger);
+}
+
+/* Pastille de comptage (coin bas-droit d'un portrait d'escouade, voir TacticalPathManager_UI.
+   InitSquadBar) — auparavant texte blanc brut sans fond à 12px directement sur l'icône : illisible
+   selon la couleur de l'icône en dessous, et bien en-deçà de tout seuil de lisibilité tactile (voir
+   rapport utilisateur sur le texte trop petit/incohérences de couleur). Même traitement que
+   .notif-badge (fond+bordure opaques, jamais dépendant du contenu affiché derrière). */
+.squad-count-badge {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    min-width: 22px;
+    padding: 1px 4px;
+    background-color: rgba(20, 18, 12, 0.9);
+    border-width: 1px;
+    border-color: var(--color-panel-border-dim);
+    border-radius: 8px;
+    color: var(--color-text);
+    font-size: 15px;
+    -unity-font-style: bold;
+    -unity-text-align: middle-center;
 }
 
 /* Pastille de notification (coin haut-droit de la cloche) : ne s'affiche que s'il y a quelque

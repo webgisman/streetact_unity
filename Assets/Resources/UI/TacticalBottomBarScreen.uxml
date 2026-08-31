@@ -41,16 +41,16 @@
                             <ui:Button name="view3d-button" class="btn-glass btn-icon-only" style="display: none; height: 48px; width: 48px; margin-right: 10px;">
                                 <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/magnifier.png');" />
                             </ui:Button>
-                            <ui:Button name="end-turn-button" class="btn-primary btn-with-icon" style="height: 44px; min-width: 150px; padding: 0 16px; justify-content: center;">
+                            <ui:Button name="end-turn-button" class="btn-primary btn-with-icon" style="height: 52px; min-width: 168px; padding: 0 18px; justify-content: center;">
                                 <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/play.png'); -unity-background-image-tint-color: var(--color-accent-text); margin-right: 8px;" />
-                                <ui:Label text="FIN DE TOUR" style="font-size: 15px;" />
+                                <ui:Label text="FIN DE TOUR" style="font-size: 20px;" />
                             </ui:Button>
                         </ui:VisualElement>
 
                         <!-- Execution Group -->
                         <ui:VisualElement name="execution-group" style="display: none; flex-direction: row; align-items: center; picking-mode: Position;">
-                            <ui:Label name="execution-label" text="ACTION EN COURS..." class="panel" style="color: var(--color-accent); font-size: 14px; -unity-font-style: bold; padding: 8px 14px; margin-right: 8px;" />
-                            <ui:Button name="skip-button" text="Passer" class="btn-secondary" style="height: 40px; padding: 0 12px; font-size: 13px;" />
+                            <ui:Label name="execution-label" text="ACTION EN COURS..." class="panel" style="color: var(--color-accent); font-size: 18px; -unity-font-style: bold; padding: 8px 14px; margin-right: 8px;" />
+                            <ui:Button name="skip-button" text="Passer" class="btn-secondary" style="height: 48px; padding: 0 14px; font-size: 17px;" />
                         </ui:VisualElement>
 
                     </ui:VisualElement>

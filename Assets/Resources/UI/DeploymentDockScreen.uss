@@ -13,7 +13,7 @@
    variante "glass" translucide utilisée par le reste de ce dock : un fond partiellement
    transparent ne lisait toujours pas comme "identique à FIN DE TOUR" (lui en remplissage plein). */
 .dock-tab-button {
-    min-height: 46px;
+    min-height: 52px;
     padding: 6px 12px;
     background-color: var(--color-accent);
     border-top-color: var(--bevel-light);
@@ -23,7 +23,7 @@
     border-width: 2px;
     border-radius: 2px;
     color: var(--color-accent-text);
-    font-size: 15px;
+    font-size: 19px;
     -unity-font-style: bold;
     letter-spacing: 1px;
     white-space: normal;
@@ -58,20 +58,20 @@
 
 .dock-title {
     color: var(--color-text);
-    font-size: 16px;
+    font-size: 19px;
     -unity-font-style: bold;
     letter-spacing: 1.5px;
 }
 
 .dock-effectifs {
     color: var(--color-accent);
-    font-size: 13px;
+    font-size: 16px;
     -unity-font-style: bold;
 }
 
 .section-header {
     color: var(--color-text-dim);
-    font-size: 12px;
+    font-size: 15px;
     -unity-font-style: bold;
     letter-spacing: 1.5px;
     margin-top: 16px;
@@ -87,8 +87,8 @@
 }
 
 .dock-team-btn {
-    min-height: 36px;
-    font-size: 13px;
+    min-height: 42px;
+    font-size: 16px;
     border-radius: 2px;
     border-width: 1px;
     border-color: var(--color-panel-border-dim);
@@ -118,8 +118,8 @@
     border-color: var(--color-panel-border-dim);
     border-radius: 2px;
     color: var(--color-text);
-    font-size: 13px;
-    padding: 9px 11px;
+    font-size: 16px;
+    padding: 10px 11px;
     margin-bottom: 6px;
     -unity-text-align: middle-left;
     transition-duration: 0.2s;
@@ -137,8 +137,8 @@
 
 .dock-action-btn {
     border-radius: 2px;
-    font-size: 12px;
-    padding: 9px;
+    font-size: 15px;
+    padding: 10px;
     -unity-font-style: bold;
     margin-bottom: 6px;
     transition-duration: 0.2s;
@@ -188,8 +188,8 @@
 }
 
 .dock-unit-icon {
-    width: 18px;
-    height: 18px;
+    width: 22px;
+    height: 22px;
     margin-right: 8px;
     flex-shrink: 0;
     -unity-background-scale-mode: scale-to-fit;

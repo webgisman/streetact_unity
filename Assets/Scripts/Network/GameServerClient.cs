@@ -28,6 +28,14 @@ namespace Novgov.Network
         private readonly object sendLock = new object();
         private volatile bool isConnected = false;
         private volatile string pendingDisconnectReason = null;
+        // Délai avant de couper réellement la connexion après une mise en arrière-plan (voir
+        // OnApplicationPause) : un simple changement d'appli furtif (notification, verrouillage
+        // d'écran bref) ne doit pas suffire à faire perdre le match — seule une absence prolongée
+        // doit déclencher la déconnexion. Utilise System.Threading.Timer (pas une coroutine) car
+        // Unity arrête sa boucle Update()/coroutines pendant la pause : un minuteur .NET classique
+        // continue de tourner sur son propre thread indépendamment du cycle de vie Unity.
+        private const float BackgroundGraceSeconds = 12f;
+        private Timer pauseGraceTimer;
         // Toutes les ~5s (voir 03-network-protocol.md, message "heartbeat") : sans cet envoi
         // régulier, le serveur (une fois son propre timeout de lecture rendu fini, voir
         // GameServerBootstrap.HandleHandshake) considérerait un joueur simplement silencieux
@@ -137,6 +145,7 @@ namespace Novgov.Network
 
         private void OnDestroy()
         {
+            pauseGraceTimer?.Dispose();
             Disconnect("destroyed");
         }
 
@@ -148,12 +157,25 @@ namespace Novgov.Network
         // vraie déconnexion (Ghost dès le tour suivant).
         private void OnApplicationQuit()
         {
+            pauseGraceTimer?.Dispose();
             Disconnect("app_quit");
         }
 
         private void OnApplicationPause(bool pauseStatus)
         {
-            if (pauseStatus) Disconnect("app_paused");
+            if (pauseStatus)
+            {
+                pauseGraceTimer?.Dispose();
+                pauseGraceTimer = new Timer(_ => Disconnect("app_paused"), null,
+                    TimeSpan.FromSeconds(BackgroundGraceSeconds), Timeout.InfiniteTimeSpan);
+            }
+            else
+            {
+                // Retour au premier plan avant l'expiration du délai de grâce : la connexion tient
+                // toujours, on annule la déconnexion différée.
+                pauseGraceTimer?.Dispose();
+                pauseGraceTimer = null;
+            }
         }
     }
 }

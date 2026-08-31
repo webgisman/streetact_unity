@@ -49,8 +49,15 @@ namespace Novgov.Server
         // Fantassin/CharLeopard/VehiculeCanon/Mortier) + jusqu'à 8 barricades (même stock que le
         // dock solo, voir UnitSpawnerUI.maxBarricadesPerTeam) — au-delà, ou un type d'unité hors de
         // l'enum, la soumission ENTIÈRE est rejetée et ce camp reçoit le repli automatique.
-        private const int MaxDeployedCombatUnits = 4;
+        private const int MaxDeployedCombatUnits = 6;
         private const int MaxDeployedBarricades = 8;
+        // Budget en points (voir UnitTypeStats.DeploymentCost) : plafonne la PUISSANCE
+        // totale déployée, pas seulement le nombre d'unités — sans ça, déployer le nombre max
+        // d'unités les plus lourdes (CharLeopard) était toujours strictement supérieur à toute
+        // composition mixte, tuant toute variété tactique (voir rapport d'audit jouabilité, défaut
+        // bloquant #1). 8 points permet par ex. 2 CharLeopard + 2 Fantassin, ou 4 VehiculeCanon, ou
+        // 1 CharLeopard + 1 Mortier + 1 VehiculeCanon + 1 Fantassin — mais jamais 4 CharLeopard (12).
+        private const int CombatPointBudget = 8;
         private const int ZoneControlTurnCap = 20;
         // Sans plafond, deux joueurs qui se contentent de se cacher chaque tour pouvaient faire
         // durer une partie indéfiniment (occupant inutilement une connexion/de la mémoire pour
@@ -668,25 +675,28 @@ namespace Novgov.Server
         }
 
         /// <summary>Vrai si le multi-ensemble de placements respecte le budget autorisé (voir
-        /// MaxDeployedCombatUnits/MaxDeployedBarricades) et ne contient que des types/coordonnées
-        /// valides — sinon la soumission ENTIÈRE est rejetée (repli automatique pour tout ce camp),
-        /// plutôt que d'essayer de n'en garder qu'une partie.</summary>
+        /// MaxDeployedCombatUnits/MaxDeployedBarricades/CombatPointBudget) et ne contient que des
+        /// types/coordonnées valides — sinon la soumission ENTIÈRE est rejetée (repli automatique
+        /// pour tout ce camp), plutôt que d'essayer de n'en garder qu'une partie.</summary>
         private static bool IsRosterValid(UnitPlacement[] placements)
         {
             if (placements == null || placements.Length == 0) return false;
             if (placements.Length > MaxDeployedCombatUnits + MaxDeployedBarricades) return false;
 
-            int combatCount = 0, barricadeCount = 0;
+            int combatCount = 0, barricadeCount = 0, totalCost = 0;
             foreach (var p in placements)
             {
                 if (!Enum.IsDefined(typeof(UnitSpawnerUI.UnitType), p.unit_type)) return false;
                 if (float.IsNaN(p.x) || float.IsNaN(p.y) || float.IsNaN(p.z)) return false;
                 if (float.IsInfinity(p.x) || float.IsInfinity(p.y) || float.IsInfinity(p.z)) return false;
 
-                if ((UnitSpawnerUI.UnitType)p.unit_type == UnitSpawnerUI.UnitType.BarricadeRoutiere) barricadeCount++;
+                var type = (UnitSpawnerUI.UnitType)p.unit_type;
+                if (type == UnitSpawnerUI.UnitType.BarricadeRoutiere) barricadeCount++;
                 else combatCount++;
+                totalCost += UnitTypeStats.DeploymentCost(type);
             }
-            return combatCount <= MaxDeployedCombatUnits && barricadeCount <= MaxDeployedBarricades;
+            return combatCount <= MaxDeployedCombatUnits && barricadeCount <= MaxDeployedBarricades
+                && totalCost <= CombatPointBudget;
         }
 
         /// <summary>Ramène (x, z) dans la zone de déploiement légale du camp (cercle centré sur le
@@ -2407,7 +2417,14 @@ namespace Novgov.Server
                 // au lieu d'écraser silencieusement son résultat (voir rapport d'audit §1.1).
                 yield return CaptureZoneInDb(tileX, tileY, attacker.UserId, null, ok => captured = ok);
                 if (captured)
-                    attacker.Send(new NetMessage { type = "zone_captured", success = true, zone_tile_x = tileX, zone_tile_y = tileY });
+                {
+                    // Capture d'une Zone neutre = victoire de conquête au même titre qu'un combat
+                    // gagné contre une garnison : doit rapporter le même delta de classement, sinon
+                    // le geste le plus fréquent du mode Conquête (capturer du neutre) reste sans
+                    // aucune récompense visible (voir rapport d'audit jouabilité, défaut bloquant #3).
+                    yield return ApplyConquestRatingDelta(attacker, captured: true, won: true);
+                    attacker.Send(new NetMessage { type = "zone_captured", success = true, zone_tile_x = tileX, zone_tile_y = tileY, your_new_rating = attacker.NewRating, rating_delta = attacker.RatingDelta });
+                }
                 else
                     attacker.Send(new NetMessage { type = "zone_attack_result", success = false, reason = "zone_taken", zone_tile_x = tileX, zone_tile_y = tileY });
                 attacker.Close();

@@ -305,7 +305,7 @@ public class TacticalRadarUI : MonoBehaviour
 
         // 3. En-tête HUD
         GUIStyle headerStyle = new GUIStyle(GUI.skin.label);
-        headerStyle.fontSize = 9;
+        headerStyle.fontSize = 11;
         headerStyle.fontStyle = FontStyle.Bold;
         headerStyle.alignment = TextAnchor.UpperCenter;
         headerStyle.normal.textColor = new Color(0.871f, 0.682f, 0.282f, 1f);
@@ -432,7 +432,7 @@ public class TacticalRadarUI : MonoBehaviour
 
         // 10. Pied de page avec compteur d'unités HUD
         GUIStyle footerStyle = new GUIStyle(GUI.skin.label);
-        footerStyle.fontSize = 10;
+        footerStyle.fontSize = 11;
         footerStyle.fontStyle = FontStyle.Bold;
         footerStyle.alignment = TextAnchor.MiddleCenter;
         footerStyle.normal.textColor = Color.white;

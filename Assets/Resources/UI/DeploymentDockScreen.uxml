@@ -2,13 +2,18 @@
     <Style src="DeploymentDockScreen.uss" />
     <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore; flex-direction: row; justify-content: flex-start;">
 
-        <ui:VisualElement style="position: absolute; left: 4%; top: 0; bottom: 3%; width: 60%; max-width: 380px; flex-direction: column-reverse; align-items: flex-start; picking-mode: Ignore;">
-            <ui:Button name="tab-button" class="dock-tab-button btn-with-icon" style="width: 100%; justify-content: center;">
-                <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/crate.png'); -unity-background-image-tint-color: var(--color-accent-text);" />
-                <ui:Label name="tab-button-label" text="DÉPLOIEMENT" />
-            </ui:Button>
-
-            <ui:VisualElement name="dock-panel" class="dock-panel slide-in" style="display: none; width: 100%; max-height: 85%; margin-bottom: 3%;">
+        <!-- Hauteur FIXE (85%) quel que soit l'état ouvert/fermé — jamais recalculée au contenu —
+             avec justify-content:flex-end pour garder le tab-button collé au bas de cette zone fixe.
+             Tenté après deux structures différentes (top:0+bottom:3%+column-reverse, puis bottom:3%
+             seul en hauteur auto) qui présentaient TOUTES DEUX le même bug de rendu confirmé sur
+             Android 16 : le layout (worldBound) est correct mais le PIXEL affiché reste figé sur une
+             mise en page périmée dès que dockPanel repasse à display:None, décalant le bouton visible
+             de ~800px par rapport à sa vraie zone cliquable. Hypothèse testée ici : ce n'est pas la
+             présence de top+bottom ni column-reverse en soi, mais le fait que le CONTENEUR PARENT
+             change lui-même de taille (auto-height) à chaque bascule qui déclenche le bug — une
+             hauteur constante ne devrait plus jamais redimensionner ce conteneur. -->
+        <ui:VisualElement style="position: absolute; left: 4%; bottom: 3%; width: 60%; max-width: 380px; height: 85%; justify-content: flex-end; align-items: flex-start; picking-mode: Ignore;">
+            <ui:VisualElement name="dock-panel" class="dock-panel slide-in" style="display: none; width: 100%; flex-grow: 1; margin-bottom: 3%;">
                 <ui:VisualElement style="flex-direction: row; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <ui:Label text="QG RENFORTS" class="dock-title" />
                     <ui:Label name="effectifs-label" text="0 / 12" class="dock-effectifs" />
@@ -66,6 +71,11 @@
                     </ui:Button>
                 </ui:ScrollView>
             </ui:VisualElement>
+
+            <ui:Button name="tab-button" class="dock-tab-button btn-with-icon" style="width: 100%; justify-content: center;">
+                <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/crate.png'); -unity-background-image-tint-color: var(--color-accent-text);" />
+                <ui:Label name="tab-button-label" text="DÉPLOIEMENT" />
+            </ui:Button>
         </ui:VisualElement>
 
         <ui:Label name="placing-banner" text="" class="dock-placing-banner" style="display: none; position: absolute; top: 10%; align-self: center; picking-mode: Ignore;" />

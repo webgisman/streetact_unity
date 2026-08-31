@@ -87,6 +87,59 @@ public class UIScreenManager : MonoBehaviour
             root.Add(instance);
             screens[name] = instance;
         }
+
+        BuildDebugOverlay(root);
+    }
+
+    // --- Outil de vérification (diagnostic écrans superposés) ---------------------------------
+    // Étiquette toujours au sommet de la pile (ajoutée en dernier) listant les écrans actuellement
+    // en display:Flex — sert à confirmer/infirmer empiriquement un chevauchement plutôt que de le
+    // deviner depuis une capture d'écran. Désactivable via DebugOverlayEnabled.
+    public static bool DebugOverlayEnabled = false;
+    private Label debugOverlayLabel;
+
+    private void BuildDebugOverlay(VisualElement root)
+    {
+        debugOverlayLabel = new Label();
+        debugOverlayLabel.style.position = Position.Absolute;
+        debugOverlayLabel.style.left = 4;
+        debugOverlayLabel.style.top = 4;
+        debugOverlayLabel.style.color = Color.yellow;
+        debugOverlayLabel.style.backgroundColor = new StyleColor(new Color(0f, 0f, 0f, 0.6f));
+        debugOverlayLabel.style.fontSize = 16;
+        debugOverlayLabel.style.paddingLeft = 4;
+        debugOverlayLabel.style.paddingRight = 4;
+        debugOverlayLabel.pickingMode = PickingMode.Ignore;
+        debugOverlayLabel.style.display = DebugOverlayEnabled ? DisplayStyle.Flex : DisplayStyle.None;
+        root.Add(debugOverlayLabel);
+    }
+
+    // Résolution au dernier calcul du padding de zone sûre (voir ApplySafeAreaPadding) — Awake()
+    // tourne parfois avant que la fenêtre Android n'ait fini de se dimensionner (barres système pas
+    // encore posées), donc Screen.width/height à cet instant peuvent différer de la résolution
+    // réelle finale. Un padding calculé en pourcentage sur cette taille provisoire reste ensuite
+    // figé à un pourcentage devenu FAUX une fois la fenêtre stabilisée sur sa vraie taille : tout le
+    // reste de la mise en page (bottom:X%, etc.) se recalcule en continu sur la bonne résolution,
+    // mais pas ce padding — d'où un décalage grandissant entre la position VISUELLE d'un élément
+    // ancré en bord d'écran (qui suit le padding figé) et sa zone RÉELLEMENT cliquable (worldBound,
+    // qui suit le padding + la vraie résolution) — confirmé en dur sur le bouton "DÉPLOIEMENT" du
+    // dock (cliquable uniquement près du vrai bord bas de l'écran, rendu visuellement ~35% plus haut).
+    private int lastSafeAreaScreenW = -1;
+    private int lastSafeAreaScreenH = -1;
+
+    private void Update()
+    {
+        if (Screen.width != lastSafeAreaScreenW || Screen.height != lastSafeAreaScreenH)
+            ApplySafeAreaPadding(RootVisualElement);
+
+        if (debugOverlayLabel == null) return;
+        debugOverlayLabel.style.display = DebugOverlayEnabled ? DisplayStyle.Flex : DisplayStyle.None;
+        if (!DebugOverlayEnabled) return;
+
+        var visible = new List<string>();
+        foreach (var kv in screens)
+            if (kv.Value.style.display == DisplayStyle.Flex) visible.Add(kv.Key);
+        debugOverlayLabel.text = "ÉCRANS VISIBLES: " + (visible.Count > 0 ? string.Join(", ", visible) : "(aucun)");
     }
 
     /// <summary>
@@ -94,15 +147,20 @@ public class UIScreenManager : MonoBehaviour
     /// coins arrondis, barre de navigation gestuelle en bas) et peut recouvrir purement et
     /// simplement des éléments ancrés en bord d'écran (ex: le bouton "Fin de tour" à 16px du bord
     /// bas-droit) — invisible dans l'Éditeur, où cette zone n'existe pas, donc jamais repéré en dev.
-    /// On calcule l'inset une fois ici en POURCENTAGE de l'écran (jamais en pixels/points) : ça
-    /// évite toute conversion écran→panel dépendante du mode de scaling du PanelSettings, puisque
-    /// Screen.safeArea et Screen.width/height utilisent déjà le même repère.
+    /// On calcule l'inset ici en POURCENTAGE de l'écran (jamais en pixels/points) : ça évite toute
+    /// conversion écran→panel dépendante du mode de scaling du PanelSettings, puisque
+    /// Screen.safeArea et Screen.width/height utilisent déjà le même repère. Rappelé depuis Update()
+    /// (voir lastSafeAreaScreenW/H) à chaque fois que Screen.width/height changent réellement — pas
+    /// seulement une fois dans Awake(), qui peut tourner avant que la fenêtre Android n'ait fini de
+    /// se dimensionner et fige alors un pourcentage calculé sur une résolution provisoire.
     /// </summary>
-    private static void ApplySafeAreaPadding(VisualElement root)
+    private void ApplySafeAreaPadding(VisualElement root)
     {
-        Rect safe = Screen.safeArea;
+        lastSafeAreaScreenW = Screen.width;
+        lastSafeAreaScreenH = Screen.height;
         if (Screen.width <= 0 || Screen.height <= 0) return;
 
+        Rect safe = Screen.safeArea;
         float leftPct = (safe.xMin / Screen.width) * 100f;
         float rightPct = ((Screen.width - safe.xMax) / Screen.width) * 100f;
         float bottomPct = (safe.yMin / Screen.height) * 100f;

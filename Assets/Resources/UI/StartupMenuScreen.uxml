@@ -2,7 +2,7 @@
     <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(4, 5, 6, 0.9); picking-mode: Ignore;">
         <ui:VisualElement class="panel" style="width: 75%; max-width: 620px;">
             <ui:VisualElement style="width: 96px; height: 96px; align-self: center; margin-bottom: 12px; background-image: url('/Assets/Icon/NovgovIcon.png'); -unity-background-scale-mode: scale-to-fit;" />
-            <ui:Label text="NOVGOV : CHAMP DE BATAILLE" class="title" style="margin-bottom: 24px; font-size: 26px;" />
+            <ui:Label text="NOVGOV : CHAMP DE BATAILLE" class="title" style="margin-bottom: 24px;" />
 
             <ui:Button name="btn-offline" class="btn-secondary btn-with-icon" style="min-height: 96px; margin-bottom: 10px;">
                 <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/city.png');" />

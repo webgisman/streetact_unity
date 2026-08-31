@@ -326,11 +326,27 @@ namespace Novgov.Network
             StartCoroutine(ConnectToGameServerCoroutine());
         }
 
+        /// <summary>Traduit les codes internes de GameServerClient.Disconnect en message lisible par
+        /// le joueur — auparavant affiché tel quel (ex. "Connexion au serveur perdue (app_paused).")
+        /// (voir rapport d'audit interface, défaut bloquant #1).</summary>
+        private static string DescribeDisconnectReason(string reason) => reason switch
+        {
+            // Après le délai de grâce de GameServerClient.BackgroundGraceSeconds : l'appli est
+            // restée en arrière-plan trop longtemps, le serveur a basculé vos unités en garde
+            // automatique (Ghost) pour ne pas bloquer votre adversaire.
+            "app_paused" => "Vous êtes resté trop longtemps hors de l'application : vos unités ont été laissées en garde automatique et la partie a continué sans vous.",
+            "app_quit" => "Partie interrompue : l'application a été fermée.",
+            "connection_lost" => "Connexion au serveur perdue. Vérifiez votre réseau et réessayez.",
+            "send_failed" => "Impossible de communiquer avec le serveur. Vérifiez votre réseau et réessayez.",
+            "map_load_failed" => "Le chargement de la carte a échoué. Réessayez.",
+            _ => "Connexion au serveur perdue. Réessayez.",
+        };
+
         private void HandleServerDisconnected(string reason)
         {
             if (uiState == UiState.InMatch || uiState == UiState.Matchmaking || uiState == UiState.Deployment)
             {
-                statusMessage = "Connexion au serveur perdue (" + reason + ").";
+                statusMessage = DescribeDisconnectReason(reason);
                 SetUiState(UiState.Login);
                 IsActive = false;
                 IsDeploymentPhaseActive = false;
@@ -358,7 +374,7 @@ namespace Novgov.Network
 
         private void OnZoneCaptured(NetMessage msg)
         {
-            OnZoneResult?.Invoke($"Zone ({msg.zone_tile_x},{msg.zone_tile_y}) capturée sans résistance !");
+            OnZoneResult?.Invoke($"Zone ({msg.zone_tile_x},{msg.zone_tile_y}) capturée sans résistance ! (+{msg.rating_delta} classement)");
         }
 
         private void OnZoneAttackResult(NetMessage msg)
@@ -907,8 +923,11 @@ namespace Novgov.Network
         private void RefreshHudDynamicFields()
         {
             timerLabel.text = lastServerSecondsRemaining >= 0 ? $"⏱️ {lastServerSecondsRemaining}s" : "";
+            // Couleurs alignées sur NovgovTheme (miroir C# de Theme.tss) plutôt que des valeurs RGB
+            // codées en dur qui ne correspondaient à aucun token de la palette (voir rapport d'audit
+            // interface, défaut important #6) — --color-danger pour l'urgence, --color-text sinon.
             timerLabel.style.color = lastServerSecondsRemaining <= 10 && lastServerSecondsRemaining >= 0
-                ? new StyleColor(Color.red) : new StyleColor(new Color(0.886f, 0.910f, 0.925f));
+                ? new StyleColor(NovgovTheme.Danger) : new StyleColor(NovgovTheme.Neutral);
 
             phaseLabel.text = !string.IsNullOrEmpty(statusMessage)
                 ? statusMessage
