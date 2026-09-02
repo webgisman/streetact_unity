@@ -115,6 +115,23 @@ namespace Novgov.Network
         private VisualElement zoneBarContainer, zoneFillTeam1, zoneFillTeam2;
         private bool uiBound = false;
 
+        // Entraînement contre l'IA en attendant un adversaire (2026-09-02) — voir StartPracticeVsAI
+        // et MatchSessionManager.HandlePracticeAiMessage côté serveur.
+        private Button playVsAiButton;
+        private VisualElement aiHintRow;
+        private float matchmakingWaitTimer = 0f;
+        // Délai avant de proposer l'entraînement IA — assez court pour ne pas laisser le joueur
+        // attendre les bras croisés, assez long pour laisser une vraie chance à l'appariement
+        // normal de réussir en premier (un adversaire déjà en file est apparié en moins d'une
+        // seconde, voir MatchSessionManager.TryStartMatch).
+        private const float PlayVsAiOfferDelaySeconds = 6f;
+        // Vrai UNIQUEMENT pendant la fenêtre où StartPracticeVsAI ferme volontairement la connexion
+        // en file d'attente pour en rouvrir une nouvelle dédiée à l'entraînement — sans ce garde,
+        // HandleServerDisconnected traiterait cette déconnexion voulue comme une perte de connexion
+        // réseau et ramènerait le joueur à l'écran de connexion au lieu de le laisser rejoindre
+        // l'entraînement.
+        private bool isSwitchingToPractice = false;
+
         private void Awake()
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -133,6 +150,28 @@ namespace Novgov.Network
             if (uiState == UiState.Connecting || uiState == UiState.Matchmaking)
             {
                 if (waitingStatusLabel != null) waitingStatusLabel.text = statusMessage;
+
+                // Offre d'entraînement IA : seulement en file d'attente réelle (Matchmaking, pas le
+                // bref "Connecting" de recherche d'instance libre), et jamais pour la Conquête (une
+                // attaque de Zone se résout immédiatement, ce n'est pas une file d'attente entre
+                // deux joueurs — voir HandlePracticeAiMessage côté serveur pour le même principe).
+                bool eligible = uiState == UiState.Matchmaking && selectedMode != "conquest" && selectedMode != "practice_ai";
+                if (eligible)
+                {
+                    matchmakingWaitTimer += Time.deltaTime;
+                    bool shouldShow = matchmakingWaitTimer >= PlayVsAiOfferDelaySeconds;
+                    if (playVsAiButton != null && (playVsAiButton.style.display == DisplayStyle.None) == shouldShow)
+                    {
+                        playVsAiButton.style.display = shouldShow ? DisplayStyle.Flex : DisplayStyle.None;
+                    }
+                    if (aiHintRow != null) aiHintRow.style.display = shouldShow ? DisplayStyle.Flex : DisplayStyle.None;
+                }
+                else
+                {
+                    matchmakingWaitTimer = 0f;
+                    if (playVsAiButton != null) playVsAiButton.style.display = DisplayStyle.None;
+                    if (aiHintRow != null) aiHintRow.style.display = DisplayStyle.None;
+                }
             }
             else if (uiState == UiState.InMatch)
             {
@@ -211,6 +250,7 @@ namespace Novgov.Network
         /// ZoneMapController, abonné à OnZoneResult), ModeSelect pour Deathmatch/Zone de Contrôle.</summary>
         private void FailConnection(string message)
         {
+            isSwitchingToPractice = false;
             if (selectedMode == "conquest")
             {
                 OnZoneResult?.Invoke(message);
@@ -224,6 +264,7 @@ namespace Novgov.Network
 
         private IEnumerator ConnectToGameServerCoroutine()
         {
+            matchmakingWaitTimer = 0f;
             statusMessage = "Recherche d'un serveur de jeu libre...";
             SetUiState(UiState.Matchmaking);
 
@@ -310,7 +351,32 @@ namespace Novgov.Network
                 has_home_tile = hasHomeTile
             });
 
-            statusMessage = selectedMode == "conquest" ? $"Attaque de la Zone ({attackTileX},{attackTileY})..." : "Recherche d'adversaire...";
+            statusMessage = selectedMode == "conquest" ? $"Attaque de la Zone ({attackTileX},{attackTileY})..."
+                : selectedMode == "practice_ai" ? "Connexion à l'entraînement contre l'IA..."
+                : "Recherche d'adversaire...";
+
+            // Transition volontaire vers l'entraînement terminée (voir StartPracticeVsAI) — les
+            // déconnexions à partir d'ici sont à nouveau de vraies pertes de connexion.
+            isSwitchingToPractice = false;
+        }
+
+        /// <summary>Bascule le joueur, actuellement en file d'attente Deathmatch/Zone de Contrôle,
+        /// vers une partie d'entraînement immédiate contre l'IA sur la carte par défaut (voir
+        /// MatchSessionManager.HandlePracticeAiMessage) — pour patienter sans rester les bras
+        /// croisés en attendant un vrai adversaire. Il n'existe pas de message "annuler la file
+        /// d'attente" dans le protocole : referme simplement la connexion en cours (le serveur
+        /// retire alors automatiquement l'ancienne entrée de sa file, voir
+        /// MatchSessionManager.Update, "waitingDeathmatch.RemoveAll(c => c.IsDisconnected)") et en
+        /// ouvre une nouvelle dédiée à l'entraînement — même mécanique que ConnectToGameServerCoroutine,
+        /// juste avec mode="practice_ai".</summary>
+        public void StartPracticeVsAI()
+        {
+            if (uiState != UiState.Matchmaking) return;
+            isSwitchingToPractice = true;
+            GameServerClient.Instance?.Disconnect("switch_to_ai_practice");
+            selectedMode = "practice_ai";
+            matchmakingWaitTimer = 0f;
+            StartCoroutine(ConnectToGameServerCoroutine());
         }
 
         /// <summary>Demande au serveur d'attaquer/capturer la Zone de Conquête (tileX,tileY) — voir
@@ -344,6 +410,11 @@ namespace Novgov.Network
 
         private void HandleServerDisconnected(string reason)
         {
+            // Déconnexion volontaire pour rebasculer vers l'entraînement IA (voir
+            // StartPracticeVsAI) — une reconnexion est déjà en cours, ne pas la traiter comme une
+            // vraie perte de connexion réseau.
+            if (isSwitchingToPractice) return;
+
             if (uiState == UiState.InMatch || uiState == UiState.Matchmaking || uiState == UiState.Deployment)
             {
                 statusMessage = DescribeDisconnectReason(reason);
@@ -643,6 +714,15 @@ namespace Novgov.Network
                 else
                     resultText = $"DÉFAITE — la Zone ({msg.zone_tile_x},{msg.zone_tile_y}) reste aux mains de son propriétaire.";
             }
+            else if (currentMode == "practice_ai")
+            {
+                // Entraînement hors-score (voir MatchSessionManager.RunPracticeVsAI) : jamais de
+                // texte "Classement" en dessous (your_new_rating reste à 0, voir ratingText), pour
+                // ne pas laisser croire que cette partie compte.
+                resultText = msg.winner_team == 0 ? "Entraînement interrompu."
+                    : msg.winner_team == localTeamId ? "VICTOIRE contre l'IA ! (Entraînement)"
+                    : "DÉFAITE contre l'IA. (Entraînement)";
+            }
             else
             {
                 resultText = msg.winner_team == 0 ? "Partie interrompue."
@@ -817,6 +897,9 @@ namespace Novgov.Network
 
             waitingRoot = UIScreenManager.Instance.GetScreen("Waiting");
             waitingStatusLabel = waitingRoot.Q<Label>("status-label");
+            playVsAiButton = waitingRoot.Q<Button>("btn-play-vs-ai");
+            aiHintRow = waitingRoot.Q<VisualElement>("ai-hint-row");
+            if (playVsAiButton != null) playVsAiButton.clicked += StartPracticeVsAI;
 
             hudRoot = UIScreenManager.Instance.GetScreen("InMatchHud");
             teamBanner = hudRoot.Q<Label>("team-banner");
@@ -922,6 +1005,16 @@ namespace Novgov.Network
 
         private void RefreshHudDynamicFields()
         {
+            // Dégagement dynamique sous le radar (voir InMatchHudScreen.uxml) — un hardcode de
+            // 180px s'y calibrait sur l'ancienne taille FIXE du radar (120px) ; depuis son
+            // agrandissement dynamique (TacticalRadarUI, jusqu'à 230px, 2026-09-02), ce hardcode
+            // aurait laissé la bannière équipe/timer chevaucher le radar. Suit sa vraie hauteur
+            // réelle à chaque frame (espace UI Toolkit, voir BottomEdgeVirtualY) avec une petite
+            // marge ; repli sur une valeur raisonnable si le radar est masqué (vue 3D Action) pour
+            // ne pas coller la bannière tout en haut de l'écran.
+            float radarBottom = TacticalRadarUI.BottomEdgeVirtualY;
+            hudRoot.style.paddingTop = radarBottom > 0f ? radarBottom + 12f : 40f;
+
             timerLabel.text = lastServerSecondsRemaining >= 0 ? $"⏱️ {lastServerSecondsRemaining}s" : "";
             // Couleurs alignées sur NovgovTheme (miroir C# de Theme.tss) plutôt que des valeurs RGB
             // codées en dur qui ne correspondaient à aucun token de la palette (voir rapport d'audit

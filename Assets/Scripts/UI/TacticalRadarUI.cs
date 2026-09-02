@@ -47,7 +47,13 @@ public class TacticalRadarUI : MonoBehaviour
 
     [Header("Radar Settings")]
     public float radarRange = 90f;  // Portée de détection en mètres
-    public float radarSize = 120f;  // Diamètre optimisé pour s'intégrer au tableau de bord sans empiéter sur Fin de Tour
+    // Diamètre en pixels virtuels (avant mise à l'échelle uiScale) — recalculé chaque frame dans
+    // OnGUI() comme un pourcentage de la largeur d'écran virtuelle plutôt qu'une valeur fixe
+    // (2026-09-02, retour utilisateur "le radar est petit") : une valeur fixe de 120px paraissait
+    // minuscule sur un vrai téléphone (bien plus de pixels que la fenêtre Game de l'Éditeur où ce
+    // chiffre avait été réglé à l'œil) ET ne s'adapterait pas correctement entre portrait (largeur
+    // étroite) et paysage (largeur large) — voir ClampedRadarSize().
+    public float radarSize = 120f;
 
     private Texture2D radarBgTex;
     private Texture2D borderTex;
@@ -254,12 +260,20 @@ public class TacticalRadarUI : MonoBehaviour
     /// </summary>
     public static float BottomEdgeScreenY { get; private set; } = 0f;
 
+    /// <summary>Même valeur que BottomEdgeScreenY, mais dans l'espace "virtuel" d'UI Toolkit (avant
+    /// multiplication par uiScale) — c'est CETTE valeur qu'il faut utiliser pour un style UI
+    /// Toolkit (ex: `style.paddingTop`), jamais BottomEdgeScreenY directement (pixels écran réels,
+    /// une échelle différente dès que le panneau UI Toolkit ne fait pas 1:1 avec Screen.height).
+    /// Voir MultiplayerMatchController.RefreshHudDynamicFields (dégagement dynamique sous le
+    /// radar, 2026-09-02 — remplace un hardcode de 180px calibré sur l'ancienne taille fixe).</summary>
+    public static float BottomEdgeVirtualY { get; private set; } = 0f;
+
     void OnGUI()
     {
-        if (GameManagerUI.Instance != null && GameManagerUI.Instance.IsStartupSelectionActive) { BottomEdgeScreenY = 0f; return; }
+        if (GameManagerUI.Instance != null && GameManagerUI.Instance.IsStartupSelectionActive) { BottomEdgeScreenY = 0f; BottomEdgeVirtualY = 0f; return; }
 
         // En vue 3D Action, masquer le radar pour garder un écran 100% épuré et immersif
-        if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action) { BottomEdgeScreenY = 0f; return; }
+        if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action) { BottomEdgeScreenY = 0f; BottomEdgeVirtualY = 0f; return; }
 
         GUI.depth = -100;
         if (radarBgTex == null) CreateRadarTextures();
@@ -276,13 +290,30 @@ public class TacticalRadarUI : MonoBehaviour
         GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(uiScale, uiScale, 1f));
 
         float virtualW = Screen.width / uiScale;
+        float virtualH = Screen.height / uiScale;
+        // Taille proportionnelle à la plus PETITE dimension virtuelle de l'écran (celle qui
+        // contraint réellement l'espace disponible, quelle que soit l'orientation) — 26% de cette
+        // dimension, borné [140, 230] pour rester lisible sur un petit écran et raisonnable sur une
+        // tablette. Remplace l'ancienne valeur fixe de 120px, jugée trop petite en jeu réel.
+        radarSize = Mathf.Clamp(Mathf.Min(virtualW, virtualH) * 0.26f, 140f, 230f);
+        // Taille de police du bandeau bas ("ALLIÉS: X | CONTACTS: Y", un texte plus long que
+        // l'en-tête) — plafonnée BIEN PLUS BAS que l'en-tête (14 vs 20) : à la taille du radar
+        // maximale (230px), ce texte au format de l'en-tête aurait dépassé la largeur disponible
+        // et forcé un retour à la ligne IMGUI dans une zone prévue pour une seule ligne, faisant
+        // chevaucher les deux lignes l'une sur l'autre (bug constaté à l'écran sur émulateur,
+        // 2026-09-02, juste après l'agrandissement du radar). totalH réserve maintenant une
+        // hauteur de bandeau qui suit CETTE police (jamais un +16px fixe, qui ne s'adaptait à
+        // aucune des deux tailles de police).
+        int footerFontSize = Mathf.RoundToInt(Mathf.Clamp(radarSize * 0.06f, 10f, 14f));
+        float footerBandHeight = footerFontSize + 12f;
         // Position : Encastré en haut à droite dans le tableau de bord
         float pad = 8f;
         float rX = virtualW - radarSize - pad;
         float rY = pad;
-        float totalH = radarSize + 16f;
+        float totalH = radarSize + footerBandHeight;
         Rect radarRect = new Rect(rX, rY, radarSize, totalH);
-        BottomEdgeScreenY = (rY + totalH) * uiScale;
+        BottomEdgeVirtualY = rY + totalH;
+        BottomEdgeScreenY = BottomEdgeVirtualY * uiScale;
 
         // 1. Panneau de fond
         GUI.DrawTexture(radarRect, radarBgTex);
@@ -303,13 +334,15 @@ public class TacticalRadarUI : MonoBehaviour
         GUI.DrawTexture(new Rect(rX + radarSize - cornerLen, rY + totalH - bThick, cornerLen, bThick), borderTex);
         GUI.DrawTexture(new Rect(rX + radarSize - bThick, rY + totalH - cornerLen, bThick, cornerLen), borderTex);
 
-        // 3. En-tête HUD
+        // 3. En-tête HUD — taille de police proportionnelle au panneau (plus le radar est grand,
+        // plus le texte doit l'être pour rester à l'échelle, voir le calcul de radarSize ci-dessus).
+        int hudFontSize = Mathf.RoundToInt(Mathf.Clamp(radarSize * 0.095f, 11f, 20f));
         GUIStyle headerStyle = new GUIStyle(GUI.skin.label);
-        headerStyle.fontSize = 11;
+        headerStyle.fontSize = hudFontSize;
         headerStyle.fontStyle = FontStyle.Bold;
         headerStyle.alignment = TextAnchor.UpperCenter;
         headerStyle.normal.textColor = new Color(0.871f, 0.682f, 0.282f, 1f);
-        GUI.Label(new Rect(rX, rY + 2, radarSize, 14), "RADAR 90M", headerStyle);
+        GUI.Label(new Rect(rX, rY + 2, radarSize, hudFontSize + 4), "RADAR 90M", headerStyle);
 
         Vector2 center = new Vector2(rX + radarSize * 0.5f, rY + radarSize * 0.5f + 2f);
         float radius = (radarSize * 0.5f) - 12f;
@@ -430,14 +463,16 @@ public class TacticalRadarUI : MonoBehaviour
             GUI.DrawTexture(new Rect(pingCenter.x - pulseScale * 0.5f, pingCenter.y - pulseScale * 0.5f, pulseScale, pulseScale), pingTex);
         }
 
-        // 10. Pied de page avec compteur d'unités HUD
+        // 10. Pied de page avec compteur d'unités HUD — police et hauteur dédiées (footerFontSize/
+        // footerBandHeight, voir plus haut), volontairement plus petites que l'en-tête pour que ce
+        // texte plus long tienne sur une seule ligne à toute taille de radar.
         GUIStyle footerStyle = new GUIStyle(GUI.skin.label);
-        footerStyle.fontSize = 11;
+        footerStyle.fontSize = footerFontSize;
         footerStyle.fontStyle = FontStyle.Bold;
         footerStyle.alignment = TextAnchor.MiddleCenter;
         footerStyle.normal.textColor = Color.white;
-        string statusText = $"ALLIÉS: {allyCount}  |  CONTACTS: {enemyDetectedCount}";
-        GUI.Label(new Rect(rX, rY + radarSize + 2f, radarSize, 18), statusText, footerStyle);
+        string statusText = $"ALLIÉS: {allyCount} | CONTACTS: {enemyDetectedCount}";
+        GUI.Label(new Rect(rX, rY + radarSize + 2f, radarSize, footerBandHeight - 2f), statusText, footerStyle);
 
         GUI.matrix = origMat;
     }

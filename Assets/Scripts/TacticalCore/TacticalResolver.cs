@@ -34,9 +34,19 @@ namespace Novgov.TacticalCore
             foreach (var o in ordersTeam2) orderByUnitId[o.unitId] = o;
 
             var movers = state.units
-                .Where(u => !u.isDead && orderByUnitId.ContainsKey(u.id) && orderByUnitId[u.id].path.Count > 0)
+                .Where(u => !u.isDead && orderByUnitId.ContainsKey(u.id) && orderByUnitId[u.id].checkpoints.Count > 0)
                 .OrderBy(u => u.id, System.StringComparer.Ordinal) // ordre STABLE, jamais dépendant du hash/plateforme
                 .ToList();
+
+            // Expansion PRÉALABLE (une fois, avant la boucle de tick) de chaque ordre en un chemin
+            // fin qui suit RÉELLEMENT la géométrie (Pathfinding.FindPath, la même grille A* que le
+            // serveur utilise déjà pour tout le reste) entre chaque paire de checkpoints consécutifs
+            // — plus une simple ligne droite entre eux, qui pouvait couper tout droit à travers un
+            // bâtiment ("prend le raccourci", corrigé 2026-09-02). Chaque checkpoint garde la trace
+            // de l'INDEX exact, dans ce chemin étendu, où l'unité l'atteint réellement — c'est cet
+            // index qui déclenche sa commande, pas la fin de l'ordre entier (voir ExpandOrder).
+            var expandedByUnitId = new Dictionary<string, ExpandedOrder>();
+            foreach (var u in movers) expandedByUnitId[u.id] = ExpandOrder(state, u, orderByUnitId[u.id]);
 
             var progress = new Dictionary<string, int>();
             foreach (var u in movers) progress[u.id] = 0;
@@ -47,7 +57,7 @@ namespace Novgov.TacticalCore
             // ExecuterTourCoroutine (mouvement, puis fenêtre de combat courte), fusionnée ici en
             // une seule boucle puisqu'il n'y a plus de temps réel à attendre.
             int tick = 0;
-            const int maxTicks = 800; // filet de sécurité (200s simulées) — jamais une boucle infinie
+            const int maxTicks = 3200; // filet de sécurité (800s simulées) — chemins réels plus longs qu'une ligne droite, jamais une boucle infinie pour autant
             bool anyActivity = true;
             while (anyActivity && tick < maxTicks)
             {
@@ -57,11 +67,11 @@ namespace Novgov.TacticalCore
                 foreach (var unit in movers)
                 {
                     if (unit.isDead) continue;
-                    var order = orderByUnitId[unit.id];
+                    var expanded = expandedByUnitId[unit.id];
                     int idx = progress[unit.id];
-                    if (idx >= order.path.Count) continue;
+                    if (idx >= expanded.steps.Count) continue;
 
-                    Vector2 target = order.path[idx];
+                    Vector2 target = expanded.steps[idx];
                     Vector2 newPos = MoveTowards(unit.position, target, MoveStepDistance);
                     unit.position = newPos;
                     events.Add(new TacticalEvent { kind = TacticalEvent.Kind.Move, unitId = unit.id, position = newPos, tick = tick });
@@ -69,15 +79,26 @@ namespace Novgov.TacticalCore
 
                     if (Vector2.Distance(newPos, target) < 0.01f)
                     {
+                        // Commande exécutée EXACTEMENT ici, dès l'arrivée à CE checkpoint précis —
+                        // jamais reportée à la fin de l'ordre entier (voir ExpandOrder/PathCheckpoint).
+                        if (expanded.checkpointAtStep.TryGetValue(idx, out PathCheckpoint checkpoint))
+                        {
+                            ApplyCheckpointEffects(unit, checkpoint);
+                        }
+
                         progress[unit.id] = idx + 1;
-                        if (progress[unit.id] >= order.path.Count) ApplyEndOfPathEffects(unit, order);
+                        if (progress[unit.id] >= expanded.steps.Count && expanded.implicitDescentY.HasValue)
+                        {
+                            unit.outputY = expanded.implicitDescentY;
+                            unit.zStrata = expanded.implicitDescentY.Value > 2.2f ? ZStrata.Toit : ZStrata.Sol;
+                        }
                     }
 
                     // Interruption Overwatch (NOUVELLE fonctionnalité, voir TacticalTypes.cs) : un
                     // ennemi qui surveille cette position tire AVANT que qui que ce soit d'autre
                     // ne bouge.
                     CheckOverwatchInterrupt(state, unit, events, tick);
-                    if (unit.isDead) progress[unit.id] = order.path.Count;
+                    if (unit.isDead) progress[unit.id] = expanded.steps.Count;
                 }
 
                 // Combat continu (UnitAI_Combat.Update, cadence réelle par cooldown d'arme) : à
@@ -90,6 +111,43 @@ namespace Novgov.TacticalCore
             return events;
         }
 
+        /// <summary>Chemin fin (suivant réellement la géométrie) issu de l'expansion d'un UnitOrders
+        /// — voir Resolve().</summary>
+        private class ExpandedOrder
+        {
+            public readonly List<Vector2> steps = new List<Vector2>();
+            public readonly Dictionary<int, PathCheckpoint> checkpointAtStep = new Dictionary<int, PathCheckpoint>();
+            public float? implicitDescentY;
+        }
+
+        /// <summary>Relie chaque paire de checkpoints consécutifs par le VRAI chemin de la grille
+        /// A* (Pathfinding.FindPath, exactement l'algorithme déjà utilisé pour l'aperçu et pour tout
+        /// le reste du mouvement côté serveur) au lieu d'une ligne droite — c'est ce qui empêche une
+        /// unité de couper à travers un bâtiment entre deux points éloignés d'un même ordre. Le
+        /// DERNIER pas de chaque tronçon est ramené EXACTEMENT sur la position demandée par le
+        /// checkpoint (pas le centre de la cellule de grille, qui peut être décalé de ~1m) — important
+        /// pour les commandes liées à une géométrie précise (fenêtre, porte). Repli sur une ligne
+        /// droite si la grille est absente ou si aucun chemin n'existe (zone coupée par des
+        /// décombres, etc.) — mieux vaut un mouvement direct qu'une unité totalement bloquée.</summary>
+        private static ExpandedOrder ExpandOrder(TacticalWorldState state, TacticalUnit unit, UnitOrders order)
+        {
+            var expanded = new ExpandedOrder { implicitDescentY = order.implicitDescentY };
+            Vector2 cursor = unit.position;
+
+            foreach (var checkpoint in order.checkpoints)
+            {
+                List<Vector2> leg = state.grid != null ? Pathfinding.FindPath(state.grid, cursor, checkpoint.position) : new List<Vector2>();
+                if (leg.Count < 2) leg = new List<Vector2> { cursor, checkpoint.position };
+                leg[leg.Count - 1] = checkpoint.position;
+
+                for (int i = 1; i < leg.Count; i++) expanded.steps.Add(leg[i]);
+                expanded.checkpointAtStep[expanded.steps.Count - 1] = checkpoint;
+                cursor = checkpoint.position;
+            }
+
+            return expanded;
+        }
+
         private static Vector2 MoveTowards(Vector2 from, Vector2 to, float maxStep)
         {
             float sqrDist = GeometryMath.SqrDistance(from, to);
@@ -99,31 +157,33 @@ namespace Novgov.TacticalCore
             return from + dir * maxStep;
         }
 
-        /// <summary>Applique les postures/transitions arrivées en bout de chemin — miroir direct
-        /// des NodeAction du rapport d'audit §2.6-2.10. isGuarding/isCamouflaged ne sont JAMAIS
+        /// <summary>Applique les postures/transitions d'UN checkpoint, DÈS L'ARRIVÉE à celui-ci —
+        /// miroir direct des NodeAction du rapport d'audit §2.6-2.10, maintenant déclenché par
+        /// checkpoint plutôt qu'une seule fois en bout de chemin (correctif "prend le raccourci",
+        /// 2026-09-02 — voir PathCheckpoint/ExpandOrder). isGuarding/isCamouflaged ne sont JAMAIS
         /// remis à false automatiquement ici : fidèle à l'original (rapport §8.2), ils persistent
         /// jusqu'à une prise de dégâts (camouflage) ou indéfiniment (guet — particularité connue
         /// de l'ancien code, reproduite telle quelle).</summary>
-        private static void ApplyEndOfPathEffects(TacticalUnit unit, UnitOrders order)
+        private static void ApplyCheckpointEffects(TacticalUnit unit, PathCheckpoint checkpoint)
         {
-            if (order.setGuarding) unit.isGuarding = true;
-            if (order.setCamouflaged) unit.isCamouflaged = true;
+            if (checkpoint.setGuarding) unit.isGuarding = true;
+            if (checkpoint.setCamouflaged) unit.isCamouflaged = true;
 
-            if (order.setGarrisonWindow)
+            if (checkpoint.setGarrisonWindow)
             {
                 unit.isGarrisoned = true;
-                unit.windowNormal = order.windowNormalToSet;
+                unit.windowNormal = checkpoint.windowNormalToSet;
             }
-            if (order.setGarrisonDoor)
+            if (checkpoint.setGarrisonDoor)
             {
                 unit.isGarrisoned = true;
                 unit.windowNormal = null; // pas de restriction de cône pour une garnison de porte (rapport §2.9)
             }
-            if (order.enterBuildingId >= 0)
+            if (checkpoint.enterBuildingId >= 0)
             {
-                unit.currentBuildingId = order.enterBuildingId;
+                unit.currentBuildingId = checkpoint.enterBuildingId;
             }
-            if (order.exitBuilding)
+            if (checkpoint.exitBuilding)
             {
                 // SortirBatiment appelle aussi LeaveGarrison() dans l'original (rapport §2.8) :
                 // sortir annule la garnison même si elle ne venait pas d'une fenêtre de CE bâtiment.
@@ -131,10 +191,19 @@ namespace Novgov.TacticalCore
                 unit.isGarrisoned = false;
                 unit.windowNormal = null;
             }
-            if (order.setPositionY.HasValue)
+            if (checkpoint.setPositionY.HasValue)
             {
-                unit.outputY = order.setPositionY;
-                unit.zStrata = order.setPositionY.Value > 2.2f ? ZStrata.Toit : ZStrata.Sol; // seuil exact UnitAI.isRooftopSniper
+                unit.outputY = checkpoint.setPositionY;
+                unit.zStrata = checkpoint.setPositionY.Value > 2.2f ? ZStrata.Toit : ZStrata.Sol; // seuil exact UnitAI.isRooftopSniper
+            }
+
+            // Overwatch armé DÈS CE checkpoint (pas seulement en fin d'ordre) : un "Guetter"/
+            // "Embuscade"/"GuetterPorte" posé au milieu d'un trajet surveille depuis là immédiatement,
+            // même si l'unité continue ensuite vers d'autres checkpoints — répond explicitement à la
+            // demande du designer que chaque checkpoint exécute sa commande sur place.
+            if (checkpoint.enterOverwatchAtEnd && checkpoint.overwatchToSet != null)
+            {
+                unit.watchTrigger = checkpoint.overwatchToSet;
             }
         }
 

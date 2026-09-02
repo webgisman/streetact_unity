@@ -27,6 +27,9 @@ public static class TacticalCoreSelfTest
         Run("Cadence de tir : plusieurs coups dans une même résolution", TestWeaponCooldownMultiShot, ref passed, ref failed);
         Run("Cône de fenêtre (garnison) refuse un tir hors du champ de vision", TestWindowConeRestriction, ref passed, ref failed);
         Run("Mortier n'engage jamais directement (dégâts nuls hors zone)", TestMortarNeverEngagesDirectly, ref passed, ref failed);
+        Run("Résolution : le déplacement contourne un bâtiment au lieu de couper au travers (\"raccourci\")", TestResolveMovementAvoidsBuilding, ref passed, ref failed);
+        Run("Résolution : un checkpoint intermédiaire exécute sa commande immédiatement, pas en fin de chemin", TestCheckpointCommandFiresImmediately, ref passed, ref failed);
+        Run("Résolution : un chemin multi-checkpoints visite chaque point dans l'ordre exact", TestMultiCheckpointOrderPreserved, ref passed, ref failed);
 
         Debug.Log(passed == 0 && failed == 0
             ? "[TacticalCoreSelfTest] Aucun test exécuté."
@@ -125,7 +128,7 @@ public static class TacticalCoreSelfTest
 
         var events = TacticalResolver.Resolve(state,
             new List<UnitOrders>(),
-            new List<UnitOrders> { new UnitOrders { unitId = "Mover", path = new List<Vector2> { new Vector2(5, 0) } } },
+            new List<UnitOrders> { new UnitOrders { unitId = "Mover", checkpoints = new List<PathCheckpoint> { new PathCheckpoint { position = new Vector2(5, 0) } } } },
             null);
 
         bool triggered = events.Exists(e => e.kind == TacticalEvent.Kind.OverwatchTriggered && e.unitId == "Watcher");
@@ -263,5 +266,113 @@ public static class TacticalCoreSelfTest
 
         TacticalResolver.Resolve(state, new List<UnitOrders>(), new List<UnitOrders>(), null);
         return target.health == 100;
+    }
+
+    /// <summary>2026-09-02, correctif "prend le raccourci" : le mouvement RÉSOLU (pas seulement
+    /// Pathfinding.FindPath en isolation, déjà couvert par TestPathfindingAvoidsBuilding) doit
+    /// contourner un bâtiment placé directement entre le point de départ et le checkpoint visé,
+    /// jamais couper tout droit à travers son empreinte comme une simple ligne droite le ferait.</summary>
+    private static bool TestResolveMovementAvoidsBuilding()
+    {
+        var footprint = new List<Vector2> {
+            new Vector2(-5, -5), new Vector2(5, -5), new Vector2(5, 5), new Vector2(-5, 5)
+        };
+        var state = new TacticalWorldState { grid = new TacticalGrid(-30f, -30f, 60, 60) };
+        state.grid.CarveBuildingInteriors(new List<List<Vector2>> { footprint });
+
+        var mover = MakeInfantry("Runner", 1, new Vector2(-10, 0));
+        state.units.Add(mover);
+
+        var order = new UnitOrders { unitId = "Runner", checkpoints = new List<PathCheckpoint> { new PathCheckpoint { position = new Vector2(10, 0) } } };
+        var events = TacticalResolver.Resolve(state, new List<UnitOrders> { order }, new List<UnitOrders>(), null);
+
+        foreach (var e in events)
+        {
+            if (e.kind != TacticalEvent.Kind.Move) continue;
+            if (GeometryMath.PointInPolygon(footprint, e.position)) return false; // aurait coupé à travers le bâtiment
+        }
+
+        bool reachedGoal = Vector2.Distance(mover.position, new Vector2(10, 0)) < 1.5f;
+        return reachedGoal;
+    }
+
+    /// <summary>2026-09-02, correctif "commandes à chaque checkpoint" : un Guetter posé sur un
+    /// checkpoint INTERMÉDIAIRE (pas le dernier de l'ordre) doit armer son Overwatch DÈS L'ARRIVÉE à
+    /// ce point, pas seulement une fois le chemin entier terminé. Le checkpoint suivant est
+    /// délibérément TRÈS loin : si la commande était encore reportée en fin de chemin (ancien bug),
+    /// le tir d'interruption ne pourrait jamais se produire aussi tôt que vérifié ici.</summary>
+    private static bool TestCheckpointCommandFiresImmediately()
+    {
+        var state = MakeEmptyState();
+        var watcher = MakeInfantry("Watcher", 1, new Vector2(0, 0));
+        var trespasser = MakeInfantry("Trespasser", 2, new Vector2(2, -10));
+        state.units.Add(watcher);
+        state.units.Add(trespasser);
+
+        var nearCheckpoint = new PathCheckpoint
+        {
+            position = new Vector2(0, 2),
+            setGuarding = true,
+            enterOverwatchAtEnd = true,
+            overwatchToSet = new OverwatchTrigger { origin = new Vector2(0, 2), facing = new Vector2(1, 0), cosHalfAngle = 0.3f, range = 15f },
+        };
+        var farCheckpoint = new PathCheckpoint { position = new Vector2(0, 100) };
+        var watcherOrders = new UnitOrders { unitId = "Watcher", checkpoints = new List<PathCheckpoint> { nearCheckpoint, farCheckpoint } };
+        var trespasserOrders = new UnitOrders { unitId = "Trespasser", checkpoints = new List<PathCheckpoint> { new PathCheckpoint { position = new Vector2(2, 5) } } };
+
+        var events = TacticalResolver.Resolve(state,
+            new List<UnitOrders> { watcherOrders },
+            new List<UnitOrders> { trespasserOrders },
+            null);
+
+        var triggerEvent = events.Find(e => e.kind == TacticalEvent.Kind.OverwatchTriggered && e.unitId == "Watcher");
+        if (triggerEvent == null) return false;
+
+        // Watcher est encore à des dizaines de mètres de son checkpoint lointain (0,100) à cet
+        // instant — preuve que la commande du premier checkpoint a été appliquée SUR PLACE, jamais
+        // reportée à la fin de l'ordre entier.
+        return triggerEvent.tick < 30;
+    }
+
+    /// <summary>2026-09-02 : un ordre à plusieurs checkpoints doit tous les visiter, DANS L'ORDRE
+    /// EXACT où ils ont été posés — jamais sauter directement au dernier.</summary>
+    private static bool TestMultiCheckpointOrderPreserved()
+    {
+        var state = MakeEmptyState();
+        var unit = MakeInfantry("Patrol", 1, new Vector2(0, 0));
+        state.units.Add(unit);
+
+        Vector2 cpA = new Vector2(10, 0), cpB = new Vector2(10, 10), cpC = new Vector2(0, 10);
+        var order = new UnitOrders
+        {
+            unitId = "Patrol",
+            checkpoints = new List<PathCheckpoint> {
+                new PathCheckpoint { position = cpA },
+                new PathCheckpoint { position = cpB },
+                new PathCheckpoint { position = cpC },
+            }
+        };
+
+        var events = TacticalResolver.Resolve(state, new List<UnitOrders> { order }, new List<UnitOrders>(), null);
+
+        int tickA = FirstTickWithin(events, "Patrol", cpA, 0.5f);
+        int tickB = FirstTickWithin(events, "Patrol", cpB, 0.5f);
+        int tickC = FirstTickWithin(events, "Patrol", cpC, 0.5f);
+
+        bool allFound = tickA > 0 && tickB > 0 && tickC > 0;
+        bool inOrder = allFound && tickA < tickB && tickB < tickC;
+        bool endedAtLast = Vector2.Distance(unit.position, cpC) < 0.5f;
+
+        return allFound && inOrder && endedAtLast;
+    }
+
+    private static int FirstTickWithin(List<TacticalEvent> events, string unitId, Vector2 point, float threshold)
+    {
+        foreach (var e in events)
+        {
+            if (e.kind != TacticalEvent.Kind.Move || e.unitId != unitId) continue;
+            if (Vector2.Distance(e.position, point) <= threshold) return e.tick;
+        }
+        return -1;
     }
 }

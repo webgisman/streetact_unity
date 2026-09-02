@@ -1,11 +1,16 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <!-- padding-top dégage la bande réservée par TacticalBottomBarScreen.uxml en haut d'écran
-         (portraits d'escouade + cloche + FIN DE TOUR + colonne radar, "top-dashboard" : height 16%,
-         plafonné à 175px) — les deux écrans sont superposés en permanence pendant un match PvP (voir
-         UIScreenManager.Show("InMatchHud") + SetVisible("TacticalBottomBar", true) simultanés), et
-         la bannière équipe/timer/phase ci-dessous se dessinait PAR-DESSUS ce dashboard sans ce
-         dégagement — chevauchement direct, jamais visible en solo puisque InMatchHud n'y est jamais
-         affiché (voir rapport utilisateur : "chevauchement... dans le mode multijoueur"). -->
+         (portraits d'escouade + cloche + FIN DE TOUR + colonne radar) — les deux écrans sont
+         superposés en permanence pendant un match PvP (voir UIScreenManager.Show("InMatchHud") +
+         SetVisible("TacticalBottomBar", true) simultanés), et la bannière équipe/timer/phase
+         ci-dessous se dessinait PAR-DESSUS ce dashboard sans ce dégagement — chevauchement direct,
+         jamais visible en solo puisque InMatchHud n'y est jamais affiché (voir rapport
+         utilisateur : "chevauchement... dans le mode multijoueur"). La valeur ci-dessous (180px)
+         n'est qu'un REPLI affiché une fraction de frame au tout premier affichage : dès la
+         première frame en UiState.InMatch, MultiplayerMatchController.RefreshHudDynamicFields()
+         l'écrase avec la vraie hauteur du radar (TacticalRadarUI.BottomEdgeVirtualY, dynamique
+         depuis son agrandissement le 2026-09-02) — ne PAS ajuster cette valeur statique pour
+         "corriger" un chevauchement, corriger plutôt le calcul dynamique côté C#. -->
     <ui:VisualElement name="root" style="flex-grow: 1; padding-top: 180px; picking-mode: Ignore;">
 
         <ui:VisualElement name="top-bar" style="flex-direction: row; justify-content: space-between; align-items: flex-start; padding: 12px 24px; picking-mode: Ignore;">

@@ -198,26 +198,45 @@ namespace Novgov.TacticalCore
         }
     }
 
-    /// <summary>Un ordre de tour pour une unité : chemin voulu (liste de points), et un
-    /// comportement de fin (Overwatch, tir sur cible, rien).</summary>
-    public class UnitOrders
+    /// <summary>Une étape (checkpoint) du chemin d'une unité : la position voulue par le joueur (ou
+    /// l'IA) ET la commande à exécuter DÈS L'ARRIVÉE à ce point précis — pas seulement une fois le
+    /// chemin entier terminé. Miroir direct d'un TacticalPathManager.TacticalNode (position +
+    /// NodeAction), un par checkpoint posé, jamais fusionné avec les autres (2026-09-02, correctif
+    /// "prend le raccourci" — voir TacticalResolver.Resolve pour pourquoi ce détail compte : avant
+    /// ce correctif, TOUS les checkpoints d'un même ordre étaient aplatis en un unique jeu de
+    /// drapeaux "fin de chemin", donc une commande posée au milieu d'un trajet (ex: Guetter au
+    /// checkpoint 2 sur 4) ne s'exécutait qu'à la toute fin, jamais à l'endroit réellement désigné).</summary>
+    public class PathCheckpoint
     {
-        public string unitId;
-        public List<Vector2> path = new List<Vector2>();
-        public bool enterOverwatchAtEnd;
-        public OverwatchTrigger overwatchToSet; // rempli seulement si enterOverwatchAtEnd
+        public Vector2 position;
 
-        // Postures de fin de chemin — miroir direct des NodeAction du rapport d'audit (§2.10) :
-        // priorité garnison > guet > camouflage si plusieurs sont demandées (ne devrait pas arriver
-        // en pratique, un seul NodeAction de posture par ordre).
+        // Miroir direct des NodeAction du rapport d'audit (§2.10) : priorité garnison > guet >
+        // camouflage si plusieurs sont demandées SUR LE MÊME checkpoint (ne devrait pas arriver en
+        // pratique, un seul NodeAction de posture par nœud).
         public bool setGuarding;      // Guetter / Embuscade -> isGuarding = true (persiste, jamais remis à false automatiquement — fidèle à l'original, voir rapport §8.2)
+        public bool enterOverwatchAtEnd; // nom conservé (voir UnitOrders) — s'applique dès CE checkpoint, pas la fin du chemin entier
+        public OverwatchTrigger overwatchToSet; // rempli seulement si enterOverwatchAtEnd
         public bool setCamouflaged;   // SeCacher -> isCamouflaged = true
         public bool setGarrisonWindow; // GarnisonFenetre -> isGarrisoned = true + windowNormal défini
         public Vector2? windowNormalToSet;
         public bool setGarrisonDoor;   // GuetterPorte -> isGarrisoned = true, PAS de windowNormal (pas de cône, rapport §2.9)
         public int enterBuildingId = -1;  // EntrerBatiment -> currentBuildingId
         public bool exitBuilding;         // SortirBatiment -> currentBuildingId = -1 ET LeaveGarrison (rapport §2.8)
-        public float? setPositionY;       // Escalade (monte sur le toit) / descente implicite (voir MatchSessionManager.BuildUnitOrders)
+        public float? setPositionY;       // Escalade (monte sur le toit)
+    }
+
+    /// <summary>Un ordre de tour pour une unité : une SUITE de checkpoints (jamais un unique point
+    /// final) — voir PathCheckpoint pour pourquoi chacun porte sa propre commande.</summary>
+    public class UnitOrders
+    {
+        public string unitId;
+        public List<PathCheckpoint> checkpoints = new List<PathCheckpoint>();
+
+        // Descente implicite de toit (rapport §2.3/§2.5) : l'ancien code déclenche ExecuteClimbDown
+        // dès que le prochain ordre ne ré-escalade pas, sans action dédiée dans l'enum — appliquée
+        // une fois, après le TOUT DERNIER checkpoint de cet ordre (pas liée à un checkpoint précis,
+        // voir MatchSessionManager.BuildUnitOrders).
+        public float? implicitDescentY;
     }
 
     /// <summary>Un événement produit par la résolution — la même granularité que

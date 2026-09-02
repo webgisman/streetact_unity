@@ -42,8 +42,13 @@ ayant demandé le même mode.
 ```json
 { "type": "join_matchmaking", "mode": "deathmatch" }
 ```
-`mode` = `"deathmatch"` (élimination, historique) ou `"zone_control"` (capture et tenue d'une
-zone centrale — voir `04-unity-headless-server.md`).
+`mode` = `"deathmatch"` (élimination, historique), `"zone_control"` (capture et tenue d'une
+zone centrale — voir `04-unity-headless-server.md`), `"conquest"` (attaque d'une Zone de Conquête
+précise, `zone_tile_x`/`zone_tile_y` — pas un appariement entre deux joueurs, résolu immédiatement
+contre une garnison IA ou par capture instantanée, voir §12 de `08-known-issues-and-todo.md`) ou
+`"practice_ai"` (2026-09-02, entraînement immédiat contre l'IA sur la carte par défaut, pour
+patienter en attendant un vrai adversaire — même mécanique serveur que `conquest`, jamais de
+véritable file d'attente, voir `08-known-issues-and-todo.md` §15).
 
 ### `submit_turn`
 Correspond directement au contenu de `UnitAI.tacticalPath` pour chaque unité du joueur au
@@ -66,6 +71,16 @@ moment où il appuie sur "FIN TOUR" (`TacticalPathManager.LancerExecutionTour`).
 ```
 `action` = valeur brute de `TacticalPathManager.NodeAction` (0=Continuer, 2=Guetter,
 4=Escalade, 11=TirMortier, etc. — voir l'enum complet dans le code).
+
+**Chaque point de `path` est un vrai checkpoint indépendant** (2026-09-02, correctif "prend le
+raccourci" — voir `08-known-issues-and-todo.md` §16) : le serveur relie chaque paire de points
+consécutifs par le VRAI chemin de la grille A* (celui qui contourne les bâtiments, pas une ligne
+droite), et exécute la commande (`action`) de chaque point EXACTEMENT à l'arrivée à ce point précis
+— jamais reportée à la fin du tableau `path` entier. Un ordre à N points déclenche donc jusqu'à N
+recherches de chemin réelles côté serveur (`TacticalResolver.ExpandOrder`) ; plafonné à
+`MaxOrderPathNodes = 40` points par unité par tour (voir `MatchSessionManager.cs`) pour borner ce
+coût — un client modifié soumettant plus de points voit sa soumission entière rejetée (repli sur
+"aucun ordre" pour cette unité, pas un troncage silencieux).
 
 ### `heartbeat`
 Envoyé toutes les ~5s **en continu tant que la connexion TCP est ouverte** (pas seulement pendant

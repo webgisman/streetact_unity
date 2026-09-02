@@ -893,3 +893,376 @@ encore en production au moment d'écrire cette section) — puis un vrai test à
 moyen de vérifier que le rythme de révélation "spotted/pas spotted" est satisfaisant en jeu (portées
 de repérage inchangées par rapport au Solo, mais jamais testées en conditions PvP réelles avant ce
 changement).
+
+## 14. Reste de la session du 2026-08-30 — bugs trouvés par simulation réelle, perf, aperçu de trajectoire
+
+Le §13 ci-dessus a été rebuild/redéployé puis testé via un client de simulation TCP brut
+(`sim_client.js`, scratchpad de session, jamais committé) parlant directement le protocole contre le
+pool de production, plutôt qu'un vrai test à 2 téléphones (aucun accès matériel depuis cette
+session) — logs serveur réels lus avec des fenêtres `--since`/`--until` précises. Plusieurs tours de
+retours utilisateur + simulation ont suivi dans la même journée, résumés ici (jamais écrits dans ce
+fichier jusqu'à présent, seulement dans les notes de session).
+
+**Bugs trouvés et corrigés :**
+1. **`AudioClip.SetData failed` loggé à CHAQUE spawn d'unité/barricade, sur TOUTES les parties, en
+   continu** — `UnitSpawnerUI.SpawnUnitAt`/branche Barricade jouaient un son de confirmation sans
+   garde `#if !UNITY_SERVER` ; un Dedicated Server n'a pas de device audio. Corrigé (deux sites
+   d'appel gardés), confirmé par logs : zéro warning après le fix sur 4 spawns testés (contre 1 par
+   spawn avant).
+2. **Une unité ennemie masquée par le brouillard de guerre (§13.3) gardait un `Collider` actif** —
+   `UnitAI.SetVisualsVisibility(false)` ne désactivait que le rendu, pas le collider. Le raycast
+   tap-to-move (`TacticalPathManager_Input`, sans layer mask) pouvait alors intercepter un clic
+   destiné au sol derrière une unité invisible, corrompant la destination cliquée — cause probable
+   des retours "problème de trajectoire"/"les unités sont toujours là". Corrigé : `SetVisualsVisibility`
+   désactive maintenant aussi tous les `Collider` enfants.
+3. **Le corps d'une unité morte disparaissait UN TOUR après sa mort** — `RunExecutionPhase` filtre
+   `allUnits` sur `!isDead`, donc un cadavre est absent de tout futur tour ; le code de masquage du
+   §13.3 traitait alors ce cadavre comme "non repéré" et le cachait. Corrigé côté client uniquement
+   (zéro risque, aucune règle serveur touchée) : `PlaySnapshotsCoroutine` ne masque plus jamais une
+   unité déjà `isDead`.
+4. **Carte par défaut "carré clair dans une mer sombre de bâtiments"** — `DefaultCityData.json`
+   (snapshot Overpass figé) datait du 2026-08-14, capturé sous l'ANCIEN système GPS-radius (~500m)
+   jamais régénéré après le passage aux Zones Slippy Map de 195m (§11) : le sol raster (bien
+   redimensionné) se retrouvait au milieu d'un jeu de bâtiments bien plus grand et périmé.
+   Régénéré pour la tuile Zoom 17 exacte (tileX 66693, tileY 44057) — 87 bâtiments contre 758
+   avant. **Important** : le log historique "396 -> 758 bâtiments" vu dans les sessions précédentes
+   n'était PAS un signal de bonne santé, juste la reproduction fidèle de ce même jeu de données
+   périmé à chaque déploiement. Le nouveau chiffre de référence est **"87 éléments OSM -> 236
+   bâtiments"** — si ce nombre change un jour sans qu'on ait touché `DefaultCityData.json`
+   volontairement, c'est suspect.
+5. **Bannière "DÉPLOIEMENT (...)" restait affichée par-dessus le HUD de combat** —
+   `MultiplayerMatchController.IsDeploymentPhaseActive` n'était remis à `false` que dans
+   `SubmitLocalDeployment()` (clic manuel du joueur), jamais dans `OnDeploymentResult` — un
+   déploiement résolu par repli automatique (timer expiré sans clic) laissait le flag bloqué à
+   `true` pour tout le reste de la partie. Corrigé : `OnDeploymentResult` le remet à `false`
+   inconditionnellement.
+6. **La bannière de déploiement fuitait le nombre d'unités adverses déployées** (`"DÉPLOIEMENT (X vs
+   Y)"`, `Y` = effectif équipe 2) — affichage hérité du Solo (comparer à une IA à effectif fixe),
+   incohérent maintenant que le brouillard de guerre réseau (§13.3) rend `Y` généralement 0.
+   `UnitSpawnerUI.RefreshDeploymentDockUI` affiche maintenant `"DÉPLOIEMENT (X/max)"` en
+   multijoueur, laisse l'affichage Solo `"X vs Y"` inchangé.
+
+**Perf — turn 1 d'une partie coûtait ~2s réels au lieu d'un calcul "quasi instantané" comme prétendu
+par le commentaire du code :** mesuré précisément (logs `[Timing]`) : `TacticalGridBuilder.
+BuildFromScene()` seul coûtait ~2050ms, `TacticalResolver.Resolve()` seulement 8-70ms — chaque tour
+reconstruisait à partir de zéro les 1538 segments de mur + la grille de marche des 236 bâtiments,
+alors que cette géométrie ne change jamais entre deux tours (sauf destruction d'un bâtiment).
+**Fix** : cache statique dans `TacticalGridBuilder` (murs + grille construits une fois par
+ville/Zone chargée, réutilisés chaque tour ; seul l'état santé/détruit de chaque bâtiment est relu
+en direct, ~236 lectures de champ, très bon marché). Invalidation explicite à chaque endroit où la
+géométrie de scène change réellement (`CityGenerator.CancelActiveGenerationAndClearCity`, chokepoint
+partagé côté client ET serveur). **Gain mesuré** : tour 1 encore ~2085ms (premier build,
+inévitable), tour 2 tombe à **1.7ms**, tour 3 à **1.6ms** — `RunExecutionPhase` complet passe de
+~2230ms à ~57-64ms, un gain d'environ **35x** pour chaque tour après le premier.
+
+**Bug structurel — la ligne bleue d'aperçu ne correspondait pas au déplacement RÉELLEMENT exécuté :**
+le tracé de prévisualisation (`TacticalPathManager_PathDrawing.DessinerTousLesChemins`) utilisait
+`NavMesh.CalculatePath` (précis, suit les rues) alors que le déplacement OFFICIEL en multijoueur
+était déjà calculé par `Novgov.TacticalCore.Pathfinding` (grille A* déterministe, introduite pour
+éviter toute divergence NavMesh entre appareils) — deux algorithmes de routage complètement
+indépendants sur la même géométrie, qui pouvaient diverger nettement dans les virages. **Fix de
+CETTE session (partiel)** : `TacticalPathManager_PathDrawing.cs` appelle désormais la MÊME
+`Pathfinding.FindPath()` que le serveur pour dessiner l'aperçu dès que
+`MultiplayerMatchController.IsActive` est vrai (nouveau `AppendGridPathSegment`) — l'aperçu affiché
+correspond enfin au calcul serveur. **Ce correctif ne réglait que l'APERÇU** : `TacticalResolver.
+Resolve()` lui-même continuait à déplacer chaque unité en LIGNE DROITE entre les points bruts d'un
+ordre, sans jamais relancer ce même calcul A* pour l'EXÉCUTION — la vraie cause du bug "l'unité
+prend un raccourci" remontée par l'utilisateur début septembre, seulement corrigée à la racine au
+§16 ci-dessous. À noter aussi : ce correctif a nécessité de rendre le cache de
+`TacticalGridBuilder` conscient qu'il tourne dans un process CLIENT ou SERVEUR distinct (chacun sa
+propre instance de cache) et d'ajouter un préchauffage proactif (`OnDeploymentResult`) pour que le
+coût ~2s du tout premier `BuildFromScene()` tombe à un moment de transition attendu plutôt qu'un gel
+imprévisible pendant que le joueur trace son premier chemin.
+
+**Pool de serveurs de jeu — construit puis réduit à 1 seule instance le même jour :** en réponse à
+une demande de scaling ("je veux des milliers de joueurs"), un vrai pool de 3 conteneurs
+`game-server-N` indépendants (matchmaker léger + table `server_instances`, voir schema.sql §7) a été
+construit et déployé — avant qu'une réécriture ultérieure la même session (donnée pure, voir
+`04-unity-headless-server.md` "Option B") ne rende ce pool obsolète : un seul processus fait
+maintenant tourner des centaines/milliers de parties Deathmatch/Zone de Contrôle EN PARALLÈLE (pool
+de threads `Task.Run` pour `TacticalResolver.Resolve()`), donc dupliquer les conteneurs n'apportait
+plus de capacité réelle, juste un coût de base répété. Le pool a été ramené à **1 seule instance**
+(`game-server-1`), toujours vraie au 2026-09-02 (voir `docker-compose.yml`, un seul service
+`game-server-1` défini). La Conquête reste la seule limitation "un combat vivant à la fois par
+instance" (`matchInProgress`), inchangée — voir §15 ci-dessous pour l'Entraînement IA, qui partage
+cette même contrainte.
+
+**Vérifié en fin de session** : serveur + Android recompilés (0 erreur) et redéployés à chaque étape
+ci-dessus, logs de production confirmant les correctifs (zéro warning `AudioClip`, "87 éléments OSM
+-> 236 bâtiments" au lieu de "396 -> 758", timings `[Timing]` conformes aux chiffres annoncés).
+**Non vérifié en conditions réelles à 2 téléphones** (aucun accès matériel pendant cette session,
+seulement via le client de simulation TCP) : le rythme de révélation du brouillard de guerre, le
+ressenti "le jeu est un peu en retard" (piste probable : bug #5 ci-dessus, deux rafraîchisseurs UI
+Toolkit se battant chaque frame — pas confirmé indépendamment), et si "certaines unités n'ont aucune
+ligne bleue" (candidats jamais isolés : mortier avec un ordre `TirMortier`, qui vise une cible et non
+une destination de marche, ou simplement une unité sans ordre du tout — pas nécessairement un bug).
+
+## 15. Session du 2026-09-02 — IA/unités "posées sur les polygones" (vraie cause) + mode Entraînement contre l'IA
+
+Retour utilisateur : l'IA place "toujours" ses unités sur les polygones de bâtiments, surtout les
+chars/véhicules lourds et les barricades — un défaut différent (et non couvert) du §13.2 : ce
+correctif-là avait ajouté `FindGroundLevelNavPoint` (échantillonnage d'anneau, garde le point
+NavMesh le plus bas) à `UnitSpawnerUI.SpawnUnitAt`, mais deux failles restaient :
+
+1. **La branche Barricade de `SpawnUnitAt` ne passait par AUCUN recalage** — elle instanciait
+   directement à la position brute demandée puis faisait `return null` (une barricade n'est pas une
+   `UnitAI`) AVANT d'atteindre le bloc de recalage partagé plus bas dans la méthode. Seul chemin de
+   spawn de barricade réellement affecté par la garnison IA : `UnitSpawnerUI.SpawnEnemyWave()`
+   (mode Solo classique, toujours appelée avec une position brute).
+2. **Même pour les unités déjà recalées, "le point NavMesh le plus bas parmi un anneau proche" ne
+   suffit pas** : le rez-de-chaussée d'un bâtiment est LUI AUSSI un point NavMesh bas et valide (les
+   toits sont praticables pour les snipers, donc valides sur le même NavMesh) — rien ne testait
+   explicitement "ce point tombe-t-il dans l'empreinte 2D d'un bâtiment ?".
+
+**Fix** (`UnitSpawnerUI.cs`) : nouvelle méthode `FindSafeSpawnPoint(desired, type, baseSearchRadius)`
+qui exclut explicitement tout candidat dont `BuildingStructure.FindBuildingAt(...)` (le test
+point-dans-polygone déjà utilisé ailleurs dans le jeu, pas une heuristique de hauteur) renvoie un
+bâtiment — avec un rayon de dégagement adapté au type (3m Char Leopard, 2.5m Véhicule Canon, 1.8m
+Barricade, 0.6m Fantassin) et un élargissement progressif de la recherche (6 → 12 → 24 → 48m) si le
+point visé tombe en pleine zone bâtie dense. Appelée UNE SEULE FOIS, tout en haut de `SpawnUnitAt`,
+pour TOUS les types y compris Barricade — corrige donc les deux failles à la fois et couvre
+uniformément déploiement manuel, repli auto, garnison de Conquête et `SpawnEnemyWave`.
+
+**Amélioration IA au passage** : la garnison IA (équipe 2, `AutoDeployTeamFallback`) ne posait
+jusqu'ici JAMAIS de barricade — `TacticalAIPlanner.PlanInfantryBehavior` a pourtant une vraie
+"STRATÉGIE BARRICADE" (se retrancher derrière une barricade alliée) qui n'avait donc jamais rien à
+utiliser en dehors d'un placement manuel de joueur. La garnison pose maintenant une barricade
+orientée vers le centre de la carte (direction d'approche la plus probable d'un attaquant).
+
+### Nouveau mode `practice_ai` — jouer contre l'IA en attendant un adversaire
+
+Demande explicite : proposer à un joueur seul en file d'attente Deathmatch/Zone de Contrôle de
+jouer contre l'IA en attendant qu'un vrai adversaire se présente, sur la même carte. Implémenté
+comme un mode `join_matchmaking` à part entière (voir `03-network-protocol.md`) plutôt qu'une
+bascule automatique en cours de partie (pas de siège/reprise de partie existant, voir §11) :
+
+- **Client** (`MultiplayerMatchController`) : un bouton "🤖 JOUER CONTRE L'IA EN ATTENDANT" apparaît
+  dans l'écran d'attente (`WaitingScreen.uxml`) après 6s passées en file (`PlayVsAiOfferDelaySeconds`),
+  jamais pour la Conquête (déjà résolue instantanément, pas une vraie file). `StartPracticeVsAI()`
+  ferme volontairement la connexion en file (`GameServerClient.Disconnect`, aucun message "annuler
+  la file d'attente" n'existe dans le protocole) puis en rouvre une nouvelle avec
+  `mode="practice_ai"` — le serveur nettoie automatiquement l'ancienne entrée de file via son
+  `RemoveAll(c => c.IsDisconnected)` habituel. Un drapeau `isSwitchingToPractice` empêche
+  `HandleServerDisconnected` de traiter cette déconnexion volontaire comme une vraie perte réseau.
+- **Serveur** (`MatchSessionManager`) : `practice_ai` est traité comme la Conquête — PAS ajouté à
+  `waitingDeathmatch`/`waitingZoneControl`, résolu immédiatement par `HandlePracticeAiMessage` ->
+  `RunPracticeVsAI`, qui réutilise TEL QUEL le moteur "vivant" 1-joueur-contre-garnison déjà éprouvé
+  par la Conquête (`RunConquestDeploymentPhase`/`RunConquestPlanningPhase`/`RunExecutionPhase`,
+  `TacticalAIPlanner`) — jamais le moteur "Option B" en donnée pure (celui-ci ne sait pas piloter
+  d'IA). Différences avec la Conquête : toujours la carte par défaut (`RestoreDefaultMapOnServer`,
+  jamais `LoadZoneOnServer`), garnison toujours à sa force de base (`defenderOwnerId=null`, pas de
+  `GarrisonExtraInfantryForZoneCount`), et **aucune** interaction avec la table `zones` ni le
+  classement (`your_new_rating` reste à 0 côté client — partie hors-score, affichée comme telle).
+  Hérite de la même contrainte `matchInProgress` que la Conquête : un seul combat "vivant"
+  (Conquête OU Entraînement) à la fois par instance — un second joueur qui déclenche l'entraînement
+  pendant que l'autre tourne déjà reçoit un refus immédiat (`match_over` avec `reason="server_busy"`),
+  pas une attente indéfinie.
+- Aucun changement de schéma DB ni de protocole réseau : `mode` est déjà un champ texte libre
+  (`NetMessage.mode`), `practice_ai` s'y glisse exactement comme `"conquest"` l'a fait avant lui.
+
+**Vérifié en conditions réelles contre novgov.com** (client de simulation TCP, scratchpad
+`sim_practice_ai.js`, jamais committé) : `join_matchmaking(practice_ai)` -> `match_found`
+(`opponent_username="IA (Entraînement)"`) -> `deployment_result` (4 unités, positions Y=0/0.25,
+plus aucune sur un toit) -> 60 tours joués sans ordre -> `match_over` (`reason="practice"`,
+`winner_team=0`, match nul comme attendu sans combat) -> zéro exception dans les logs serveur,
+conteneur stable après. Serveur Linux rebuild + redéployé sur `novgov.com` (`game-server-1`),
+Android rebuild (compile propre) mais changement purement UI côté client — aucun changement
+serveur-authoritatif ne dépend de la version installée sur l'appareil.
+
+**Explicitement pas fait** : pas de bascule automatique vers un vrai adversaire humain pendant une
+partie d'entraînement en cours (le joueur doit la terminer avant de retourner en file d'attente) —
+nécessiterait un système de reprise de partie qui n'existe pas (même limitation que le siège PvP
+asynchrone de Conquête, §11).
+
+## 16. Session du 2026-09-02 (suite) — correctif "prend le raccourci" : trajectoire ET commandes de checkpoint
+
+Retour utilisateur, décrit comme critique : "les unités doivent suivre EXACTEMENT la trajectoire
+définie lors de la planification, pas prendre un raccourci — il y a à chaque checkpoint des
+commandes à exécuter." Root-causé au niveau du moteur (`Novgov.TacticalCore`), pas un simple bug
+d'affichage — deux failles distinctes, cumulées :
+
+1. **`TacticalResolver.Resolve()` déplaçait chaque unité en LIGNE DROITE entre les points bruts
+   d'un ordre** (`UnitOrders.path`, une simple `List<Vector2>`) — c'était déjà la cause identifiée
+   (mais seulement pour l'APERÇU, pas l'exécution) au §14 ci-dessus : le §14 avait corrigé la ligne
+   bleue affichée pour qu'elle suive le vrai calcul A* de la grille (`Pathfinding.FindPath`), mais
+   `TacticalResolver.Resolve()` lui-même n'a jamais été touché à ce moment-là et continuait à
+   ignorer ce calcul pour l'exécution réelle — d'où le "raccourci" : l'aperçu montrait la bonne
+   route, l'unité en suivait une autre.
+2. **Toutes les commandes de checkpoint d'un même ordre (Guetter, Garnison, Escalade...) étaient
+   aplaties en un UNIQUE jeu de drapeaux** (`UnitOrders.setGuarding`/`enterOverwatchAtEnd`/etc.),
+   appliqué une seule fois via `ApplyEndOfPathEffects` — DÈS QUE le dernier point du chemin était
+   atteint, jamais avant. Une commande posée sur un checkpoint intermédiaire (pas le dernier du
+   trajet) n'avait donc silencieusement aucun effet tant que l'unité n'avait pas fini TOUT son
+   trajet, y compris les points suivants sans rapport avec cette commande.
+
+**Fix, au niveau des structures de données ET du moteur (`TacticalCore/TacticalTypes.cs` +
+`TacticalCore/TacticalResolver.cs` + `Server/MatchSessionManager.cs`, `BuildUnitOrders`/
+`BuildUnitOrdersPure`) :**
+- `UnitOrders.path` (liste de positions) + son unique jeu de drapeaux de fin de chemin sont
+  remplacés par `UnitOrders.checkpoints` (`List<PathCheckpoint>`) — un `PathCheckpoint` par nœud
+  réellement posé (miroir direct d'un `TacticalPathManager.TacticalNode`), chacun portant SA
+  PROPRE commande (mêmes champs qu'avant : `setGuarding`, `enterOverwatchAtEnd`+`overwatchToSet`,
+  `setCamouflaged`, `setGarrisonWindow`+`windowNormalToSet`, `setGarrisonDoor`, `enterBuildingId`,
+  `exitBuilding`, `setPositionY`). La descente implicite de toit (climb-down automatique si le
+  prochain ordre ne ré-escalade pas) reste un effet de FIN D'ORDRE entier
+  (`UnitOrders.implicitDescentY`, pas liée à un checkpoint précis — fidèle au comportement
+  d'origine, elle ne correspond à aucun `NodeAction` posé explicitement).
+- `TacticalResolver.Resolve()` expanse chaque ordre UNE FOIS (avant la boucle de tick, pas à
+  chaque pas) via une nouvelle `ExpandOrder` : relie chaque paire de checkpoints consécutifs par le
+  VRAI chemin `Pathfinding.FindPath` (la même grille A* que le serveur utilise déjà partout
+  ailleurs), en mémorisant à quel INDEX exact, dans ce chemin étendu, chaque checkpoint est
+  réellement atteint. Le dernier pas de chaque tronçon est ramené EXACTEMENT sur la position
+  demandée par le checkpoint (pas le centre de cellule de grille, décalé de jusqu'à ~1m) — important
+  pour les commandes liées à une géométrie précise (fenêtre, porte). Repli sur une ligne droite si
+  la grille est absente ou si aucun chemin n'existe (zone coupée par des décombres) — mieux vaut un
+  mouvement direct qu'une unité totalement bloquée. `ApplyEndOfPathEffects` renommée
+  `ApplyCheckpointEffects` et appelée à CHAQUE checkpoint atteint, plus seulement au dernier —
+  y compris l'armement d'Overwatch, qui surveille désormais depuis le checkpoint où il a été posé
+  même si l'unité continue ensuite vers d'autres checkpoints.
+- **Aucun changement de protocole réseau** : le format `submit_turn`/`path`/`action` reste
+  identique (voir `03-network-protocol.md`, mis à jour pour documenter explicitement que chaque
+  point est un checkpoint indépendant exécuté sur place). Le client n'a besoin d'AUCUNE
+  modification pour ce correctif — l'aperçu (§14) suivait déjà le bon tracé, seule l'exécution
+  serveur a changé.
+- **Effet de bord bénéfique pour l'IA** : `TacticalAIPlanner` construit ses ordres via le même
+  `BuildUnitOrders`/`TacticalResolver` — une unité IA (char qui recule, mortier qui se replie,
+  infanterie qui rejoint une barricade) bénéficie automatiquement de la même correction, sans
+  aucune modification du planificateur IA lui-même : ses ordres à un seul checkpoint étaient déjà
+  logiquement corrects, seule leur EXÉCUTION (le trajet réel emprunté pour l'atteindre) pouvait
+  auparavant couper à travers un bâtiment.
+- **Garde-fou anti-abus resserré** : chaque checkpoint déclenche maintenant une vraie recherche A*
+  (coût réel, contrairement à l'ancien simple segment de ligne droite) — `MaxOrderPathNodes` abaissé
+  de 200 à 40 par précaution (aucun joueur légitime n'en pose autant en un tour avec un budget de
+  déplacement de 50m).
+
+**Testé à trois niveaux avant déploiement :**
+1. **14/14 tests automatisés** (`Assets/Editor/TacticalCoreSelfTest.cs`, `Novgov/Tests/TacticalCore
+   Self-Test`) — 11 tests déjà existants toujours au vert (aucune régression), + 3 nouveaux écrits
+   spécifiquement pour ce correctif : le mouvement résolu contourne bien un bâtiment placé entre
+   départ et checkpoint (pas de ligne droite au travers) ; une commande de checkpoint intermédiaire
+   (Overwatch) déclenche BIEN avant que l'unité n'atteigne un checkpoint suivant volontairement très
+   lointain (preuve qu'elle n'est plus reportée en fin de trajet) ; un ordre à 3 checkpoints les
+   visite dans l'ordre exact.
+2. **Test réel contre novgov.com** (`sim_trajectory_test.js`, scratchpad, jamais committé) : une
+   unité envoyée avec 2 checkpoints (Guetter à 8m à l'est, puis continuer 12m plus au nord) a
+   parcouru **20,1m** au total sur 24 points de trajectoire distincts reçus (contre ~14,4m si elle
+   avait coupé directement vers le point final), en passant confirmé près du checkpoint
+   intermédiaire, pour finir EXACTEMENT (0,0m d'écart) sur le second checkpoint. Logs serveur
+   confirmant `Fantassin_1_1:2pt` reçu et traité, zéro exception.
+3. **Performance mesurée en conditions réelles** (logs `[Timing]` de production) : le tour incluant
+   ces 2 checkpoints + 4 ordres à 1 checkpoint de la garnison IA (6 recherches A* réelles au total)
+   s'est résolu en **25,5ms** — les tours suivants (sans nouvel ordre) retombent à ~0,2-0,4ms comme
+   avant ce correctif. Négligeable au regard du gain de ~35x déjà obtenu au §14.
+
+**Déployé** : serveur Linux rebuild (3 fois dans la session : correctif principal, puis le
+resserrement de `MaxOrderPathNodes`) et redéployé sur `game-server-1`/novgov.com à chaque étape,
+conteneur vérifié sain (logs propres, aucune exception) après chaque déploiement. **Android non
+rebuild pour ce correctif** — aucun fichier client (`Assets/Scripts/Network`, `Assets/Scripts/UI`)
+n'a été touché, uniquement `TacticalCore`/`Server` (compilés dans l'APK mais jamais exécutés
+côté client, qui se contente de rejouer les snapshots envoyés par le serveur) : le correctif est
+donc déjà pleinement actif pour tous les joueurs, quelle que soit la version d'APK installée.
+
+**Non traité (hors scope de cette session, pas demandé) :** le mode Solo (`TacticalPathManager_
+Execution.cs`) n'a jamais eu ce bug — il pilote un vrai `NavMeshAgent` qui route déjà correctement
+autour des obstacles et exécute chaque nœud de `tacticalPath` séquentiellement en conditions réelles
+(simulation Unity live, pas le moteur `TacticalCore` déterministe) — vérifié par lecture de code,
+pas modifié.
+
+## 17. Session du 2026-09-02 (suite) — tests réels sur 2 émulateurs Android, radar agrandi, correctif d'orientation
+
+Retour utilisateur : "le radar est petit", demande explicite de tester interfaces/jouabilité/bugs
+"sur deux émulateurs" plutôt que par simulation TCP seule, et de corriger le support du mode
+portrait. Première session de ce chantier à réellement lancer l'APK sur un émulateur Android (SDK
+`platform-tools`/`emulator` déjà installés sur la machine, deux AVD utilisés : `Medium_Phone_API_36.0`
+en 1080×2400 et `flutter_emulator` en 1080×1920) plutôt que de s'appuyer uniquement sur un client de
+simulation TCP headless (§14-16).
+
+### 17.1 Radar agrandi
+
+`TacticalRadarUI.radarSize` était une constante fixe (120px) réglée à l'œil dans la fenêtre Game de
+l'Éditeur — beaucoup plus petite en pixels réels sur un vrai/faux téléphone (bien plus de pixels que
+cette fenêtre) ET ne s'adaptant pas entre portrait (largeur étroite) et paysage (largeur large).
+**Fix** : recalculé chaque frame dans `OnGUI()` comme 26% de la plus PETITE dimension virtuelle de
+l'écran (celle qui contraint réellement l'espace disponible, quelle que soit l'orientation), borné
+[140, 230]px. `TacticalBottomBarScreen.uxml` (colonne réservée pour ne pas chevaucher la barre
+d'escouade/FIN DE TOUR) mise à jour avec le MÊME pourcentage/bornage pour rester synchronisée
+(démontré mathématiquement sûr dans les deux orientations : en portrait les deux calculs utilisent
+littéralement la même valeur (largeur d'écran), en paysage la colonne UI Toolkit réserve toujours
+AU MOINS autant que le radar réel, jamais moins).
+
+### 17.2 Bug trouvé pendant les tests réels : texte du radar qui se chevauche
+
+En testant sur émulateur, le pied de page du radar ("ALLIÉS: X | CONTACTS: Y") apparaissait sur 2
+lignes superposées illisibles — invisible sur les captures d'écran issues du simulateur TCP (qui ne
+rend jamais l'UI). Cause : `totalH` (hauteur totale du panneau radar) ajoutait un `+16px` FIXE pour
+le pied de page, jamais mis à jour quand la taille de police du texte a été rendue proportionnelle
+au radar (§17.1) — à la taille de police max (radar à 230px), le texte ne tenait plus sur une ligne
+dans cet espace fixe, IMGUI le repliait sur 2 lignes qui se chevauchaient. **Fix** : police dédiée du
+pied de page (`footerFontSize`, plafonnée BIEN PLUS BAS que l'en-tête — 14 max contre 20 — puisque
+son texte est plus long) et `footerBandHeight` calculée à partir de cette police plutôt qu'une
+valeur fixe.
+
+### 17.3 Bug trouvé pendant les tests réels : bannière équipe/minuteur qui aurait chevauché le radar agrandi
+
+`InMatchHudScreen.uxml` dégageait la bannière ÉQUIPE BLEUE/minuteur sous le radar via un
+`padding-top: 180px` FIXE, calibré sur l'ANCIEN radar (120px) — resté inchangé pendant tout le
+travail du §17.1, serait devenu insuffisant une fois le radar réellement agrandi en jeu (jusqu'à
+230+ px de haut). **Fix** : `MultiplayerMatchController.RefreshHudDynamicFields()` recalcule ce
+padding à chaque frame depuis la vraie hauteur du radar (nouvelle propriété statique
+`TacticalRadarUI.BottomEdgeVirtualY`, dans l'espace UI Toolkit — distincte de `BottomEdgeScreenY`,
+déjà existante mais en pixels écran réels, PAS la bonne échelle pour un style UI Toolkit). Le
+`180px` dans le fichier `.uxml` reste comme simple repli d'une fraction de frame au tout premier
+affichage — ne jamais l'ajuster pour "corriger" un chevauchement, corriger le calcul C#.
+
+### 17.4 Mode portrait/paysage — cause racine trouvée : le manifeste Android forçait une orientation restreinte
+
+Réglages Unity déjà corrects et vérifiés (`ProjectSettings.asset`) : `defaultScreenOrientation: 4`
+(AutoRotation) + les 4 `allowedAutorotateToX: 1`. Pourtant `aapt dump xmltree` sur l'APK généré
+montrait `android:screenOrientation` figé à une valeur restreinte (`0xd`), et forcer la rotation au
+niveau OS (`adb shell settings put system user_rotation`, puis la commande console
+`adb emu rotate`) restait sans AUCUN effet visible, même le `rotation` rapporté par
+`dumpsys display` restait à 0 — confirmant que le blocage est bien au niveau de l'attribut du
+manifeste, pas un souci d'émulateur qui ignore une entrée sensor.
+
+Cause exacte non identifiée avec certitude dans les réglages PlayerSettings de cette version
+d'Unity (6000.5.8f1, entrée Android "GameActivity" — `androidApplicationEntry: 2`) : essayé
+`androidResizeableActivity: 0` (aucun effet sur `screenOrientation`, confirmé par une nouvelle
+recompilation et un nouveau `aapt dump`) et `androidAutoRotationBehavior: 0` (champ dont la
+sémantique exacte n'a pas pu être confirmée). Plutôt que de continuer à deviner un champ non
+documenté dans `ProjectSettings.asset`, **fix appliqué au niveau du manifeste généré lui-même** :
+nouveau `Assets/Editor/AndroidManifestOrientationFix.cs`
+(`IPostGenerateGradleAndroidProject`, s'exécute après la génération du projet Gradle, avant
+l'assemblage final de l'APK) qui force `android:screenOrientation="fullSensor"` sur l'activité
+principale — les 4 orientations, jamais restreint par le verrou de rotation système (contexte jeu
+tactique plein écran, pas un souci pour un joueur qui verrouille son écran en portrait).
+
+**Vérifié au niveau du fichier** (`aapt dump xmltree` sur l'APK final montre bien
+`android:screenOrientation=(type 0x10)0xa`, soit `fullSensor`) — **pas vérifié visuellement en jeu**,
+faute d'un émulateur dont la rotation (OS et GameActivity) répond aux commandes disponibles en
+ligne de commande dans cette session. `fullSensor` est un comportement Android standard et
+documenté ; à confirmer sur un vrai téléphone au prochain test.
+
+### 17.5 Confirmé fonctionnel en conditions réelles (captures d'écran à l'appui, pas une simulation)
+
+- Connexion (`testlille1@novgov.test`) puis file d'attente Deathmatch → bouton "🤖 JOUER CONTRE L'IA
+  EN ATTENDANT" apparaît après le délai prévu, bien formaté, lisible.
+- Partie d'entraînement contre l'IA (§15) jouée de bout en bout depuis l'appareil : déploiement,
+  dock QG RENFORTS bien positionné (aucun chevauchement avec le radar agrandi), match résolu,
+  4 alliés déployés, radar affichant les contacts en temps réel.
+- Écran de connexion, sélection de mode, et matchmaking tous rendus correctement en portrait sur
+  les deux résolutions testées (1080×2400 et 1080×1920).
+
+**Bug d'automatisation de test (pas un bug du jeu), noté pour la prochaine session** : le clavier
+virtuel Android autocorrige/tronque parfois la saisie via `adb shell input text` sur les champs
+email/mot de passe (un premier essai de connexion a échoué avec "Invalid login credentials" alors
+que les identifiants étaient corrects, confirmé indépendamment par un appel direct à l'API GoTrue) —
+toujours vérifier le contenu réel d'un champ (bouton "Afficher" pour le mot de passe) avant de
+soumettre un formulaire de test automatisé.
+
+**État du dernier build testé en direct (`android_build4`, actuellement installé sur l'émulateur
+`Medium_Phone_API_36.0`)** : contient BIEN les 4 correctifs de ce §17 (radar agrandi, chevauchement
+pied de page §17.2, padding dynamique §17.3, manifeste `fullSensor` §17.4) — le pied de page du
+radar sur une seule ligne propre a été reconfirmé visuellement sur cet appareil APRÈS ce build.
+**Reste à faire avant la prochaine session** : un vrai test de rotation sur un appareil physique ou
+un émulateur dont les commandes de rotation fonctionnent réellement (seul point du §17 jamais
+confirmé visuellement, uniquement au niveau du fichier manifeste).

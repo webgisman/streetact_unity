@@ -5,10 +5,14 @@ transformer Novgov (un jeu solo Joueur vs IA, **toujours disponible tel quel** �
 est un mode additionnel, pas un remplacement) en un jeu **multijoueur PvP asynchrone à tour par
 tour**, hébergé sur un VPS Hetzner via Docker.
 
-**État (2026-08-29) : déployé et vérifié en direct sur `novgov.com`** — stack Docker complète
+**État (2026-09-02) : déployé et vérifié en direct sur `novgov.com`** — stack Docker complète
 live (Postgres/GoTrue/PostgREST/serveur de jeu/Nginx), build headless Linux du serveur de jeu
-fonctionnel. Voir [08-known-issues-and-todo.md](08-known-issues-and-todo.md) section 9 pour le
-détail de cette étape et ce qu'il reste (surtout : tester depuis un vrai build Android, doc 07).
+fonctionnel, 4 modes (`deathmatch`/`zone_control`/`conquest`/`practice_ai`). Voir
+[08-known-issues-and-todo.md](08-known-issues-and-todo.md) — section **17** est la plus récente
+(premiers vrais tests sur émulateurs Android, pas seulement simulation TCP) ; section 9 pour le
+récit du tout premier déploiement. Reste toujours à faire : un vrai test à 2 téléphones/tablettes
+physiques (§17 a testé sur émulateur, jamais sur matériel réel) et confirmer visuellement la
+rotation portrait/paysage (corrigée au niveau du manifeste, jamais vue tourner en direct).
 
 **Ne PAS build/importer ce dossier dans le jeu.** Il contient uniquement de la doc et des
 fichiers de config serveur (yml, sql, conf) — Unity les ignore au build.
@@ -33,9 +37,8 @@ fichiers de config serveur (yml, sql, conf) — Unity les ignore au build.
 9. [06-security-checklist.md](06-security-checklist.md) — UFW/Docker, secrets, RLS.
 10. [07-test-plan-2-phones.md](07-test-plan-2-phones.md) — plan de test final avec 2 téléphones.
 11. [08-known-issues-and-todo.md](08-known-issues-and-todo.md) — **à lire en premier en reprenant
-    ce chantier** : état exact de ce qui est fait/pas fait (le build Linux headless compile et
-    tourne désormais réellement, déployé sur le VPS — section 9), et tout le travail restant
-    jusqu'au test à 2 téléphones.
+    ce chantier, en partant de la fin** (section 17 = la plus récente) : état exact de ce qui est
+    fait/pas fait, et tout le travail restant jusqu'au test sur matériel physique.
 
 ## Identifiants
 

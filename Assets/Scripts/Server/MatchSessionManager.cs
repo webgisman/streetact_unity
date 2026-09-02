@@ -64,7 +64,15 @@ namespace Novgov.Server
         // rien, même si d'autres parties concurrentes ne sont plus bloquées par ça depuis l'Option
         // B) — le Deathmatch avait ce plafond en Zone de Contrôle mais pas ici.
         private const int DeathmatchTurnCap = 60;
-        private const int MaxOrderPathNodes = 200;
+        // Abaissé de 200 à 40 le 2026-09-02 (correctif "prend le raccourci") : chaque checkpoint
+        // déclenche maintenant une vraie recherche A* (TacticalResolver.ExpandOrder, voir
+        // Pathfinding.cs) pour suivre fidèlement la géométrie au lieu d'une simple ligne droite —
+        // un client modifié soumettant 200 checkpoints par unité pouvait donc désormais déclencher
+        // jusqu'à 200 recherches A* par unité par tour (coût réel, avant ce correctif un nœud
+        // n'était qu'un segment de ligne droite, quasi gratuit). Un joueur légitime n'en pose
+        // jamais plus de quelques-uns par tour (budget de mouvement de 50m) — 40 reste très
+        // largement au-dessus de tout usage réel tout en bornant le pire cas.
+        private const int MaxOrderPathNodes = 40;
 
         private string currentMatchMode = "deathmatch";
 
@@ -242,6 +250,20 @@ namespace Novgov.Server
                     if (conn.Mode == "conquest")
                     {
                         HandleConquestMessage(conn, msg);
+                        break;
+                    }
+
+                    // Entraînement contre l'IA (2026-09-02) : comme la Conquête, ce n'est PAS un
+                    // appariement entre deux joueurs en file d'attente — un joueur SEUL déclenche
+                    // une partie immédiate contre une garnison IA sur la carte par défaut, pour
+                    // patienter pendant qu'il reste éligible à un vrai adversaire (le client
+                    // referme sa connexion en file et en ouvre une nouvelle dédiée à l'entraînement,
+                    // voir MultiplayerMatchController.StartPracticeVsAI côté client — cette
+                    // connexion-ci n'a donc jamais été ajoutée à waitingDeathmatch/ZoneControl).
+                    // Voir HandlePracticeAiMessage.
+                    if (conn.Mode == "practice_ai")
+                    {
+                        HandlePracticeAiMessage(conn);
                         break;
                     }
 
@@ -865,17 +887,22 @@ namespace Novgov.Server
                     // BarricadeRoutiere) : l'orientation n'est jamais transmise par
                     // "submit_deployment" (UnitPlacement n'a pas de champ rotation), donc toujours
                     // alignée sur l'axe X monde ici aussi.
-                    Vector2 center = new Vector2(p.x, p.z);
+                    // Recalage au sol AVANT usage (2026-09-02) — jusqu'ici seule PlaceCombatUnitPure
+                    // (unités de combat) passait par MatchGeometry.FindGroundLevelInGrid ; une
+                    // barricade manuelle utilisait p.x/p.z BRUTS, ce qui pouvait la poser en pleine
+                    // empreinte de bâtiment (même bug que UnitSpawnerUI.SpawnUnitAt côté moteur
+                    // "vivant" de la Conquête, voir son commentaire — corrigé là aussi le même jour).
+                    Vector2 grounded = MatchGeometry.FindGroundLevelInGrid(ms.World.grid, new Vector2(p.x, p.z), 5f);
                     Vector2 dir = Vector2.right;
                     float halfWidth = MatchState.BarricadeHalfWidthMeters;
                     ms.World.barricades.Add(new Barricade
                     {
-                        p1 = center - dir * halfWidth,
-                        p2 = center + dir * halfWidth,
+                        p1 = grounded - dir * halfWidth,
+                        p2 = grounded + dir * halfWidth,
                         ownerTeam = team,
                         hp = 250f // RoadBarrier.cs:17-18 — PV par défaut exacts
                     });
-                    placed.Add(new DeployedUnit { unit_id = id, unit_type = p.unit_type, team_id = team, x = p.x, y = p.y, z = p.z });
+                    placed.Add(new DeployedUnit { unit_id = id, unit_type = p.unit_type, team_id = team, x = grounded.x, y = GroundLevelY, z = grounded.y });
                 }
                 else
                 {
@@ -1091,7 +1118,7 @@ namespace Novgov.Server
             {
                 ms.PendingOrderNodes.TryGetValue(unit.id, out var path);
                 UnitOrders orders = BuildUnitOrdersPure(ms, unit, path, mortarStrikes, pendingWindowByUnitId);
-                if (orders.path.Count > 0 || orders.enterOverwatchAtEnd)
+                if (orders.checkpoints.Count > 0)
                 {
                     (unit.team == 1 ? ordersTeam1 : ordersTeam2).Add(orders);
                 }
@@ -1199,25 +1226,25 @@ namespace Novgov.Server
                         continue;
                     }
 
-                    orders.path.Add(pos2D);
+                    var checkpoint = new PathCheckpoint { position = pos2D };
 
                     switch (node.action)
                     {
                         case TacticalPathManager.NodeAction.Guetter:
                         case TacticalPathManager.NodeAction.Embuscade:
-                            orders.setGuarding = true;
-                            orders.enterOverwatchAtEnd = true;
-                            orders.overwatchToSet = BuildOverwatchTriggerPure(ms.World, pos2D, previousPos, node.action);
+                            checkpoint.setGuarding = true;
+                            checkpoint.enterOverwatchAtEnd = true;
+                            checkpoint.overwatchToSet = BuildOverwatchTriggerPure(ms.World, pos2D, previousPos, node.action);
                             break;
 
                         case TacticalPathManager.NodeAction.GuetterPorte:
-                            orders.setGarrisonDoor = true;
-                            orders.enterOverwatchAtEnd = true;
-                            orders.overwatchToSet = BuildOverwatchTriggerPure(ms.World, pos2D, previousPos, node.action);
+                            checkpoint.setGarrisonDoor = true;
+                            checkpoint.enterOverwatchAtEnd = true;
+                            checkpoint.overwatchToSet = BuildOverwatchTriggerPure(ms.World, pos2D, previousPos, node.action);
                             break;
 
                         case TacticalPathManager.NodeAction.SeCacher:
-                            orders.setCamouflaged = true;
+                            checkpoint.setCamouflaged = true;
                             break;
 
                         case TacticalPathManager.NodeAction.GarnisonFenetre:
@@ -1230,8 +1257,8 @@ namespace Novgov.Server
                                         winId => !ms.OccupiedWindows.Contains((bIdx, winId)));
                                     if (window != null)
                                     {
-                                        orders.setGarrisonWindow = true;
-                                        orders.windowNormalToSet = window.outwardNormal;
+                                        checkpoint.setGarrisonWindow = true;
+                                        checkpoint.windowNormalToSet = window.outwardNormal;
                                         pendingWindowByUnitId[unit.id] = (bIdx, window.id);
                                     }
                                 }
@@ -1241,31 +1268,32 @@ namespace Novgov.Server
                         case TacticalPathManager.NodeAction.EntrerBatiment:
                             {
                                 int bIdx = MatchGeometry.FindBuildingAt(ms.World, pos2D);
-                                if (bIdx >= 0) orders.enterBuildingId = bIdx;
+                                if (bIdx >= 0) checkpoint.enterBuildingId = bIdx;
                                 break;
                             }
 
                         case TacticalPathManager.NodeAction.SortirBatiment:
-                            orders.exitBuilding = true;
+                            checkpoint.exitBuilding = true;
                             break;
 
                         case TacticalPathManager.NodeAction.Escalade:
                             {
                                 int bIdx = MatchGeometry.FindBuildingAt(ms.World, pos2D);
                                 TacticalBuilding building = bIdx >= 0 ? ms.World.GetBuilding(bIdx) : null;
-                                orders.setPositionY = building != null ? building.height : 3f;
+                                checkpoint.setPositionY = building != null ? building.height : 3f;
                                 climbsThisOrder = true;
                                 break;
                             }
                     }
 
+                    orders.checkpoints.Add(checkpoint);
                     previousPos = pos2D;
                 }
             }
 
-            if (wasOnRoof && !climbsThisOrder && orders.path.Count > 0)
+            if (wasOnRoof && !climbsThisOrder && orders.checkpoints.Count > 0)
             {
-                orders.setPositionY = 0f;
+                orders.implicitDescentY = 0f;
             }
 
             return orders;
@@ -1565,7 +1593,7 @@ namespace Novgov.Server
                 worldState.units.Add(BuildTacticalUnit(unit, buildingIndex));
 
                 UnitOrders orders = BuildUnitOrders(unit, mortarStrikes, buildingIndex, pendingWindowByUnitId);
-                if (orders.path.Count > 0 || orders.enterOverwatchAtEnd)
+                if (orders.checkpoints.Count > 0)
                 {
                     (unit.teamID == 1 ? ordersTeam1 : ordersTeam2).Add(orders);
                 }
@@ -1574,7 +1602,7 @@ namespace Novgov.Server
             // Trajectoires envoyées au résolveur pour ce tour — vérifie depuis les logs que chaque
             // unité avec un ordre a bien un chemin de la bonne longueur (voir MaxOrderPathNodes côté
             // validation réseau) avant même de lancer le calcul.
-            Debug.Log($"[Trajectoire] Tour {turnNumber} : équipe1={ordersTeam1.Count} unité(s) avec ordres ({string.Join(", ", ordersTeam1.Select(o => $"{o.unitId}:{o.path.Count}pt"))}), équipe2={ordersTeam2.Count} unité(s) avec ordres ({string.Join(", ", ordersTeam2.Select(o => $"{o.unitId}:{o.path.Count}pt"))}), {mortarStrikes.Count} frappe(s) de mortier.");
+            Debug.Log($"[Trajectoire] Tour {turnNumber} : équipe1={ordersTeam1.Count} unité(s) avec ordres ({string.Join(", ", ordersTeam1.Select(o => $"{o.unitId}:{o.checkpoints.Count}pt"))}), équipe2={ordersTeam2.Count} unité(s) avec ordres ({string.Join(", ", ordersTeam2.Select(o => $"{o.unitId}:{o.checkpoints.Count}pt"))}), {mortarStrikes.Count} frappe(s) de mortier.");
 
             double preResolveMs = (DateTime.UtcNow - executionStartUtc).TotalMilliseconds;
             List<TacticalEvent> tacticalEvents = TacticalResolver.Resolve(worldState, ordersTeam1, ordersTeam2, mortarStrikes);
@@ -1849,7 +1877,7 @@ namespace Novgov.Server
                     continue;
                 }
 
-                orders.path.Add(pos2D);
+                var checkpoint = new PathCheckpoint { position = pos2D };
 
                 switch (node.action)
                 {
@@ -1857,22 +1885,22 @@ namespace Novgov.Server
                     case TacticalPathManager.NodeAction.Embuscade:
                         // NOUVEAU (Overwatch actif) EN PLUS de l'effet original (isGuarding, -50%
                         // dégâts reçus, jamais remis à false automatiquement — rapport §2.10/§8.2).
-                        orders.setGuarding = true;
-                        orders.enterOverwatchAtEnd = true;
-                        orders.overwatchToSet = BuildOverwatchTrigger(pos2D, previousPos, node.action);
+                        checkpoint.setGuarding = true;
+                        checkpoint.enterOverwatchAtEnd = true;
+                        checkpoint.overwatchToSet = BuildOverwatchTrigger(pos2D, previousPos, node.action);
                         break;
 
                     case TacticalPathManager.NodeAction.GuetterPorte:
                         // Garnison de porte (rapport §2.9) : -75% dégâts (comme une fenêtre), mais
                         // SANS restriction de cône (windowNormal reste null). Overwatch (nouveau)
                         // en plus, sur la porte elle-même.
-                        orders.setGarrisonDoor = true;
-                        orders.enterOverwatchAtEnd = true;
-                        orders.overwatchToSet = BuildOverwatchTrigger(pos2D, previousPos, node.action);
+                        checkpoint.setGarrisonDoor = true;
+                        checkpoint.enterOverwatchAtEnd = true;
+                        checkpoint.overwatchToSet = BuildOverwatchTrigger(pos2D, previousPos, node.action);
                         break;
 
                     case TacticalPathManager.NodeAction.SeCacher:
-                        orders.setCamouflaged = true;
+                        checkpoint.setCamouflaged = true;
                         break;
 
                     case TacticalPathManager.NodeAction.GarnisonFenetre:
@@ -1881,8 +1909,8 @@ namespace Novgov.Server
                             BuildingStructure.BuildingWindow window = building?.GetClosestWindow(new Vector3(pos2D.x, 0f, pos2D.y));
                             if (window != null)
                             {
-                                orders.setGarrisonWindow = true;
-                                orders.windowNormalToSet = new Vector2(window.outwardNormal.x, window.outwardNormal.z);
+                                checkpoint.setGarrisonWindow = true;
+                                checkpoint.windowNormalToSet = new Vector2(window.outwardNormal.x, window.outwardNormal.z);
                                 pendingWindowByUnitId[unit.gameObject.name] = window;
                             }
                             break;
@@ -1891,12 +1919,12 @@ namespace Novgov.Server
                     case TacticalPathManager.NodeAction.EntrerBatiment:
                         {
                             BuildingStructure building = BuildingStructure.FindBuildingAt(new Vector3(pos2D.x, 0f, pos2D.y));
-                            if (building != null && buildingIndex.TryGetValue(building, out int bid)) orders.enterBuildingId = bid;
+                            if (building != null && buildingIndex.TryGetValue(building, out int bid)) checkpoint.enterBuildingId = bid;
                             break;
                         }
 
                     case TacticalPathManager.NodeAction.SortirBatiment:
-                        orders.exitBuilding = true;
+                        checkpoint.exitBuilding = true;
                         break;
 
                     case TacticalPathManager.NodeAction.Escalade:
@@ -1904,22 +1932,24 @@ namespace Novgov.Server
                             // Hauteur exacte du parapet = hauteur du bâtiment escaladé (même
                             // ancrage que CreateRoofAccess côté rendu).
                             BuildingStructure building = BuildingStructure.FindBuildingAt(new Vector3(pos2D.x, 0f, pos2D.y));
-                            orders.setPositionY = building != null ? building.height : 3f;
+                            checkpoint.setPositionY = building != null ? building.height : 3f;
                             climbsThisOrder = true;
                             break;
                         }
                 }
 
+                orders.checkpoints.Add(checkpoint);
                 previousPos = pos2D;
             }
 
             // Descente implicite (rapport §2.3/§2.5) : l'ancien code déclenche ExecuteClimbDown dès
             // que le prochain point demandé est nettement plus bas QUE la position actuelle, sans
             // action dédiée dans l'enum — reproduit ici en ramenant au sol toute unité déjà sur un
-            // toit qui reçoit un nouvel ordre sans ré-escalader dans le même ordre.
-            if (wasOnRoof && !climbsThisOrder && orders.path.Count > 0)
+            // toit qui reçoit un nouvel ordre sans ré-escalader dans le même ordre. Appliquée une
+            // fois pour tout l'ordre (pas liée à un checkpoint précis), voir UnitOrders.implicitDescentY.
+            if (wasOnRoof && !climbsThisOrder && orders.checkpoints.Count > 0)
             {
-                orders.setPositionY = 0f;
+                orders.implicitDescentY = 0f;
             }
 
             return orders;
@@ -2651,6 +2681,153 @@ namespace Novgov.Server
             {
                 foreach (var u in UnitAI.AllLivingUnits.Where(u => u.teamID == 1)) u.ClearTacticalPath();
             }
+        }
+
+        // =====================================================================
+        // Entraînement contre l'IA (2026-09-02) — permet à un joueur SEUL en file d'attente
+        // Deathmatch/Zone de Contrôle de jouer une partie immédiate contre une garnison IA sur la
+        // carte par défaut, en attendant qu'un vrai adversaire se présente, plutôt que de patienter
+        // les bras croisés. Réutilise TEL QUEL le moteur "vivant" 1-joueur-contre-garnison déjà
+        // éprouvé par la Conquête (RunConquestDeploymentPhase/RunConquestPlanningPhase/
+        // RunExecutionPhase, TacticalAIPlanner) — jamais le moteur "Option B" en donnée pure
+        // (RunMatch), qui ne sait pas piloter d'IA. Contrainte héritée de la Conquête, inchangée :
+        // un seul combat "vivant" (Conquête OU Entraînement) à la fois par instance de serveur (voir
+        // matchInProgress) — un joueur qui déclenche l'entraînement pendant qu'un combat vivant
+        // tourne déjà reçoit un refus immédiat plutôt que d'attendre indéfiniment ; le client peut
+        // simplement retenter. Partie hors-score, sans effet sur le classement ni sur la table
+        // "zones" : uniquement pour s'entraîner/patienter.
+        // =====================================================================
+
+        private void HandlePracticeAiMessage(PlayerConnection conn)
+        {
+            if (matchInProgress)
+            {
+                conn.Send(new NetMessage { type = "match_over", winner_team = 0, reason = "server_busy" });
+                conn.Close();
+                return;
+            }
+
+            matchInProgress = true;
+            StartCoroutine(ReportInstanceStatus());
+            StartCoroutine(RunPracticeVsAIGuarded(conn));
+        }
+
+        /// <summary>Même principe que RunMatchGuarded/RunConquestRequestGuarded : une exception non
+        /// prévue ne doit jamais laisser matchInProgress bloqué à "true" pour toujours.</summary>
+        private IEnumerator RunPracticeVsAIGuarded(PlayerConnection player)
+        {
+            IEnumerator inner = RunPracticeVsAI(player);
+            while (true)
+            {
+                bool moved = false;
+                bool crashed = false;
+                try
+                {
+                    moved = inner.MoveNext();
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"[MatchSessionManager] Exception non gérée pendant un entraînement IA — abandon : {e}");
+                    crashed = true;
+                }
+
+                if (crashed)
+                {
+                    try { if (!player.IsDisconnected) player.Send(new NetMessage { type = "match_over", winner_team = 0, reason = "server_error" }); } catch { }
+                    try { player.Close(); } catch { }
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                    yield break;
+                }
+
+                if (!moved)
+                {
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                    yield break;
+                }
+                yield return inner.Current;
+            }
+        }
+
+        private IEnumerator RunPracticeVsAI(PlayerConnection player)
+        {
+            player.TeamId = 1;
+            string matchId = Guid.NewGuid().ToString();
+
+            yield return FetchUsername(player);
+
+            if (UnitSpawnerUI.Instance == null)
+            {
+                Debug.LogError("[MatchSessionManager] UnitSpawnerUI.Instance introuvable — la scène serveur est-elle correctement chargée ?");
+                player.Send(new NetMessage { type = "match_over", winner_team = 0, reason = "server_error" });
+                player.Close();
+                yield break;
+            }
+
+            UnitSpawnerUI.Instance.ClearAllUnits();
+            yield return null;
+
+            // Toujours la carte par défaut (jamais une vraie Zone/tuile GPS) — un entraînement n'a
+            // pas de territoire réel à charger, contrairement à la Conquête (LoadZoneOnServer).
+            yield return RestoreDefaultMapOnServer();
+
+            player.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 1, opponent_username = "IA (Entraînement)", mode = "practice_ai" });
+
+            yield return CreateMatchRecord(matchId, player, null, "practice_ai");
+
+            // defenderOwnerId=null : pas de renfort de garnison lié à un territoire (voir
+            // GarrisonExtraInfantryForZoneCount) — l'entraînement n'a pas de notion de "propriétaire
+            // de Zone", la garnison reste toujours à sa force de base.
+            yield return RunConquestDeploymentPhase(player, null);
+
+            foreach (var unit in UnitAI.AllLivingUnits.Where(u => u.teamID == 1)) unit.isPlayerControlled = true;
+
+            int turnNumber = 1;
+            bool matchOver = false;
+            int winnerTeam = 0;
+
+            while (!matchOver)
+            {
+                yield return RunConquestPlanningPhase(player, turnNumber);
+
+                if (player.IsDisconnected)
+                {
+                    matchOver = true;
+                    winnerTeam = 0;
+                    break;
+                }
+
+                yield return RunExecutionPhase(turnNumber, player, null);
+
+                int playerAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 1);
+                int garrisonAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 2);
+
+                if (playerAlive == 0 || garrisonAlive == 0)
+                {
+                    matchOver = true;
+                    winnerTeam = (playerAlive == 0 && garrisonAlive == 0) ? 0 : (playerAlive == 0 ? 2 : 1);
+                }
+                else if (turnNumber >= DeathmatchTurnCap)
+                {
+                    matchOver = true;
+                    int playerHealth = UnitAI.AllLivingUnits.Where(u => u.teamID == 1).Sum(u => u.health);
+                    int garrisonHealth = UnitAI.AllLivingUnits.Where(u => u.teamID == 2).Sum(u => u.health);
+                    if (playerAlive != garrisonAlive) winnerTeam = playerAlive > garrisonAlive ? 1 : 2;
+                    else if (playerHealth != garrisonHealth) winnerTeam = playerHealth > garrisonHealth ? 1 : 2;
+                    else winnerTeam = 0;
+                }
+
+                turnNumber++;
+            }
+
+            if (!player.IsDisconnected)
+            {
+                player.Send(new NetMessage { type = "match_over", winner_team = winnerTeam, reason = "practice" });
+            }
+
+            yield return CloseMatchRecord(matchId, winnerTeam);
+            player.Close();
         }
 
         /// <summary>Charge la géométrie réelle (bâtiments Overpass + sol OSM + NavMesh) d'une Zone

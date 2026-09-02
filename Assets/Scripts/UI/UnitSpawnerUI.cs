@@ -471,6 +471,20 @@ public class UnitSpawnerUI : MonoBehaviour
             return null;
         }
 
+        // Recalage UNIQUE ici, pour TOUS les types y compris Barricade (voir FindSafeSpawnPoint) —
+        // corrige le bug "IA/unités posées sur les polygones" pour deux raisons distinctes
+        // désormais traitées ensemble : (1) la branche Barricade plus bas ne passait par AUCUN
+        // recalage NavMesh/sol avant ce correctif (elle instanciait directement à "position" puis
+        // faisait "return null" avant d'atteindre le bloc de recalage partagé qui suit) ; (2) même
+        // pour les types qui en bénéficiaient déjà, l'ancien recalage (FindGroundLevelNavPoint)
+        // choisissait juste "le point NavMesh le plus bas parmi un anneau proche" — un rez-de-
+        // chaussée de bâtiment est AUSSI un point NavMesh bas et valide (les toits sont eux-mêmes
+        // praticables, pour les snipers), donc un char/une barricade pouvait quand même finir posé
+        // pile sur l'empreinte 2D d'un bâtiment (BuildingStructure.polygonFootprint) sans que rien
+        // ne le détecte. FindSafeSpawnPoint exclut explicitement ces empreintes et élargit
+        // progressivement la recherche si le point visé est en pleine zone bâtie.
+        position = FindSafeSpawnPoint(position, type, 6f);
+
         GameObject newUnitObj = null;
 
         if (type == UnitType.Fantassin)
@@ -713,13 +727,10 @@ public class UnitSpawnerUI : MonoBehaviour
                 anim.Update(0f);
             }
 
-            // Placement propre sur NavMesh — FindGroundLevelNavPoint (pas un simple
-            // NavMesh.SamplePosition) : ce dernier renvoie le point de NavMesh le plus PROCHE, qui
-            // peut être un toit de bâtiment praticable pour l'IA mais faux pour un spawn (voir le
-            // doc-comment de FindGroundLevelNavPoint plus bas) — c'était la cause des unités
-            // "posées sur des polygones, difficiles à manier" rapportée en jeu.
-            Vector3 groundPos = FindGroundLevelNavPoint(position, 5f);
-            if (NavMesh.SamplePosition(groundPos, out NavMeshHit hit, 5f, NavMesh.AllAreas))
+            // "position" est déjà un point NavMesh sûr (recalé tout en haut de cette méthode via
+            // FindSafeSpawnPoint) — un simple Warp direct suffit, plus besoin de relancer une
+            // recherche de recalage ici.
+            if (NavMesh.SamplePosition(position, out NavMeshHit hit, 5f, NavMesh.AllAreas))
             {
                 NavMeshAgent agent = newUnitObj.GetComponent<NavMeshAgent>();
                 if (agent != null)
@@ -847,6 +858,107 @@ public class UnitSpawnerUI : MonoBehaviour
         return found ? best : desired;
     }
 
+    /// <summary>Rayon de dégagement approximatif à vérifier autour d'un point de spawn candidat,
+    /// par type d'unité — un fantassin tient dans une rue étroite, mais un char/véhicule a besoin
+    /// d'un vrai dégagement autour de lui pour ne pas être coincé contre un mur au moment où il
+    /// bouge, et une barricade posée doit avoir toute sa largeur réelle hors de toute empreinte de
+    /// bâtiment (voir SpawnUnitAt, branche BarricadeRoutiere, échelle x1.3).</summary>
+    private static float ClearanceRadiusForType(UnitType type)
+    {
+        switch (type)
+        {
+            case UnitType.CharLeopard: return 3.0f;
+            case UnitType.VehiculeCanon: return 2.5f;
+            case UnitType.Mortier: return 1.5f;
+            case UnitType.BarricadeRoutiere: return 1.8f;
+            default: return 0.6f; // Fantassin
+        }
+    }
+
+    /// <summary>Vrai si "pos" (et, si clearanceRadius > 0, un petit anneau de points autour) tombe
+    /// entièrement HORS de l'empreinte 2D de tout bâtiment (BuildingStructure.ContainsPoint2D) — le
+    /// test point-dans-polygone exact, pas une simple heuristique de hauteur.</summary>
+    private static bool IsPointClearOfBuildings(Vector3 pos, float clearanceRadius)
+    {
+        if (BuildingStructure.FindBuildingAt(pos) != null) return false;
+        if (clearanceRadius > 0.01f)
+        {
+            const int probes = 6;
+            for (int i = 0; i < probes; i++)
+            {
+                float angle = i * (360f / probes) * Mathf.Deg2Rad;
+                Vector3 probe = pos + new Vector3(Mathf.Cos(angle) * clearanceRadius, 0f, Mathf.Sin(angle) * clearanceRadius);
+                if (BuildingStructure.FindBuildingAt(probe) != null) return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>Échantillonne un point visé + un anneau de points NavMesh autour de lui à un rayon
+    /// de recherche donné (même schéma géométrique que FindGroundLevelNavPoint) et renvoie tous les
+    /// points NavMesh valides trouvés, sans filtrage — le filtrage "hors bâtiment" est fait par
+    /// l'appelant (FindSafeSpawnPoint), pour pouvoir élargir le rayon progressivement.</summary>
+    private static List<Vector3> SampleNavMeshRing(Vector3 desired, float searchRadius)
+    {
+        var candidates = new List<Vector3> { desired };
+        const int ringSteps = 10;
+        for (int ring = 1; ring <= 3; ring++)
+        {
+            float radius = searchRadius * ring / 3f;
+            for (int i = 0; i < ringSteps; i++)
+            {
+                float angle = i * (360f / ringSteps) * Mathf.Deg2Rad;
+                candidates.Add(desired + new Vector3(Mathf.Cos(angle) * radius, 0f, Mathf.Sin(angle) * radius));
+            }
+        }
+
+        var results = new List<Vector3>();
+        foreach (var c in candidates)
+        {
+            if (NavMesh.SamplePosition(c, out NavMeshHit hit, searchRadius, NavMesh.AllAreas))
+                results.Add(hit.position);
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Point de spawn sûr pour "type" près de "desired" : sur le NavMesh, AU SOL (Y le plus bas
+    /// parmi les candidats, comme FindGroundLevelNavPoint), et — nouveau, voir SpawnUnitAt — hors de
+    /// l'empreinte 2D de tout bâtiment, avec un dégagement adapté au type (ClearanceRadiusForType).
+    /// Élargit progressivement le rayon de recherche (6 → 12 → 24 → 48m) si le point visé tombe en
+    /// pleine zone bâtie dense, plutôt que d'échouer silencieusement sur un point invalide.
+    /// </summary>
+    public static Vector3 FindSafeSpawnPoint(Vector3 desired, UnitType type, float baseSearchRadius = 6f)
+    {
+        float clearance = ClearanceRadiusForType(type);
+        Vector3 bestNavMeshFallback = desired;
+        bool haveFallback = false;
+
+        float radius = baseSearchRadius;
+        for (int attempt = 0; attempt < 4; attempt++, radius *= 2f)
+        {
+            var candidates = SampleNavMeshRing(desired, radius);
+
+            Vector3 bestClear = Vector3.zero;
+            float bestClearY = float.MaxValue;
+            bool foundClear = false;
+
+            foreach (var c in candidates)
+            {
+                if (!haveFallback) { bestNavMeshFallback = c; haveFallback = true; }
+                if (!IsPointClearOfBuildings(c, clearance)) continue;
+                if (c.y < bestClearY) { bestClearY = c.y; bestClear = c; foundClear = true; }
+            }
+
+            if (foundClear) return bestClear;
+        }
+
+        // Repli : même au rayon maximal, aucun point totalement dégagé d'une empreinte de bâtiment
+        // n'a été trouvé (îlot très dense) — le meilleur point NavMesh au sol reste préférable à la
+        // position brute demandée, qui pourrait tomber en plein milieu d'un mur.
+        return haveFallback ? bestNavMeshFallback : desired;
+    }
+
     /// <summary>
     /// Déploie instantanément une escouade ennemie IA (Fantassins, Char, Mortier) sur les routes.
     /// </summary>
@@ -921,6 +1033,20 @@ public class UnitSpawnerUI : MonoBehaviour
             float angle = i * 47f; // pas non-régulier : évite un alignement visuel trop mécanique
             Vector3 offset = Quaternion.Euler(0f, angle, 0f) * new Vector3(8f, 0f, 0f);
             SpawnUnitAt(UnitType.Fantassin, anchor + offset, team);
+        }
+
+        // Barricade défensive de garnison (amélioration IA, 2026-09-02) : la garnison IA (équipe 2,
+        // Conquête/Entraînement) n'avait jusqu'ici JAMAIS de barricade — seul SpawnEnemyWave (mode
+        // Solo classique) en posait une. Orientée vers le centre de la carte (direction d'approche
+        // la plus probable d'un attaquant), elle donne enfin à la garnison une position de
+        // couverture réelle que TacticalAIPlanner.PlanInfantryBehavior sait déjà exploiter
+        // (STRATÉGIE BARRICADE, voir ce fichier) — cette logique existait dans le code sans jamais
+        // avoir de barricade alliée à utiliser en dehors d'un placement manuel de joueur.
+        if (team == 2)
+        {
+            Vector3 towardCenter = (Vector3.zero - anchor).normalized;
+            if (towardCenter == Vector3.zero) towardCenter = Vector3.forward;
+            SpawnUnitAt(UnitType.BarricadeRoutiere, anchor + towardCenter * 10f, 2);
         }
     }
 

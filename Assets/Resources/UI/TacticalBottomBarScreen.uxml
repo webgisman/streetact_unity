@@ -59,8 +59,14 @@
 
             </ui:VisualElement>
 
-            <!-- Dedicated Right Column for Radar -->
-            <ui:VisualElement style="width: 16%; min-width: 120px; max-width: 175px; height: 100%; picking-mode: Ignore;" />
+            <!-- Dedicated Right Column for Radar — DOIT rester en phase avec TacticalRadarUI.OnGUI
+                 (2026-09-02, radar agrandi : 26% de la plus petite dimension d'écran, borné
+                 [140,230]px) : en portrait cette largeur % (base = largeur d'écran = dimension la
+                 plus petite) correspond exactement au calcul C#, donc aucun chevauchement ni gâchis
+                 d'espace ; en paysage elle réserve volontairement un peu PLUS que le radar réel
+                 (base = largeur d'écran, plus grande que la hauteur utilisée côté C#) — jamais
+                 moins, jamais de chevauchement possible avec la barre d'escouade/FIN DE TOUR. -->
+            <ui:VisualElement style="width: 26%; min-width: 140px; max-width: 230px; height: 100%; picking-mode: Ignore;" />
 
         </ui:VisualElement>
 
