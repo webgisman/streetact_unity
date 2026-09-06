@@ -94,14 +94,31 @@ namespace Novgov.Network
         private string emailField = "";
         private string passwordField = "";
         private string usernameField = "";
-        private string statusMessage = "";
 
         private int localTeamId = 0;
+        public int LocalTeamId => localTeamId;
+        public static Dictionary<string, int> LostUnits = new Dictionary<string, int>();
+
+        // Composition RÉELLE déployée pour mon camp (unit_type -> quantité), capturée à
+        // OnDeploymentResult (correctif 2026-09-06 — voir OnMatchOver) : ProcessLostUnitsAsync lit
+        // LostUnits pour décrémenter la caserne, mais rien n'écrivait jamais dedans — aucune perte
+        // au combat n'était donc jamais déduite, un joueur pouvait redéployer indéfiniment des
+        // unités pourtant mortes. Comparé à l'effectif encore vivant à OnMatchOver pour en déduire
+        // les pertes, sans dépendre d'un nouveau message serveur.
+        private Dictionary<string, int> deployedRosterCountByType = new Dictionary<string, int>();
+
         private string currentMode = "deathmatch";
         private float zoneProgressTeam1 = 0f;
         private float zoneProgressTeam2 = 0f;
         private int currentTurnNumber = 1;
         private int lastServerSecondsRemaining = -1;
+        public static int PhaseSecondsRemaining => Instance != null ? Instance.lastServerSecondsRemaining : 0;
+        // 2026-09-06 : garde contre un second "turn_result" qui démarrerait une deuxième
+        // PlaySnapshotsCoroutine en parallèle de la première (jamais vu en pratique, mais rien ne
+        // l'empêchait) — la coroutine en cours resterait alors valide, une deuxième relirait par
+        // dessus les MÊMES unités en même temps, une source de bugs visuels difficile à reproduire.
+        private bool isPlayingSnapshots = false;
+        private string statusMessage = "";
         private string ghostBannerText = "";
         private float ghostBannerTimer = 0f;
 
@@ -115,22 +132,10 @@ namespace Novgov.Network
         private VisualElement zoneBarContainer, zoneFillTeam1, zoneFillTeam2;
         private bool uiBound = false;
 
-        // Entraînement contre l'IA en attendant un adversaire (2026-09-02) — voir StartPracticeVsAI
-        // et MatchSessionManager.HandlePracticeAiMessage côté serveur.
-        private Button playVsAiButton;
-        private VisualElement aiHintRow;
-        private float matchmakingWaitTimer = 0f;
-        // Délai avant de proposer l'entraînement IA — assez court pour ne pas laisser le joueur
-        // attendre les bras croisés, assez long pour laisser une vraie chance à l'appariement
-        // normal de réussir en premier (un adversaire déjà en file est apparié en moins d'une
-        // seconde, voir MatchSessionManager.TryStartMatch).
-        private const float PlayVsAiOfferDelaySeconds = 6f;
-        // Vrai UNIQUEMENT pendant la fenêtre où StartPracticeVsAI ferme volontairement la connexion
-        // en file d'attente pour en rouvrir une nouvelle dédiée à l'entraînement — sans ce garde,
-        // HandleServerDisconnected traiterait cette déconnexion voulue comme une perte de connexion
-        // réseau et ramènerait le joueur à l'écran de connexion au lieu de le laisser rejoindre
-        // l'entraînement.
-        private bool isSwitchingToPractice = false;
+        // 2026-09-06 : offre "jouer contre l'IA en attendant" (bouton + minuteur + StartPracticeVsAI)
+        // retirée sur demande explicite — aucune mention d'IA ne doit apparaître dans les files
+        // d'attente Deathmatch/Zone de Contrôle. Elle n'était de toute façon jamais éligible pour
+        // Conquête/Entraînement (déjà exclus), donc plus aucun mode ne peut plus l'atteindre.
 
         private void Awake()
         {
@@ -150,28 +155,6 @@ namespace Novgov.Network
             if (uiState == UiState.Connecting || uiState == UiState.Matchmaking)
             {
                 if (waitingStatusLabel != null) waitingStatusLabel.text = statusMessage;
-
-                // Offre d'entraînement IA : seulement en file d'attente réelle (Matchmaking, pas le
-                // bref "Connecting" de recherche d'instance libre), et jamais pour la Conquête (une
-                // attaque de Zone se résout immédiatement, ce n'est pas une file d'attente entre
-                // deux joueurs — voir HandlePracticeAiMessage côté serveur pour le même principe).
-                bool eligible = uiState == UiState.Matchmaking && selectedMode != "conquest" && selectedMode != "practice_ai";
-                if (eligible)
-                {
-                    matchmakingWaitTimer += Time.deltaTime;
-                    bool shouldShow = matchmakingWaitTimer >= PlayVsAiOfferDelaySeconds;
-                    if (playVsAiButton != null && (playVsAiButton.style.display == DisplayStyle.None) == shouldShow)
-                    {
-                        playVsAiButton.style.display = shouldShow ? DisplayStyle.Flex : DisplayStyle.None;
-                    }
-                    if (aiHintRow != null) aiHintRow.style.display = shouldShow ? DisplayStyle.Flex : DisplayStyle.None;
-                }
-                else
-                {
-                    matchmakingWaitTimer = 0f;
-                    if (playVsAiButton != null) playVsAiButton.style.display = DisplayStyle.None;
-                    if (aiHintRow != null) aiHintRow.style.display = DisplayStyle.None;
-                }
             }
             else if (uiState == UiState.InMatch)
             {
@@ -181,6 +164,14 @@ namespace Novgov.Network
 
         public async void BeginLoginFlow()
         {
+            // 2026-09-06 : deux tentatives précédentes ici (déconnexion forcée du Joueur Virtuel,
+            // puis un simple "ignorer la session enregistrée") réglaient la lecture mais pas le fond
+            // du problème — PlayerPrefs vivait dans une case du Registre Windows PARTAGÉE entre
+            // l'Éditeur principal et ses clones Multiplayer Play Mode, donc SE CONNECTER depuis un
+            // Joueur Virtuel écrasait quand même cette case, et l'Éditeur principal en héritait au
+            // lancement suivant. Corrigé à la racine dans SupabaseAuthClient (voir
+            // Novgov.Core.EditorPlayerPrefsScope) : chaque identité a maintenant sa propre case, donc
+            // ce code redevient l'implémentation normale, sans cas particulier Éditeur ici.
             if (SupabaseAuthClient.HasSavedSession())
             {
                 statusMessage = "Reconnexion...";
@@ -204,103 +195,107 @@ namespace Novgov.Network
 
         private async void HandleSignIn()
         {
+            if (emailFieldEl != null && !string.IsNullOrEmpty(emailFieldEl.value)) emailField = emailFieldEl.value;
+            if (passwordFieldEl != null && !string.IsNullOrEmpty(passwordFieldEl.value)) passwordField = passwordFieldEl.value;
+
+            if (string.IsNullOrWhiteSpace(emailField) || string.IsNullOrWhiteSpace(passwordField))
+            {
+                statusMessage = "Veuillez saisir votre email et mot de passe.";
+                SetUiState(UiState.Login);
+                return;
+            }
+
             statusMessage = "Connexion en cours...";
             SetUiState(UiState.Connecting);
-            var (ok, error) = await SupabaseAuthClient.SignIn(emailField, passwordField);
+            var (ok, error) = await SupabaseAuthClient.SignIn(emailField.Trim(), passwordField);
             if (!ok)
             {
                 statusMessage = "Échec : " + error;
                 SetUiState(UiState.Login);
                 return;
             }
+            statusMessage = "";
             SetUiState(UiState.ModeSelect);
         }
 
         private async void HandleSignUp()
         {
+            if (emailFieldEl != null && !string.IsNullOrEmpty(emailFieldEl.value)) emailField = emailFieldEl.value;
+            if (passwordFieldEl != null && !string.IsNullOrEmpty(passwordFieldEl.value)) passwordField = passwordFieldEl.value;
+            if (usernameFieldEl != null && !string.IsNullOrEmpty(usernameFieldEl.value)) usernameField = usernameFieldEl.value;
+
+            if (string.IsNullOrWhiteSpace(emailField) || string.IsNullOrWhiteSpace(passwordField))
+            {
+                statusMessage = "Veuillez renseigner un email et un mot de passe.";
+                SetUiState(UiState.SignUp);
+                return;
+            }
+
+            if (passwordField.Length < 6)
+            {
+                statusMessage = "Le mot de passe doit comporter au moins 6 caractères.";
+                SetUiState(UiState.SignUp);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(usernameField))
+            {
+                usernameField = emailField.Split('@')[0];
+            }
+
             statusMessage = "Création du compte...";
             SetUiState(UiState.Connecting);
-            var (ok, error) = await SupabaseAuthClient.SignUp(emailField, passwordField, usernameField);
+            var (ok, error) = await SupabaseAuthClient.SignUp(emailField.Trim(), passwordField, usernameField.Trim());
             if (!ok)
             {
                 statusMessage = "Échec : " + error;
                 SetUiState(UiState.SignUp);
                 return;
             }
+            statusMessage = "";
             SetUiState(UiState.ModeSelect);
         }
 
         [System.Serializable] private class ServerInstanceEntry { public string id; public int public_port; }
         [System.Serializable] private class ServerInstanceList { public ServerInstanceEntry[] items; }
 
-        // Une instance sans heartbeat depuis plus longtemps que ça est considérée morte/plantée et
-        // ignorée (voir MatchSessionManager.InstanceHeartbeatSeconds = 2s côté serveur — largement
-        // de quoi tolérer une latence réseau normale sans pour autant router vers une instance figée).
-        private const int InstanceStaleSeconds = 10;
-
-        /// <summary>
-        /// Choisit une instance de serveur de jeu LIBRE avant de s'y connecter (voir schema.sql §7,
-        /// table "server_instances") — remplace la connexion directe à un port fixe unique d'avant
-        /// le pool multi-instances. Préfère une instance où quelqu'un attend déjà pour LE MÊME mode
-        /// (pour converger vers elle plutôt que vers une instance vide au hasard, et ainsi former
-        /// une paire), sinon prend la première instance libre disponible.
-        /// </summary>
-        /// <summary>Échec avant même la connexion TCP (matchmaking injoignable ou aucune instance
-        /// libre) — route vers l'écran pertinent selon le mode : ZoneResult pour une conquête (voir
-        /// ZoneMapController, abonné à OnZoneResult), ModeSelect pour Deathmatch/Zone de Contrôle.</summary>
-        private void FailConnection(string message)
-        {
-            isSwitchingToPractice = false;
-            if (selectedMode == "conquest")
-            {
-                OnZoneResult?.Invoke(message);
-            }
-            else
-            {
-                statusMessage = message;
-                SetUiState(UiState.ModeSelect);
-            }
-        }
+        private const int InstanceStaleSeconds = 60;
 
         private IEnumerator ConnectToGameServerCoroutine()
         {
-            matchmakingWaitTimer = 0f;
             statusMessage = "Recherche d'un serveur de jeu libre...";
             SetUiState(UiState.Matchmaking);
 
+            int chosenPort = 7777; // Port robuste par défaut
             string queueColumn = selectedMode == "zone_control" ? "waiting_zone_control" : "waiting_deathmatch";
-            string cutoffIso = System.DateTime.UtcNow.AddSeconds(-InstanceStaleSeconds).ToString("o");
-            string url = $"{SupabaseAuthClient.RestBaseUrl}/server_instances?status=neq.busy&updated_at=gt.{UnityWebRequest.EscapeURL(cutoffIso)}&order={queueColumn}.desc,updated_at.desc&limit=1&select=id,public_port";
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/server_instances?status=neq.busy&order={queueColumn}.desc,updated_at.desc&limit=1&select=id,public_port";
 
-            int chosenPort = -1;
-            using (UnityWebRequest req = UnityWebRequest.Get(url))
+            if (SupabaseAuthClient.CurrentSession != null && !string.IsNullOrEmpty(SupabaseAuthClient.CurrentSession.access_token))
             {
-                req.SetRequestHeader("apikey", SupabaseAuthClient.AnonKey);
-                req.SetRequestHeader("Authorization", "Bearer " + SupabaseAuthClient.CurrentSession.access_token);
-                yield return req.SendWebRequest();
-
-                if (req.result != UnityWebRequest.Result.Success)
+                using (UnityWebRequest req = UnityWebRequest.Get(url))
                 {
-                    FailConnection("Impossible de contacter le service de matchmaking.");
-                    yield break;
-                }
+                    req.timeout = 4;
+                    req.SetRequestHeader("apikey", SupabaseAuthClient.AnonKey);
+                    req.SetRequestHeader("Authorization", "Bearer " + SupabaseAuthClient.CurrentSession.access_token);
+                    yield return req.SendWebRequest();
 
-                try
-                {
-                    string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
-                    ServerInstanceEntry[] instances = JsonUtility.FromJson<ServerInstanceList>(wrapped).items;
-                    if (instances != null && instances.Length > 0) chosenPort = instances[0].public_port;
+                    if (req.result == UnityWebRequest.Result.Success)
+                    {
+                        try
+                        {
+                            string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                            ServerInstanceEntry[] instances = JsonUtility.FromJson<ServerInstanceList>(wrapped).items;
+                            if (instances != null && instances.Length > 0 && instances[0].public_port > 0)
+                            {
+                                chosenPort = instances[0].public_port;
+                            }
+                        }
+                        catch (System.Exception ex)
+                        {
+                            Debug.LogWarning($"[MultiplayerMatchController] Parsing server_instances : {ex.Message}");
+                        }
+                    }
                 }
-                catch (System.Exception ex)
-                {
-                    Debug.LogWarning($"[MultiplayerMatchController] Parsing server_instances échoué : {ex.Message}");
-                }
-            }
-
-            if (chosenPort < 0)
-            {
-                FailConnection("Tous les serveurs sont occupés — réessaie dans un instant.");
-                yield break;
             }
 
             GameServerClient.ServerPort = chosenPort;
@@ -351,32 +346,7 @@ namespace Novgov.Network
                 has_home_tile = hasHomeTile
             });
 
-            statusMessage = selectedMode == "conquest" ? $"Attaque de la Zone ({attackTileX},{attackTileY})..."
-                : selectedMode == "practice_ai" ? "Connexion à l'entraînement contre l'IA..."
-                : "Recherche d'adversaire...";
-
-            // Transition volontaire vers l'entraînement terminée (voir StartPracticeVsAI) — les
-            // déconnexions à partir d'ici sont à nouveau de vraies pertes de connexion.
-            isSwitchingToPractice = false;
-        }
-
-        /// <summary>Bascule le joueur, actuellement en file d'attente Deathmatch/Zone de Contrôle,
-        /// vers une partie d'entraînement immédiate contre l'IA sur la carte par défaut (voir
-        /// MatchSessionManager.HandlePracticeAiMessage) — pour patienter sans rester les bras
-        /// croisés en attendant un vrai adversaire. Il n'existe pas de message "annuler la file
-        /// d'attente" dans le protocole : referme simplement la connexion en cours (le serveur
-        /// retire alors automatiquement l'ancienne entrée de sa file, voir
-        /// MatchSessionManager.Update, "waitingDeathmatch.RemoveAll(c => c.IsDisconnected)") et en
-        /// ouvre une nouvelle dédiée à l'entraînement — même mécanique que ConnectToGameServerCoroutine,
-        /// juste avec mode="practice_ai".</summary>
-        public void StartPracticeVsAI()
-        {
-            if (uiState != UiState.Matchmaking) return;
-            isSwitchingToPractice = true;
-            GameServerClient.Instance?.Disconnect("switch_to_ai_practice");
-            selectedMode = "practice_ai";
-            matchmakingWaitTimer = 0f;
-            StartCoroutine(ConnectToGameServerCoroutine());
+            statusMessage = selectedMode == "conquest" ? $"Attaque de la Zone ({attackTileX},{attackTileY})..." : "Recherche d'adversaire...";
         }
 
         /// <summary>Demande au serveur d'attaquer/capturer la Zone de Conquête (tileX,tileY) — voir
@@ -389,6 +359,25 @@ namespace Novgov.Network
             selectedMode = "conquest";
             attackTileX = tileX;
             attackTileY = tileY;
+            StartCoroutine(ConnectToGameServerCoroutine());
+        }
+
+        /// <summary>2026-09-06 : jusqu'ici "deathmatch"/"zone_control" n'étaient JAMAIS déclenchés
+        /// depuis l'UI — seuls AttackZone (Conquête, un joueur contre une garnison IA, jamais un
+        /// adversaire vivant) et StartPracticeVsAI (accessible uniquement DEPUIS une file d'attente
+        /// déjà ouverte) appelaient ConnectToGameServerCoroutine. Le vrai appariement à deux joueurs
+        /// vivants (DetermineMatchCacheKey côté serveur) existait donc dans le protocole sans aucun
+        /// bouton pour l'atteindre. Ajouté ici, appelé par btn-deathmatch/btn-zone-control
+        /// (ModeSelectScreen.uxml, voir BindUI).</summary>
+        public void StartDeathmatch()
+        {
+            selectedMode = "deathmatch";
+            StartCoroutine(ConnectToGameServerCoroutine());
+        }
+
+        public void StartZoneControl()
+        {
+            selectedMode = "zone_control";
             StartCoroutine(ConnectToGameServerCoroutine());
         }
 
@@ -410,15 +399,17 @@ namespace Novgov.Network
 
         private void HandleServerDisconnected(string reason)
         {
-            // Déconnexion volontaire pour rebasculer vers l'entraînement IA (voir
-            // StartPracticeVsAI) — une reconnexion est déjà en cours, ne pas la traiter comme une
-            // vraie perte de connexion réseau.
-            if (isSwitchingToPractice) return;
-
             if (uiState == UiState.InMatch || uiState == UiState.Matchmaking || uiState == UiState.Deployment)
             {
                 statusMessage = DescribeDisconnectReason(reason);
-                SetUiState(UiState.Login);
+                if (Novgov.Auth.SupabaseAuthClient.CurrentSession != null && !string.IsNullOrEmpty(Novgov.Auth.SupabaseAuthClient.CurrentSession.access_token))
+                {
+                    SetUiState(UiState.ModeSelect);
+                }
+                else
+                {
+                    SetUiState(UiState.Login);
+                }
                 IsActive = false;
                 IsDeploymentPhaseActive = false;
             }
@@ -436,7 +427,7 @@ namespace Novgov.Network
                 case "deployment_result": OnDeploymentResult(msg); break;
                 case "turn_timer": lastServerSecondsRemaining = msg.seconds_remaining; break;
                 case "opponent_ghosted": OnOpponentGhosted(msg); break;
-                case "turn_result": StartCoroutine(PlaySnapshotsCoroutine(msg)); break;
+                case "turn_result": if (!isPlayingSnapshots) StartCoroutine(PlaySnapshotsCoroutine(msg)); break;
                 case "match_over": OnMatchOver(msg); break;
                 case "zone_captured": OnZoneCaptured(msg); break;
                 case "zone_attack_result": OnZoneAttackResult(msg); break;
@@ -468,6 +459,8 @@ namespace Novgov.Network
 
         private void OnMatchFound(NetMessage msg)
         {
+            LostUnits.Clear();
+            deployedRosterCountByType.Clear();
             localTeamId = msg.team_id;
             currentMode = string.IsNullOrEmpty(msg.mode) ? "deathmatch" : msg.mode;
             zoneProgressTeam1 = 0f;
@@ -487,7 +480,7 @@ namespace Novgov.Network
                 // chargée sur CE client avant d'ouvrir le déploiement — sans ça, le joueur placerait
                 // ses unités sur l'ancienne carte encore affichée à l'écran.
                 statusMessage = "Chargement de la Zone attaquée...";
-                StartCoroutine(LoadMatchMapThenOpenDeployment(true, msg.zone_tile_x, msg.zone_tile_y));
+                StartCoroutine(LoadMatchMapThenOpenDeployment(true, msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
                 return;
             }
 
@@ -501,7 +494,7 @@ namespace Novgov.Network
             // serveur, positions "décalées") — il faut donc TOUJOURS charger explicitement la carte
             // que le serveur a réellement choisie, jamais faire confiance à ce qui est déjà affiché.
             statusMessage = "Chargement du champ de bataille...";
-            StartCoroutine(LoadMatchMapThenOpenDeployment(msg.has_home_tile, msg.zone_tile_x, msg.zone_tile_y));
+            StartCoroutine(LoadMatchMapThenOpenDeployment(msg.has_home_tile, msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
         }
 
         /// <summary>Charge la carte réellement choisie par le serveur pour cette partie (voir
@@ -514,13 +507,25 @@ namespace Novgov.Network
         /// MatchSessionManager.GenerateAndCacheTile). Échec EXPLICITE si la carte n'est jamais prête,
         /// plutôt que d'enchaîner quand même sur le déploiement avec l'ancienne ville encore affichée
         /// (lacune de l'ancien code, plus probable désormais avec une vraie dépendance réseau).</summary>
-        private IEnumerator LoadMatchMapThenOpenDeployment(bool hasRealTile, int tileX, int tileY)
+        private async System.Threading.Tasks.Task LoadZoneWithHqAsync(int tileX, int tileY, string json)
+        {
+            string zoneId = $"{tileX},{tileY}";
+            var (ok, building) = await Novgov.Auth.SupabaseDatabaseClient.GetBuilding(zoneId);
+            if (ok && building != null)
+            {
+                var cityGen = FindAnyObjectByType<CityGenerator>();
+                if (cityGen != null) cityGen.HQBuildingIndex = building.building_index;
+            }
+            Novgov.Generation.ZoneManager.EnsureInstance().LoadZoneFromServerData(tileX, tileY, json);
+        }
+
+        private IEnumerator LoadMatchMapThenOpenDeployment(bool hasRealTile, int tileX, int tileY, string serverCityDataJson)
         {
             CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
 
-            if (hasRealTile)
+            if (hasRealTile && !string.IsNullOrEmpty(serverCityDataJson))
             {
-                Novgov.Generation.ZoneManager.EnsureInstance().LoadZone(tileX, tileY);
+                _ = LoadZoneWithHqAsync(tileX, tileY, serverCityDataJson);
             }
             else
             {
@@ -529,7 +534,12 @@ namespace Novgov.Network
                 if (cityGen != null) cityGen.LoadDefaultOfflineCity();
             }
 
-            float maxWait = hasRealTile ? 60f : 30f;
+            // 2026-09-06 : 60s/30s -> 300s (5 min), même demande/même raison que
+            // MatchSessionManager.DeploymentSeconds/MapReadyMaxWaitSeconds côté serveur — sans ce
+            // relèvement en parallèle, ce plafond CLIENT abandonnait bien avant que le délai généreux
+            // du serveur n'ait la moindre chance de servir.
+            const float MapLoadMaxWaitSeconds = 300f;
+            float maxWait = MapLoadMaxWaitSeconds;
             while (cityGen != null && !cityGen.IsCityReady && maxWait > 0f)
             {
                 maxWait -= Time.deltaTime;
@@ -538,7 +548,7 @@ namespace Novgov.Network
 
             if (cityGen != null && !cityGen.IsCityReady)
             {
-                Debug.LogError($"[MultiplayerMatchController] Carte non prête après {(hasRealTile ? 60f : 30f):F0}s (tuile réelle={hasRealTile}) — abandon, jamais d'ouverture du déploiement sur une carte non confirmée.");
+                Debug.LogError($"[MultiplayerMatchController] Carte non prête après {MapLoadMaxWaitSeconds:F0}s (tuile réelle={hasRealTile}) — abandon, jamais d'ouverture du déploiement sur une carte non confirmée.");
                 statusMessage = "Échec du chargement de la carte — nouvelle tentative nécessaire.";
                 GameServerClient.Instance?.Disconnect("map_load_failed");
                 yield break;
@@ -555,6 +565,15 @@ namespace Novgov.Network
         /// où le serveur ait dû recadrer une position hors de la zone légale.</summary>
         private void OpenDeploymentDock()
         {
+            // Récupération PROACTIVE de la caserne dès l'ouverture du déploiement (correctif
+            // 2026-09-06) — sans ça, UnitSpawnerUI.CurrentRoster restait null jusqu'au tout premier
+            // appel de GetRoster() (jamais garanti d'avoir eu lieu avant que le joueur ne tape sur un
+            // bouton de déploiement), et le contrôle de caserne y traitait un roster absent comme
+            // "0 unité possédée" pour tout : voir le commentaire dans UnitSpawnerUI.StartPlacingUnit.
+            // Lancée ici en tâche de fond, largement avant que le joueur n'ait fini de charger sa
+            // carte et ne puisse taper sur un bouton d'unité.
+            _ = Novgov.Auth.SupabaseDatabaseClient.GetRoster();
+
             UnitSpawnerUI.Instance.ClearAllUnits();
             UnitSpawnerUI.Instance.maxUnitsPerTeam = 4;
             UnitSpawnerUI.Instance.OpenDockForMultiplayerDeployment(localTeamId);
@@ -640,13 +659,27 @@ namespace Novgov.Network
             // le joueur ne peut de toute façon plus placer de nouvelles unités passé ce point.
             UnitSpawnerUI.Instance.maxUnitsPerTeam = 8;
 
+            deployedRosterCountByType.Clear();
             if (msg.deployed_units != null)
             {
                 foreach (var u in msg.deployed_units)
                 {
                     var type = (UnitSpawnerUI.UnitType)u.unit_type;
                     Vector3 pos = new Vector3(u.x, u.y, u.z);
-                    UnitSpawnerUI.Instance.SpawnUnitAt(type, pos, u.team_id, forcedName: u.unit_id);
+                    UnitSpawnerUI.Instance.SpawnUnitAt(type, pos, u.team_id, forcedName: u.unit_id, skipSafeSpawnAdjustment: true);
+
+                    // Composition RÉELLE et AUTORITAIRE (validée/recadrée par le serveur) de MON
+                    // camp, capturée ici — voir OnMatchOver, qui la compare à l'effectif encore
+                    // vivant en fin de partie pour déduire les pertes (voir deployedRosterCountByType).
+                    // Barricades exclues : ni suivies par la caserne (SupabaseDatabaseClient.
+                    // KnownUnitTypes), ni des UnitAI (jamais dans AllLivingUnits, donc toujours
+                    // "0 survivante" — fausserait le calcul sans que rien ne lise ce résultat).
+                    if (u.team_id == localTeamId && type != UnitSpawnerUI.UnitType.BarricadeRoutiere)
+                    {
+                        string key = type.ToString();
+                        deployedRosterCountByType.TryGetValue(key, out int cur);
+                        deployedRosterCountByType[key] = cur + 1;
+                    }
                 }
             }
 
@@ -692,8 +725,73 @@ namespace Novgov.Network
             }
         }
 
+        /// <summary>Alimente LostUnits (correctif 2026-09-06) en comparant, PAR TYPE, la composition
+        /// réellement déployée pour mon camp (deployedRosterCountByType, capturée à
+        /// OnDeploymentResult depuis la liste AUTORITAIRE du serveur) à l'effectif ENCORE VIVANT de
+        /// ce même camp à l'instant précis de la fin de partie. Avant ce correctif, LostUnits n'était
+        /// JAMAIS écrit nulle part dans tout le projet : ProcessLostUnitsAsync ne faisait donc
+        /// jamais rien (son unique garde, `if (LostUnits.Count == 0) return;`, était toujours vraie),
+        /// et aucune perte au combat n'était jamais déduite de la caserne — un joueur pouvait
+        /// redéployer indéfiniment des unités pourtant mortes en match précédent.
+        ///
+        /// Approche par DIFFÉRENCE d'effectif plutôt que par un nouveau message serveur listant les
+        /// morts une à une : ne nécessite aucun changement de protocole réseau, et reste correct même
+        /// si une unité change de représentation entre temps (elle est simplement soit vivante, soit
+        /// non, à cet instant précis).</summary>
+        private void ComputeLostUnitsFromDeployedVsAlive()
+        {
+            var aliveCountByType = new Dictionary<string, int>();
+            foreach (var u in UnitAI.AllLivingUnits)
+            {
+                if (u == null || u.isDead || u.teamID != localTeamId) continue;
+                aliveCountByType.TryGetValue(u.sourceUnitType, out int cur);
+                aliveCountByType[u.sourceUnitType] = cur + 1;
+            }
+
+            foreach (var kv in deployedRosterCountByType)
+            {
+                aliveCountByType.TryGetValue(kv.Key, out int stillAlive);
+                int lost = kv.Value - stillAlive;
+                if (lost > 0) LostUnits[kv.Key] = lost;
+            }
+        }
+
+        private async System.Threading.Tasks.Task ProcessLostUnitsAsync()
+        {
+            if (LostUnits.Count == 0) return;
+            var (ok, roster) = await Novgov.Auth.SupabaseDatabaseClient.GetRoster();
+            if (ok && roster != null)
+            {
+                foreach (var loss in LostUnits)
+                {
+                    var item = System.Linq.Enumerable.FirstOrDefault(roster, r => r.unit_type.Equals(loss.Key, System.StringComparison.OrdinalIgnoreCase));
+                    if (item != null)
+                    {
+                        int newQty = System.Math.Max(0, item.quantity - loss.Value);
+                        await Novgov.Auth.SupabaseDatabaseClient.UpsertRosterItem(loss.Key, newQty);
+                    }
+                }
+            }
+        }
+
+        private async System.Threading.Tasks.Task ClaimBuildingAsync(string zoneId)
+        {
+            int rndIndex = UnityEngine.Random.Range(1, 10);
+            await Novgov.Auth.SupabaseDatabaseClient.ClaimBuilding(zoneId, rndIndex);
+        }
+
         private void OnMatchOver(NetMessage msg)
         {
+            bool isVictory = msg.winner_team == localTeamId;
+
+            ComputeLostUnitsFromDeployedVsAlive();
+            _ = ProcessLostUnitsAsync();
+            if (isVictory && Novgov.Generation.ZoneManager.Instance != null)
+            {
+                string zoneId = $"{Novgov.Generation.ZoneManager.Instance.CurrentTileX},{Novgov.Generation.ZoneManager.Instance.CurrentTileY}";
+                _ = ClaimBuildingAsync(zoneId);
+            }
+
             IsActive = false;
             string resultText;
             if (currentMode == "conquest")
@@ -740,6 +838,7 @@ namespace Novgov.Network
 
         private IEnumerator PlaySnapshotsCoroutine(NetMessage msg)
         {
+            isPlayingSnapshots = true;
             currentTurnNumber = msg.turn_number + 1;
 
             var unitLookup = FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude)
@@ -769,7 +868,12 @@ namespace Novgov.Network
                         // apparaître directement à sa position révélée.
                         var newType = (UnitSpawnerUI.UnitType)state.unit_type;
                         Vector3 spawnPos = new Vector3(state.x, state.y, state.z);
-                        unit = UnitSpawnerUI.Instance.SpawnUnitAt(newType, spawnPos, state.team_id, forcedName: state.unit_id);
+                        // skipSafeSpawnAdjustment: true — même correctif que OnDeploymentResult ci-dessus :
+                        // cette position vient d'un tick déjà résolu par le serveur (voir TacticalResolver),
+                        // pas d'un placement frais. Sans ce garde, une unité ennemie qui vient d'être
+                        // repérée pouvait apparaître visuellement à un endroit différent de sa VRAIE
+                        // position logique (celle que le serveur et les autres clients utilisent).
+                        unit = UnitSpawnerUI.Instance.SpawnUnitAt(newType, spawnPos, state.team_id, forcedName: state.unit_id, skipSafeSpawnAdjustment: true);
                         if (unit == null) continue;
                         unitLookup[state.unit_id] = unit;
                         unit.isPlayerControlled = (unit.teamID == localTeamId);
@@ -826,11 +930,154 @@ namespace Novgov.Network
                 TacticalPathManager.Instance.phaseActuelle = TacticalPathManager.GamePhase.Planification;
 
             statusMessage = "";
+            isPlayingSnapshots = false;
         }
 
         // =====================================================================
         // UI Toolkit — câblage une fois, puis mise à jour ciblée des champs qui changent.
         // =====================================================================
+
+        private async System.Threading.Tasks.Task GrantDailyActionPoints()
+        {
+            if (Novgov.Auth.SupabaseAuthClient.CurrentSession == null || Novgov.Auth.SupabaseAuthClient.CurrentSession.user == null) return;
+            string userId = Novgov.Auth.SupabaseAuthClient.CurrentSession.user.id;
+            string lastClaimStr = UnityEngine.PlayerPrefs.GetString($"LastDailyAPClaim_{userId}", "");
+            string todayStr = System.DateTime.UtcNow.ToString("yyyyMMdd");
+            if (lastClaimStr != todayStr)
+            {
+                var (okBuildings, bList) = await Novgov.Auth.SupabaseDatabaseClient.GetBuildings();
+                int bonus = 50; 
+                if (okBuildings && bList != null) bonus += bList.Length * 10;
+
+                Novgov.Auth.SupabaseDatabaseClient.AddActionPoints(userId, bonus);
+                UnityEngine.PlayerPrefs.SetString($"LastDailyAPClaim_{userId}", todayStr);
+                UnityEngine.PlayerPrefs.Save();
+            }
+            RefreshModeSelectScreen();
+        }
+
+        private async void RefreshModeSelectScreen()
+        {
+            var root = UIScreenManager.Instance.GetScreen("ModeSelect");
+            if (root == null) return;
+            var lblUser = root.Q<Label>("lbl-username");
+            var lblAP = root.Q<Label>("lbl-action-points");
+
+            var (okProf, prof) = await Novgov.Auth.SupabaseDatabaseClient.GetProfile();
+            if (okProf && prof != null)
+            {
+                if (lblUser != null) lblUser.text = $"Commandant {prof.username}";
+                if (lblAP != null) lblAP.text = $"Points d'Action : {prof.action_points}";
+            }
+        }
+
+        private async void RefreshBuildingsScreen()
+        {
+            var root = UIScreenManager.Instance.GetScreen("Buildings");
+            if (root == null) return;
+            var scroll = root.Q<ScrollView>("buildings-scroll");
+            if (scroll == null) return;
+            scroll.Clear();
+            var lblLoading = new Label("Chargement des territoires...");
+            lblLoading.style.color = Color.white;
+            scroll.Add(lblLoading);
+
+            var (ok, list) = await Novgov.Auth.SupabaseDatabaseClient.GetBuildings();
+            scroll.Clear();
+            if (!ok || list == null || list.Length == 0)
+            {
+                var lbl = new Label("Vous ne possédez aucun territoire (bâtiment). Partez à la conquête de Zones pour en gagner !");
+                lbl.style.color = Color.white;
+                lbl.style.whiteSpace = WhiteSpace.Normal;
+                scroll.Add(lbl);
+                return;
+            }
+
+            foreach(var b in list)
+            {
+                var row = new VisualElement();
+                row.style.flexDirection = FlexDirection.Row;
+                row.style.justifyContent = Justify.SpaceBetween;
+                row.style.paddingTop = 8;
+                row.style.paddingBottom = 8;
+                row.style.borderBottomWidth = 1;
+                row.style.borderBottomColor = new Color(1,1,1,0.2f);
+                
+                var lblInfo = new Label($"Zone: {b.zone_id} | Index: {b.building_index}");
+                lblInfo.style.color = Color.white;
+                lblInfo.style.fontSize = 16;
+                row.Add(lblInfo);
+
+                scroll.Add(row);
+            }
+        }
+
+        private async void RefreshRosterScreen()
+        {
+            var root = UIScreenManager.Instance.GetScreen("Roster");
+            if (root == null) return;
+            var scroll = root.Q<ScrollView>("roster-scroll");
+            var lblPoints = root.Q<Label>("lbl-action-points");
+            if (scroll == null) return;
+            scroll.Clear();
+            
+            var (okProf, prof) = await Novgov.Auth.SupabaseDatabaseClient.GetProfile();
+            int currentAp = prof?.action_points ?? 0;
+            if (lblPoints != null) lblPoints.text = $"Solde : {currentAp} AP";
+
+            var (ok, roster) = await Novgov.Auth.SupabaseDatabaseClient.GetRoster();
+
+            // Source unique (correctif 2026-09-06) : ce tableau était dupliqué ici avec des noms
+            // ("Canon", "Char") qui ne correspondent à aucune valeur réelle de UnitType — voir le
+            // commentaire de SupabaseDatabaseClient.KnownUnitTypes pour le détail du bug que ça
+            // causait (Canon/Char indéfiniment indéployables après achat).
+            string[] unitTypes = Novgov.Auth.SupabaseDatabaseClient.KnownUnitTypes;
+            int[] unitCosts = Novgov.Auth.SupabaseDatabaseClient.KnownUnitCosts;
+
+            for (int i = 0; i < unitTypes.Length; i++)
+            {
+                string uType = unitTypes[i];
+                int cost = unitCosts[i];
+                var item = roster != null ? System.Linq.Enumerable.FirstOrDefault(roster, r => r.unit_type.Equals(uType, System.StringComparison.OrdinalIgnoreCase)) : null;
+                int qty = item != null ? item.quantity : 0;
+
+                var row = new VisualElement();
+                row.style.flexDirection = FlexDirection.Row;
+                row.style.justifyContent = Justify.SpaceBetween;
+                row.style.paddingTop = 8;
+                row.style.paddingBottom = 8;
+                row.style.borderBottomWidth = 1;
+                row.style.borderBottomColor = new Color(1,1,1,0.2f);
+                
+                var lblName = new Label($"{uType} (Possédé: {qty})");
+                lblName.style.color = Color.white;
+                lblName.style.fontSize = 16;
+                row.Add(lblName);
+
+                var btnBuy = new Button();
+                btnBuy.text = $"Recruter ({cost} AP)";
+                btnBuy.style.backgroundColor = currentAp >= cost ? new Color(0.2f, 0.6f, 0.2f) : new Color(0.5f, 0.5f, 0.5f);
+                
+                if (currentAp >= cost)
+                {
+                    btnBuy.clicked += async () =>
+                    {
+                        btnBuy.SetEnabled(false);
+                        int newAp = currentAp - cost;
+                        await Novgov.Auth.SupabaseDatabaseClient.UpdateProfile(prof.username, newAp);
+                        await Novgov.Auth.SupabaseDatabaseClient.UpsertRosterItem(uType, qty + 1);
+                        RefreshRosterScreen();
+                    };
+                }
+                else
+                {
+                    btnBuy.SetEnabled(false);
+                }
+                
+                row.Add(btnBuy);
+                scroll.Add(row);
+            }
+        }
 
         private void BindUI()
         {
@@ -843,8 +1090,51 @@ namespace Novgov.Network
             uiBound = true;
 
             VisualElement modeSelectRoot = UIScreenManager.Instance.GetScreen("ModeSelect");
-            modeSelectRoot.Q<Button>("btn-deathmatch").clicked += () => { selectedMode = "deathmatch"; StartCoroutine(ConnectToGameServerCoroutine()); };
-            modeSelectRoot.Q<Button>("btn-zone-control").clicked += () => { selectedMode = "zone_control"; StartCoroutine(ConnectToGameServerCoroutine()); };
+            Button conquestBtn = modeSelectRoot?.Q<Button>("btn-conquest");
+            if (conquestBtn != null)
+            {
+                conquestBtn.clicked += () => Novgov.UI.ZoneMapController.EnsureInstance().Show();
+            }
+            
+            Button zoneMapBtn = modeSelectRoot?.Q<Button>("btn-zone-map");
+            if (zoneMapBtn != null) zoneMapBtn.clicked += () => Novgov.UI.ZoneMapController.EnsureInstance().Show();
+
+            // Seul vrai mode où deux comptes différents s'affrontent en direct, synchronisés par le
+            // même serveur (voir StartDeathmatch/StartZoneControl) — la Conquête ci-dessus est
+            // toujours un joueur seul contre une garnison IA.
+            Button deathmatchBtn = modeSelectRoot?.Q<Button>("btn-deathmatch");
+            if (deathmatchBtn != null) deathmatchBtn.clicked += StartDeathmatch;
+
+            Button zoneControlBtn = modeSelectRoot?.Q<Button>("btn-zone-control");
+            if (zoneControlBtn != null) zoneControlBtn.clicked += StartZoneControl;
+
+            Button rosterBtn = modeSelectRoot?.Q<Button>("btn-roster");
+            if (rosterBtn != null) rosterBtn.clicked += () => {
+                UIScreenManager.Instance.Show("Roster");
+                RefreshRosterScreen();
+            };
+
+            Button buildingsBtn = modeSelectRoot?.Q<Button>("btn-buildings");
+            if (buildingsBtn != null) buildingsBtn.clicked += () => {
+                UIScreenManager.Instance.Show("Buildings");
+                RefreshBuildingsScreen();
+            };
+
+            Button backToStartupBtn = modeSelectRoot?.Q<Button>("btn-back-startup");
+            if (backToStartupBtn != null)
+            {
+                backToStartupBtn.clicked += () =>
+                {
+                    Novgov.Network.GameServerClient.Instance?.Disconnect("user_left_lobby");
+                    SetUiState(UiState.Hidden);
+                    GameManagerUI.Instance?.ReturnToStartupMenu();
+                };
+            }
+            var rosterRoot = UIScreenManager.Instance.GetScreen("Roster");
+            rosterRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.ModeSelect));
+
+            var bldgRoot = UIScreenManager.Instance.GetScreen("Buildings");
+            bldgRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.ModeSelect));
 
             authRoot = UIScreenManager.Instance.GetScreen("Auth");
             authTitleLabel = authRoot.Q<Label>("title-label");
@@ -897,9 +1187,6 @@ namespace Novgov.Network
 
             waitingRoot = UIScreenManager.Instance.GetScreen("Waiting");
             waitingStatusLabel = waitingRoot.Q<Label>("status-label");
-            playVsAiButton = waitingRoot.Q<Button>("btn-play-vs-ai");
-            aiHintRow = waitingRoot.Q<VisualElement>("ai-hint-row");
-            if (playVsAiButton != null) playVsAiButton.clicked += StartPracticeVsAI;
 
             hudRoot = UIScreenManager.Instance.GetScreen("InMatchHud");
             teamBanner = hudRoot.Q<Label>("team-banner");
@@ -934,7 +1221,9 @@ namespace Novgov.Network
                     UIScreenManager.Instance.Show("Auth");
                     break;
                 case UiState.ModeSelect:
+                    RefreshModeSelectScreen();
                     UIScreenManager.Instance.Show("ModeSelect");
+                    _ = GrantDailyActionPoints();
                     break;
                 case UiState.Connecting:
                 case UiState.Matchmaking:
@@ -1015,17 +1304,19 @@ namespace Novgov.Network
             float radarBottom = TacticalRadarUI.BottomEdgeVirtualY;
             hudRoot.style.paddingTop = radarBottom > 0f ? radarBottom + 12f : 40f;
 
-            timerLabel.text = lastServerSecondsRemaining >= 0 ? $"⏱️ {lastServerSecondsRemaining}s" : "";
-            // Couleurs alignées sur NovgovTheme (miroir C# de Theme.tss) plutôt que des valeurs RGB
-            // codées en dur qui ne correspondaient à aucun token de la palette (voir rapport d'audit
-            // interface, défaut important #6) — --color-danger pour l'urgence, --color-text sinon.
-            timerLabel.style.color = lastServerSecondsRemaining <= 10 && lastServerSecondsRemaining >= 0
-                ? new StyleColor(NovgovTheme.Danger) : new StyleColor(NovgovTheme.Neutral);
+            bool isExecuting = TacticalPathManager.Instance != null && TacticalPathManager.Instance.phaseActuelle == TacticalPathManager.GamePhase.Execution;
+
+            // 2026-09-06 : compte à rebours retiré de l'affichage sur demande explicite ("enlève le
+            // temps dans tous les états, ne stresse pas le joueur") — la limite de temps serveur
+            // existe toujours en coulisses (PlanningSeconds/DeploymentSeconds, généreuses, 5 min pour
+            // le déploiement) comme filet de sécurité contre un adversaire réellement absent, mais ne
+            // s'affiche plus nulle part. lastServerSecondsRemaining reste alimenté par "turn_timer"
+            // (PhaseSecondsRemaining en dépend encore ailleurs) mais n'est plus lu ici.
+            timerLabel.text = "";
 
             phaseLabel.text = !string.IsNullOrEmpty(statusMessage)
                 ? statusMessage
-                : (TacticalPathManager.Instance != null && TacticalPathManager.Instance.phaseActuelle == TacticalPathManager.GamePhase.Execution
-                    ? "EXÉCUTION" : "PLANIFICATION");
+                : (isExecuting ? "EXÉCUTION — résolution du tour, patientez..." : "PLANIFICATION");
 
             if (currentMode == "zone_control")
             {

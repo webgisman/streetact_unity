@@ -9,7 +9,12 @@ using UnityEngine;
 public class UnitTacticalMarker : MonoBehaviour
 {
     public Color markerColor = Color.blue;
-    public float markerSize = 4.8f;
+    // Réduit de 4.8 à 2.4 (correctif 2026-09-06) : depuis que le masquage 3D est désactivé
+    // (UnitAI.Start(), voir son commentaire), le vrai modèle de l'unité reste visible en vue
+    // Commandement (2D) — ce marqueur ne sert plus d'ICÔNE de remplacement mais de simple anneau de
+    // couleur d'équipe au sol, sous le modèle réel ; à cette taille il resterait bien plus large que
+    // la plupart des modèles et les cacherait par-dessous.
+    public float markerSize = 2.4f;
 
     private GameObject markerObject;
     private MeshRenderer markerRenderer;

@@ -9,7 +9,7 @@ using Novgov.TacticalCore;
 /// règles de l'audit exhaustif du 2026-08-30 (UnitAI_Combat.cs, UnitAI.cs, RoadBarrier.cs,
 /// MortarShell.cs, DestructibleEnvironment.cs) — voir TacticalTypes.cs pour les sources exactes.
 /// </summary>
-public static class TacticalCoreSelfTest
+public static partial class TacticalCoreSelfTest
 {
     [MenuItem("Novgov/Tests/TacticalCore Self-Test")]
     public static void RunAll()
@@ -30,6 +30,13 @@ public static class TacticalCoreSelfTest
         Run("Résolution : le déplacement contourne un bâtiment au lieu de couper au travers (\"raccourci\")", TestResolveMovementAvoidsBuilding, ref passed, ref failed);
         Run("Résolution : un checkpoint intermédiaire exécute sa commande immédiatement, pas en fin de chemin", TestCheckpointCommandFiresImmediately, ref passed, ref failed);
         Run("Résolution : un chemin multi-checkpoints visite chaque point dans l'ordre exact", TestMultiCheckpointOrderPreserved, ref passed, ref failed);
+
+        // Tests de traversée de toit et de fenêtre de combat (2026-09-03) — voir
+        // TacticalCoreSelfTest_Roof.cs.
+        RunExtraTests(ref passed, ref failed);
+
+        // Logique CLIENT pure (sentinelles, etc.) — voir TacticalCoreSelfTest_Client.cs.
+        RunClientLogicTests(ref passed, ref failed);
 
         Debug.Log(passed == 0 && failed == 0
             ? "[TacticalCoreSelfTest] Aucun test exécuté."
@@ -164,11 +171,12 @@ public static class TacticalCoreSelfTest
         state.units.Add(shooter);
         state.units.Add(garrisonedAndGuarding);
 
-        int healthBefore = garrisonedAndGuarding.health;
-        TacticalResolver.Resolve(state, new List<UnitOrders>(), new List<UnitOrders>(), null); // pas d'ordres : juste le combat continu
-        int damageTaken = healthBefore - garrisonedAndGuarding.health;
+        var coverEvents = TacticalResolver.Resolve(state, new List<UnitOrders>(), new List<UnitOrders>(), null); // pas d'ordres : juste le combat continu
+        int damageTaken = FirstShotDamage(coverEvents, "Shooter");
 
         // 100 * 0.25 (garnison) = 25 exactement — si -50% s'appliquait EN PLUS, ce serait 12 ou 13.
+        // Mesuré sur le PREMIER tir : la fenêtre de combat de 2.0s en contient plusieurs (voir
+        // TacticalResolver, CombatWindowTicks), alors que la règle testée s'applique par tir.
         return damageTaken == 25;
     }
 
@@ -184,11 +192,11 @@ public static class TacticalCoreSelfTest
         state.units.Add(shooter);
         state.units.Add(target);
 
-        int healthBefore = target.health;
-        TacticalResolver.Resolve(state, new List<UnitOrders>(), new List<UnitOrders>(), null);
-        int damageTaken = healthBefore - target.health;
+        var camoEvents = TacticalResolver.Resolve(state, new List<UnitOrders>(), new List<UnitOrders>(), null);
+        int damageTaken = FirstShotDamage(camoEvents, "Ambusher");
 
-        // 20 * 1.75 = 35 exactement, et le camouflage doit être tombé après.
+        // 20 * 1.75 = 35 exactement sur le PREMIER tir (le bonus d'embuscade ne vaut qu'une fois),
+        // et le camouflage doit être tombé après.
         return damageTaken == 35 && !shooter.isCamouflaged;
     }
 
@@ -364,6 +372,18 @@ public static class TacticalCoreSelfTest
         bool endedAtLast = Vector2.Distance(unit.position, cpC) < 0.5f;
 
         return allFound && inOrder && endedAtLast;
+    }
+
+    /// <summary>Dégâts du PREMIER tir de ce tireur dans la résolution. Les règles de couverture et
+    /// d'embuscade se vérifient PAR TIR, alors qu'une résolution contient toute une fenêtre de combat
+    /// de 2.0s (plusieurs tirs).</summary>
+    private static int FirstShotDamage(List<TacticalEvent> events, string shooterId)
+    {
+        foreach (var e in events)
+        {
+            if (e.kind == TacticalEvent.Kind.Shot && e.unitId == shooterId) return e.damage;
+        }
+        return -1;
     }
 
     private static int FirstTickWithin(List<TacticalEvent> events, string unitId, Vector2 point, float threshold)

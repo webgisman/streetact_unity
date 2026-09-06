@@ -20,14 +20,15 @@ public partial class TacticalPathManager
     private VisualElement bottomBarRoot, contextMenuRoot, planGroupEl, execGroupEl, squadBarEl, topActionsRowEl;
     private VisualElement buttonContainerEl;
     private Button view3dButtonEl, cancelBtnEl, confirmBtnEl;
+    // Conservé pour pouvoir masquer "Passer" en multijoueur (voir RefreshTacticalUI) : il n'y abrège
+    // rien, c'est le serveur qui décide de la fin du tour.
+    private Button skipButtonEl;
     private Label menuTitleEl;
     private Label notifBellBadgeEl;
     private Label invalidTapToastEl;
     private float invalidTapToastTimer = 0f;
     private System.Action currentMenuCancelAction;
     private System.Action currentMenuConfirmAction;
-    private readonly List<UnitAI> squadBarRoster = new List<UnitAI>();
-    private readonly List<VisualElement> squadBarPortraitEls = new List<VisualElement>();
 
     private void BindTacticalUI()
     {
@@ -74,7 +75,23 @@ public partial class TacticalPathManager
 
             Button skipBtn = bottomBarRoot.Q<Button>("skip-button");
             if (skipBtn == null) { Debug.LogError("[TacticalPathManager] Bouton 'skip-button' introuvable dans le UXML instancié."); return; }
-            skipBtn.clicked += ForcerFinExecution;
+            skipButtonEl = skipBtn;
+            // "Passer" ne vaut qu'en SOLO. En multijoueur, la fin du tour est décidée par le serveur :
+            // ForcerFinExecution est purement local (il repasse en Planification et efface les ordres),
+            // donc appuyer dessus pendant que le serveur résout ou que le rejeu tourne faisait
+            // replanifier le joueur par-dessus des unités encore en train de bouger, puis effaçait
+            // d'un coup tout ce qu'il venait de tracer à la fin du rejeu — voire envoyait un second
+            // "submit_turn" pour le tour suivant. On le neutralise donc hors solo (il est masqué juste
+            // en dessous, ce garde couvre le cas où il resterait cliquable).
+            skipBtn.clicked += () =>
+            {
+                if (Novgov.Network.MultiplayerMatchController.IsFlowActive)
+                {
+                    Debug.Log("[TacticalPathManager] \"Passer\" ignoré en multijoueur : la fin du tour est décidée par le serveur.");
+                    return;
+                }
+                ForcerFinExecution();
+            };
 
             if (view3dButtonEl == null) { Debug.LogError("[TacticalPathManager] Élément 'view3d-button' introuvable dans le UXML instancié."); return; }
             view3dButtonEl.clicked += () =>
@@ -190,6 +207,16 @@ public partial class TacticalPathManager
         bool isPlanification = phaseActuelle == GamePhase.Planification;
         planGroupEl.style.display = isPlanification ? DisplayStyle.Flex : DisplayStyle.None;
         execGroupEl.style.display = isPlanification ? DisplayStyle.None : DisplayStyle.Flex;
+
+        // "Passer" abrège l'exécution — un geste qui n'a de sens qu'en solo, où c'est le client qui
+        // arbitre la durée du tour. En multijoueur il n'a aucun effet (voir le garde à son câblage) :
+        // autant ne pas le proposer plutôt que d'afficher un bouton qui ne fait rien.
+        if (skipButtonEl != null)
+        {
+            skipButtonEl.style.display = Novgov.Network.MultiplayerMatchController.IsFlowActive
+                ? DisplayStyle.None
+                : DisplayStyle.Flex;
+        }
 
         bool showContext = isPlanification && uniteSelectionnee != null && !hideBottomBar;
         view3dButtonEl.style.display = (is2DMode && showContext) ? DisplayStyle.Flex : DisplayStyle.None;
@@ -396,25 +423,5 @@ public partial class TacticalPathManager
         }
     }
 
-    private int CountPlayerUnits()
-    {
-        int count = 0;
-        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
-        {
-            UnitAI u = UnitAI.AllLivingUnits[i];
-            if (u != null && u.isPlayerControlled && !u.isDead) count++;
-        }
-        return count;
-    }
-
-    private static Texture2D SquadPortraitIcon(UnitAI unit)
-    {
-        if (unit.isTank) return ProceduralIconFactory.Tank();
-        if (unit.isMortar) return ProceduralIconFactory.Mortar();
-        string n = unit.gameObject.name.ToLowerInvariant();
-        if (n.Contains("canon")) return ProceduralIconFactory.GunVehicle();
-        if (n.Contains("barricade") || n.Contains("barrier")) return ProceduralIconFactory.Barrier();
-        return ProceduralIconFactory.Soldier();
-    }
 #endif
 }

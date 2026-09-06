@@ -17,8 +17,9 @@ public class CityGenerator : MonoBehaviour
     public const int ZONE_ZOOM = 17;
 
     [Header("Zone de Conquête actuelle (index de tuile Slippy Map, Zoom 17)")]
-    public int zoneTileX;
-    public int zoneTileY;
+    public int zoneTileX = 0;
+    public int zoneTileY = 0;
+    public int HQBuildingIndex = -1;
 
     // Conservés en lecture seule pour tout code externe qui affiche encore une position GPS (debug UI,
     // logs) : recalculés à partir de (zoneTileX, zoneTileY) au centre de la Zone, jamais lus en entrée.
@@ -93,6 +94,13 @@ public class CityGenerator : MonoBehaviour
         // voir TacticalPathManager_PathDrawing.AppendGridPathSegment) — sans ça, un ancien cache
         // mettrait les murs de l'ANCIENNE carte au mauvais endroit sur la nouvelle.
         Novgov.TacticalCore.TacticalGridBuilder.InvalidateCache();
+
+        // Même raisonnement, même piège : la liste des zones de ruines franchissables est un état
+        // STATIQUE du processus. Les bâtiments de l'ancienne ville viennent d'être détruits par
+        // Destroy(oldCity), mais leurs rectangles de "franchissement libre" restaient enregistrés et
+        // s'appliquaient à la carte suivante — des unités traversaient donc les murs dès le premier
+        // tour, sur des bâtiments parfaitement intacts.
+        DestructibleEnvironment.ResetRubble();
     }
 
     [ContextMenu("Generate City")]
@@ -120,6 +128,26 @@ public class CityGenerator : MonoBehaviour
         longitude = (float)centerLon;
         GeoProjection.SetCenter(latitude, longitude);
         CurrentGridCacheKey = $"Z{ZONE_ZOOM}_{zoneTileX}_{zoneTileY}";
+
+        // CACHE DISQUE LU AVANT TOUTE REQUÊTE (correctif 2026-09-05). Ce fichier était jusqu'ici
+        // écrit après chaque fetch mais JAMAIS relu : chaque appel à cette méthode déclenchait donc
+        // TOUJOURS un vrai appel réseau Overpass, même pour une tuile déjà générée par ce processus
+        // auparavant. Une fois qu'une tuile a été vue une première fois, son JSON est désormais figé
+        // ici pour la durée de vie du cache — ce qui réduit aussi l'exposition au risque documenté
+        // "deux requêtes vers deux miroirs Overpass indépendants peuvent légèrement diverger" : seul
+        // le tout premier appel jamais fait pour cette tuile touche encore le réseau.
+        //
+        // Cette méthode n'est plus utilisée pour la géométrie d'un VRAI match multijoueur (voir
+        // LoadZoneFromServerData, appelé à la place) : elle ne sert plus qu'à l'initialisation de la
+        // Zone domicile du joueur, à l'exploration de la carte des Zones, et — en tout dernier
+        // recours si le serveur n'a pas fourni ses données — à un repli d'urgence. Ce cache-hit ne
+        // réintroduit donc aucun risque d'équité qui n'existait pas déjà dans ce chemin de repli.
+        if (TryReadZoneCacheFromDisk(zoneTileX, zoneTileY, out string cachedJson))
+        {
+            Debug.Log($"[CityGenerator] 📂 Zone ({zoneTileX},{zoneTileY}) restaurée depuis le cache disque local — aucune requête Overpass.");
+            yield return FinishZoneLoadFromJson(cachedJson);
+            yield break;
+        }
 
         // Utilisation de InvariantCulture pour forcer le point '.' comme séparateur décimal
         // Ajout de [timeout:90] pour laisser plus de temps au serveur sur les grosses requêtes (le défaut est court)
@@ -174,104 +202,203 @@ public class CityGenerator : MonoBehaviour
         }
         else
         {
-                Debug.Log("Data fetched successfully. Processing...");
-
-                // Sauvegarde automatique du cache disque local pour réutilisation hors-ligne. Clé par
-                // index de tuile (Zone unique et déterministe) au lieu de lat/lon arrondis — deux appels
-                // pour la même Zone tombent maintenant TOUJOURS sur le même fichier, plus de risque de
-                // cache manqué à cause d'un léger écart de précision GPS.
-                string cacheFileName = ZoneCacheFileName(zoneTileX, zoneTileY);
-                string cachePath = System.IO.Path.Combine(Application.persistentDataPath, cacheFileName);
-                try
-                {
-                    System.IO.File.WriteAllText(cachePath, jsonText);
-                    Debug.Log($"[CityGenerator] 💾 Données de la carte sauvegardées dans le cache local : {cachePath}");
-                }
-                catch (System.Exception ex)
-                {
-                    Debug.LogWarning($"[CityGenerator] Erreur d'écriture du cache : {ex.Message}");
-                }
-
-                yield return ProcessDataCoroutine(jsonText);
-
-                // 1. On attend que la carte de base (Sol) soit VRAIMENT téléchargée et générée par MapTileLoader
-                MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
-                if (mapLoader != null)
-                {
-                    Debug.Log("[CityGenerator] En attente du chargement de la carte par MapTileLoader...");
-                    while (!mapLoader.isMapLoaded)
-                    {
-                        yield return null;
-                    }
-                }
-                else
-                {
-                    GameObject sol = null;
-                    while (sol == null)
-                    {
-                        sol = GameObject.Find("Sol");
-                        yield return null;
-                    }
-                }
-
-                // 2. TRÈS IMPORTANT : Attendre 2 frames pour que Unity enregistre tous les nouveaux Meshes et Colliders
-                yield return null;
-                yield return null;
-
-                // 3. Auto-Bake NavMesh
-                NavMeshSurface surface = FindAnyObjectByType<NavMeshSurface>();
-                if (surface == null)
-                {
-                    surface = gameObject.AddComponent<NavMeshSurface>();
-                }
-                
-                // --- CRITIQUE --- Désactiver temporairement les unités pour NE PAS les "cuire" dans le NavMesh
-                UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Include);
-                // On retient qui était RÉELLEMENT actif avant ce masquage temporaire : les unités
-                // placées à la main dans la scène (Unite_1/2, Leopard_1/2, canon-vehicle_1/2) sont
-                // désactivées par défaut pour servir uniquement de modèle au déploiement manuel — un
-                // ré-activation en masse ici les faisait réapparaître sur le champ de bataille à
-                // chaque génération de carte, quel que soit leur état d'origine dans la scène.
-                bool[] wasActive = new bool[allUnits.Length];
-                for (int i = 0; i < allUnits.Length; i++) wasActive[i] = allUnits[i] != null && allUnits[i].gameObject.activeSelf;
-                foreach(var unit in allUnits) { if (unit != null) unit.gameObject.SetActive(false); }
-                yield return null; // Laisser 1 frame à Unity pour désactiver les colliders
-
-                // Vider les anciennes données pour forcer un rebake propre
-                surface.RemoveData();
-                surface.collectObjects = CollectObjects.All;
-                surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
-                surface.defaultArea = 0; // Walkable
-                surface.BuildNavMesh();
-                Debug.Log("NavMesh automatically baked and perfectly fitted around building colliders!");
-
-                // Enregistrer immédiatement les bâtiments pour le streaming 3D
-                if (TacticalStreamingManager.Instance != null)
-                {
-                    TacticalStreamingManager.Instance.RegisterAllBuildings();
-                }
-
-                // 4. LÂCHER LES CHIENS ! On ne réactive que celles qui étaient déjà actives avant.
-                for (int i = 0; i < allUnits.Length; i++) { if (allUnits[i] != null && wasActive[i]) allUnits[i].gameObject.SetActive(true); }
-                yield return null; // Laisser 1 frame pour la réactivation
-
-                Debug.Log($"[CityGenerator] Notifying {allUnits.Length} UnitAIs that NavMesh is ready.");
-                foreach (var unit in allUnits)
-                {
-                    if (unit != null && unit.gameObject.activeSelf) unit.OnNavMeshReady();
-                }
-                
-                GameManagerUI.OptimizeSceneMaterials();
-                if (GameManagerUI.Instance != null) GameManagerUI.Instance.HideLoading();
-                IsCityReady = true;
+            Debug.Log("Data fetched successfully. Processing...");
+            WriteZoneCacheToDisk(zoneTileX, zoneTileY, jsonText);
+            yield return FinishZoneLoadFromJson(jsonText);
         }
+    }
+
+    /// <summary>Écrit le JSON Overpass brut d'une Zone sur le disque local, pour réutilisation
+    /// hors-ligne future (voir ZoneCacheFilePath). Un échec d'écriture (permissions, disque plein)
+    /// n'empêche jamais la partie de continuer — capturé et journalisé, rien de plus.</summary>
+    private static void WriteZoneCacheToDisk(int tileX, int tileY, string jsonText)
+    {
+        string cachePath = ZoneCacheFilePath(tileX, tileY);
+        try
+        {
+            string dir = System.IO.Path.GetDirectoryName(cachePath);
+            if (!string.IsNullOrEmpty(dir) && !System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+            System.IO.File.WriteAllText(cachePath, jsonText);
+            Debug.Log($"[CityGenerator] 💾 Données de la carte sauvegardées dans le cache local : {cachePath}");
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"[CityGenerator] Erreur d'écriture du cache : {ex.Message}");
+        }
+    }
+
+    /// <summary>Tout ce qui suit l'obtention du JSON Overpass d'une Zone — que ce JSON vienne d'un
+    /// fetch réseau direct (FetchCityData), du cache disque local, OU du serveur autoritaire (voir
+    /// LoadZoneFromServerData, correctif 2026-09-05) : parse+construit les bâtiments
+    /// (ProcessDataCoroutine), attend le sol (MapTileLoader), bake le NavMesh, notifie les UnitAI.
+    /// Extrait de FetchCityData pour que ces TROIS origines de données partagent EXACTEMENT le même
+    /// chemin de traitement — la moindre divergence de code ici serait une source d'iniquité en soi,
+    /// indépendamment de la question "le JSON en entrée est-il identique".</summary>
+    private IEnumerator FinishZoneLoadFromJson(string jsonText)
+    {
+        yield return ProcessDataCoroutine(jsonText);
+
+        // 1. On attend que la carte de base (Sol) soit VRAIMENT téléchargée et générée par MapTileLoader
+        MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
+        if (mapLoader != null)
+        {
+            Debug.Log("[CityGenerator] En attente du chargement de la carte par MapTileLoader...");
+            while (!mapLoader.isMapLoaded)
+            {
+                yield return null;
+            }
+        }
+        else
+        {
+            GameObject sol = null;
+            while (sol == null)
+            {
+                sol = GameObject.Find("Sol");
+                yield return null;
+            }
+        }
+
+        // 2. TRÈS IMPORTANT : Attendre 2 frames pour que Unity enregistre tous les nouveaux Meshes et Colliders
+        yield return null;
+        yield return null;
+
+        // 3. Auto-Bake NavMesh
+        NavMeshSurface surface = FindAnyObjectByType<NavMeshSurface>();
+        if (surface == null)
+        {
+            surface = gameObject.AddComponent<NavMeshSurface>();
+        }
+
+        // --- CRITIQUE --- Désactiver temporairement les unités pour NE PAS les "cuire" dans le NavMesh
+        UnitAI[] allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Include);
+        // On retient qui était RÉELLEMENT actif avant ce masquage temporaire : les unités
+        // placées à la main dans la scène (Unite_1/2, Leopard_1/2, canon-vehicle_1/2) sont
+        // désactivées par défaut pour servir uniquement de modèle au déploiement manuel — un
+        // ré-activation en masse ici les faisait réapparaître sur le champ de bataille à
+        // chaque génération de carte, quel que soit leur état d'origine dans la scène.
+        bool[] wasActive = new bool[allUnits.Length];
+        for (int i = 0; i < allUnits.Length; i++) wasActive[i] = allUnits[i] != null && allUnits[i].gameObject.activeSelf;
+        foreach(var unit in allUnits) { if (unit != null) unit.gameObject.SetActive(false); }
+        yield return null; // Laisser 1 frame à Unity pour désactiver les colliders
+
+        // Vider les anciennes données pour forcer un rebake propre
+        surface.RemoveData();
+        surface.collectObjects = CollectObjects.All;
+        surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
+        surface.defaultArea = 0; // Walkable
+        surface.BuildNavMesh();
+        Debug.Log("NavMesh automatically baked and perfectly fitted around building colliders!");
+
+        // Enregistrer immédiatement les bâtiments pour le streaming 3D
+        if (TacticalStreamingManager.Instance != null)
+        {
+            TacticalStreamingManager.Instance.RegisterAllBuildings();
+        }
+
+        // 4. LÂCHER LES CHIENS ! On ne réactive que celles qui étaient déjà actives avant.
+        for (int i = 0; i < allUnits.Length; i++) { if (allUnits[i] != null && wasActive[i]) allUnits[i].gameObject.SetActive(true); }
+        yield return null; // Laisser 1 frame pour la réactivation
+
+        Debug.Log($"[CityGenerator] Notifying {allUnits.Length} UnitAIs that NavMesh is ready.");
+        foreach (var unit in allUnits)
+        {
+            if (unit != null && unit.gameObject.activeSelf) unit.OnNavMeshReady();
+        }
+
+        GameManagerUI.OptimizeSceneMaterials();
+        if (GameManagerUI.Instance != null) GameManagerUI.Instance.HideLoading();
+        IsCityReady = true;
+    }
+
+    /// <summary>ÉQUITÉ MULTIJOUEUR (2026-09-05) — point d'entrée principal pour charger une Zone à
+    /// partir du JSON Overpass exact que le SERVEUR AUTORITAIRE a lui-même utilisé pour cette
+    /// tuile, plutôt que de laisser ce client refaire sa propre requête Overpass indépendante.
+    ///
+    /// AVANT ce correctif : client ET serveur appelaient chacun GenerateCity() -> FetchCityData(),
+    /// deux requêtes HTTP totalement indépendantes vers Overpass (parfois deux miroirs différents
+    /// parmi les 3 de repli) pour la MÊME tuile. Rien ne garantissait que les deux réponses
+    /// contiennent exactement les mêmes bâtiments : une édition OSM survenue entre les deux appels
+    /// (même de quelques secondes), ou un simple retard de réplication entre miroirs Overpass,
+    /// pouvait faire diverger silencieusement la géométrie vue par le joueur de celle utilisée par
+    /// le serveur pour arbitrer le combat — jamais détecté, jamais signalé.
+    ///
+    /// Ce chemin élimine la cause : plus aucune requête Overpass n'est faite ici, le JSON est du
+    /// texte déjà entièrement déterminé par le serveur (voir MultiplayerMatchController, message
+    /// "zone_geometry_ready"), rejoué tel quel dans EXACTEMENT le même pipeline
+    /// (FinishZoneLoadFromJson) que si ce client l'avait obtenu par sa propre requête. Le résultat
+    /// est également sauvegardé en cache local (comme FetchCityData), pour une reprise hors-ligne
+    /// future de cette même Zone.</summary>
+    public void LoadZoneFromServerData(int tileX, int tileY, string json)
+    {
+        CancelActiveGenerationAndClearCity();
+        IsCityReady = false;
+
+        if (string.IsNullOrEmpty(json))
+        {
+            // Ne devrait jamais arriver si l'appelant a bien vérifié avant d'appeler cette méthode
+            // (voir MultiplayerMatchController.LoadMatchMapThenOpenDeployment) — filet de sécurité
+            // uniquement, jamais silencieux.
+            Debug.LogError("[CityGenerator] LoadZoneFromServerData appelé sans JSON — repli sur une génération locale indépendante (RISQUE D'ÉQUITÉ : ce client va potentiellement voir des bâtiments différents du serveur).");
+            zoneTileX = tileX;
+            zoneTileY = tileY;
+            GenerateCity();
+            return;
+        }
+
+        // Même préambule que FetchCityData (bbox de la tuile -> centre -> origine Unity de la Zone
+        // -> clé de cache) : indispensable même si aucune requête réseau n'est faite ici, ces valeurs
+        // pilotent GeoProjection.CoordinateToWorldPoint et le seed déterministe de ProcessDataCoroutine.
+        zoneTileX = tileX;
+        zoneTileY = tileY;
+        GeoProjection.TileBoundingBox(tileX, tileY, ZONE_ZOOM, out double south, out double west, out double north, out double east);
+        double centerLat = (south + north) / 2.0;
+        double centerLon = (west + east) / 2.0;
+        latitude = (float)centerLat;
+        longitude = (float)centerLon;
+        GeoProjection.SetCenter(latitude, longitude);
+        CurrentGridCacheKey = $"Z{ZONE_ZOOM}_{tileX}_{tileY}";
+
+        WriteZoneCacheToDisk(tileX, tileY, json);
+        activeGeneration = StartCoroutine(FinishZoneLoadFromJson(json));
     }
 
     // Nom de fichier cache unique et déterministe pour une Zone de Conquête (index de tuile, pas de
     // coordonnées GPS arrondies) : CityCache_Z17_{tileX}_{tileY}.json.
-    private static string ZoneCacheFileName(int tileX, int tileY)
+    /// <summary>Chemin complet du cache disque du JSON Overpass brut d'une Zone — dans le MÊME
+    /// sous-dossier persistant que TacticalGridBuilder ("TacticalGridCache"), correctif 2026-09-05 :
+    /// ce fichier vivait auparavant à la racine de Application.persistentDataPath, un répertoire
+    /// EFFACÉ à chaque redéploiement du conteneur serveur (contrairement à "TacticalGridCache", monté
+    /// sur un volume Docker nommé qui survit aux redéploiements — voir docker-compose.yml). Partager
+    /// ce même dossier évite tout changement d'infrastructure (aucune modification de
+    /// docker-compose.yml nécessaire) tout en donnant au cache de géométrie brute la même
+    /// persistance que le cache de géométrie digérée.</summary>
+    private static string ZoneCacheFilePath(int tileX, int tileY)
     {
-        return $"CityCache_Z{ZONE_ZOOM}_{tileX}_{tileY}.json";
+        string dir = System.IO.Path.Combine(Application.persistentDataPath, "TacticalGridCache");
+        return System.IO.Path.Combine(dir, $"CityCache_Z{ZONE_ZOOM}_{tileX}_{tileY}.json");
+    }
+
+    /// <summary>Tente de lire le JSON Overpass déjà mis en cache pour cette tuile — false si absent
+    /// ou manifestement invalide (fichier tronqué). Voir WriteZoneCacheToDisk pour l'écriture.
+    /// Public : appelé aussi par MatchSessionManager côté serveur pour retrouver le JSON exact
+    /// utilisé afin de le transmettre au client (voir NetMessage.city_data_json).</summary>
+    public static bool TryReadZoneCacheFromDisk(int tileX, int tileY, out string json)
+    {
+        json = null;
+        string path = ZoneCacheFilePath(tileX, tileY);
+        if (!System.IO.File.Exists(path)) return false;
+        try
+        {
+            string text = System.IO.File.ReadAllText(path);
+            if (string.IsNullOrEmpty(text) || text.Length < 20) return false;
+            json = text;
+            return true;
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"[CityGenerator] Impossible de lire le cache de Zone : {ex.Message}");
+            return false;
+        }
     }
 
     // La carte "par défaut" (hors-ligne, secours réseau, écran de chargement du serveur au repos)
@@ -386,6 +513,28 @@ public class CityGenerator : MonoBehaviour
 
     private IEnumerator ProcessDataCoroutine(string json)
     {
+        // ÉQUITÉ MULTIJOUEUR (correctif 2026-09-05) : flux UnityEngine.Random réamorcé
+        // DÉTERMINISTIQUEMENT ici, une seule fois, avant tout tirage — matériaux de mur/toit
+        // (GetRandomWallMaterial/GetRandomRoofMaterial) ET mobilier urbain
+        // (StreetPropsGenerator.PlaceStreetProps, qui pose de VRAIS colliders physiques intégrés au
+        // NavMesh). Sans amorçage, ce flux global est initialisé par Unity de façon NON
+        // déterministe au démarrage du process : deux exécutions de cette même méthode (client et
+        // serveur, ou même client et client) sur EXACTEMENT le même JSON produisaient quand même un
+        // mobilier urbain différent (nombre, position, présence d'un lampadaire/arbre/banc) — la
+        // "disposition" au sens large restait donc différente d'un appareil à l'autre même une fois
+        // les bâtiments identiques garantis.
+        //
+        // Le seed dérive de zoneTileX/zoneTileY (jamais de CurrentGridCacheKey.GetHashCode() : le
+        // hash d'une string .NET n'est PAS garanti stable entre process/plateformes, contrairement à
+        // de l'arithmétique entière simple) pour une vraie Zone, ou d'une constante fixe pour la
+        // carte par défaut (bundle identique des deux côtés, un simple nombre arbitraire suffit).
+        // Déterministe SEULEMENT si l'ORDRE et le NOMBRE d'appels à Random qui suivent sont
+        // eux-mêmes une fonction pure du JSON (c'est le cas ici : un seul passage séquentiel sur
+        // response.elements, jamais de branchement dépendant de l'horloge/du réseau) — garanti
+        // désormais que client et serveur reçoivent le MÊME texte JSON (voir LoadZoneFromServerData).
+        int citySeed = (CurrentGridCacheKey == "Default") ? 424242 : unchecked(zoneTileX * 73_856_093 ^ zoneTileY * 19_349_663);
+        UnityEngine.Random.InitState(citySeed);
+
         OverpassResponse response = JsonUtility.FromJson<OverpassResponse>(json);
         if (response == null || response.elements == null)
         {
@@ -460,6 +609,8 @@ public class CityGenerator : MonoBehaviour
         if (elementsFailed > 0) summary += $", {elementsFailed} en échec (voir warnings ci-dessus)";
         Debug.Log($"<color=cyan>{summary}.</color>");
 
+        HQBuildingIndex = -1; // Reset for next time
+
         // Diagnostic d'alignement : à comparer avec la ligne "[MapTileLoader] 📍 Coins du sol" pour
         // détecter un décalage entre le fond de carte (raster) et les bâtiments (vecteur OSM).
         Bounds? cityBounds = null;
@@ -526,8 +677,16 @@ public class CityGenerator : MonoBehaviour
         {
             EnsureOrientation(lotFootprint, false);
             
-            // Randomize height slightly per subdivided lot (autour de buildingHeight) to break the block effect
-            float lotHeight = UnityEngine.Random.Range(buildingHeight - 1.5f, buildingHeight + 1.5f);
+            // Variation de hauteur par lot, DÉTERMINISTE à partir de la géométrie du lot lui-même
+            // (même hachage trigonométrique que JitterBuildingColor).
+            //
+            // C'était un UnityEngine.Random.Range, tiré d'un flux global jamais initialisé depuis la
+            // tuile : le client et le serveur — qui génèrent chacun leur ville de leur côté, le réseau
+            // ne transportant que les coordonnées de tuile — obtenaient donc des hauteurs DIFFÉRENTES
+            // pour le même bâtiment. Après une escalade, le serveur plaçait l'unité à SA hauteur et le
+            // joueur la voyait flotter jusqu'à ~3m au-dessus du toit ou enfoncée dedans jusqu'à la
+            // taille. Deux instances du pool serveur ne s'accordaient pas non plus entre elles.
+            float lotHeight = DeterministicLotHeight(buildingHeight, lotFootprint[0]);
 
             // Triangulate
             List<int> roofIndices = Triangulate(lotFootprint);
@@ -547,7 +706,8 @@ public class CityGenerator : MonoBehaviour
 
             BuildingStructure structure = buildingGo.AddComponent<BuildingStructure>();
             structure.InitPolygon(lotFootprint, lotHeight);
-            buildingGo.AddComponent<DestructibleEnvironment>();
+            var destEnv = buildingGo.AddComponent<DestructibleEnvironment>();
+            if (HQBuildingIndex != -1 && HQBuildingIndex == lotIndex) destEnv.isHQ = true;
             
             // Pre-calculate doors so we can make gaps in the walls
             GenerateDoorsAndWindows(buildingGo, structure, lotFootprint, lotHeight, partyWallEdges);
@@ -583,6 +743,8 @@ public class CityGenerator : MonoBehaviour
             if (floorMat != null)
             {
                 Color tinted = JitterBuildingColor(Base2DBuildingColor, lotFootprint[0]);
+                if (HQBuildingIndex != -1 && HQBuildingIndex == lotIndex) tinted = Color.yellow; // HIGHLIGHT HQ
+                
                 MaterialPropertyBlock tintBlock = new MaterialPropertyBlock();
                 if (floorMat.HasProperty("_BaseColor")) tintBlock.SetColor("_BaseColor", tinted);
                 if (floorMat.HasProperty("_Color")) tintBlock.SetColor("_Color", tinted);
@@ -610,6 +772,15 @@ public class CityGenerator : MonoBehaviour
             var wallsRenderer = wallsGo.AddComponent<MeshRenderer>();
             wallsRenderer.sharedMaterial = GetRandomWallMaterial();
             wallsRenderer.enabled = false; // Désactivé par défaut pour le Streaming
+            
+            if (HQBuildingIndex != -1 && HQBuildingIndex == lotIndex) 
+            {
+                MaterialPropertyBlock tintBlock = new MaterialPropertyBlock();
+                tintBlock.SetColor("_BaseColor", new Color(1f, 0.84f, 0f));
+                tintBlock.SetColor("_Color", new Color(1f, 0.84f, 0f));
+                wallsRenderer.SetPropertyBlock(tintBlock);
+            }
+
             wallsGo.AddComponent<MeshCollider>().sharedMesh = wallsMesh;
 
             // Visual Openings
@@ -687,16 +858,35 @@ public class CityGenerator : MonoBehaviour
         return shared2DOutlineMaterial;
     }
 
-    /// <summary>
-    /// Variation de luminosité déterministe par bâtiment (hash trigonométrique de sa position,
-    /// même principe qu'un bruit de hachage GLSL) : deux bâtiments à la même position produisent
-    /// toujours la même teinte (stable d'une régénération à l'autre), sans consommer le flux
-    /// global UnityEngine.Random utilisé ailleurs pour les hauteurs/matériaux de ce générateur.
-    /// </summary>
+    /// <summary>Hauteur d'un lot, variée de ±1.5m autour de la hauteur nominale mais entièrement
+    /// DÉTERMINÉE par la position du lot. Indispensable : client et serveur génèrent chacun leur
+    /// propre ville à partir des seules coordonnées de tuile, donc toute valeur tirée d'un flux
+    /// aléatoire les fait diverger sur la hauteur des toits, c'est-à-dire sur la position Y d'une
+    /// unité perchée. Dériver la valeur de la géométrie évite en plus toute dépendance à l'ORDRE des
+    /// appels, contrairement à un simple Random.InitState.
+    ///
+    /// Hash ENTIER pur (Novgov.Core.DeterministicHash), plus de trigonométrie (correctif 2026-09-05).
+    /// La version précédente (`Mathf.Sin(x*a+y*b) * grand_facteur` puis `Mathf.Floor`) restait
+    /// techniquement déterministe SUR UNE PLATEFORME DONNÉE, mais `sin()` n'est pas garantie
+    /// bit-identique par IEEE754 entre la libm Android (Bionic/ARM) du client et la glibc Linux du
+    /// serveur dédié — un écart d'un seul bit sur `Sin(x)`, amplifié par le grand facteur, pouvait en
+    /// théorie faire basculer `Floor()` d'une unité entière et changer la hauteur du toit de ~3m
+    /// entre les deux, pour le MÊME bâtiment. Un hash entier (XOR/shift/multiplication sur des
+    /// entiers 32 bits) est lui garanti bit-identique sur toute plateforme .NET/Mono/IL2CPP.</summary>
+    private static float DeterministicLotHeight(float nominalHeight, Vector2 seedPoint)
+    {
+        float unit = Novgov.Core.DeterministicHash.Unit01(seedPoint.x, seedPoint.y); // [0, 1)
+        return nominalHeight - 1.5f + unit * 3f;  // [nominal-1.5, nominal+1.5)
+    }
+
+    /// <summary>Variation de luminosité déterministe par bâtiment : deux bâtiments à la même
+    /// position produisent toujours la même teinte. Même hash entier que DeterministicLotHeight
+    /// (voir son commentaire) — un décalage fixe de coordonnées (+1000,+1000) suffit à obtenir une
+    /// séquence de hash INDÉPENDANTE de celle de la hauteur pour la MÊME position, sans reproduire
+    /// la même valeur pour les deux usages.</summary>
     private static Color JitterBuildingColor(Color baseColor, Vector2 seedPoint)
     {
-        float h = Mathf.Sin(seedPoint.x * 12.9898f + seedPoint.y * 78.233f) * 43758.5453f;
-        float jitter = (h - Mathf.Floor(h)) - 0.5f; // [-0.5, 0.5)
+        float jitter = Novgov.Core.DeterministicHash.Unit01(seedPoint.x + 1000f, seedPoint.y + 1000f) - 0.5f; // [-0.5, 0.5)
         float scale = 1f + jitter * 0.22f; // ±11% de luminosité
         return new Color(
             Mathf.Clamp01(baseColor.r * scale),
@@ -1283,31 +1473,54 @@ public class CityGenerator : MonoBehaviour
             }
         }
 
+        // UNE FENÊTRE = UN OBJET SÉLECTIONNABLE (correctif 2026-09-03).
+        //
+        // Les fenêtres étaient fusionnées en un seul maillage "Windows_Visual" sans collider et sans
+        // composant d'interaction, là où chaque porte recevait son propre BoxCollider et son
+        // DoorInteraction (voir juste au-dessus). Résultat : le raycast de sélection ne pouvait jamais
+        // toucher de fenêtre, WindowInteraction n'était instancié NULLE PART, donc clickedWindow
+        // restait toujours nul, ShowWindowMenu() était du code mort et NodeAction.GarnisonFenetre ne
+        // pouvait pas être produite par le client. Toute la mécanique de garnison à la fenêtre (-75%
+        // de dégâts, cône de tir de 140°) était ainsi inatteignable en solo comme en multijoueur,
+        // alors que le serveur ET le client en avaient l'implémentation complète.
         if (structure.windows != null && structure.windows.Count > 0)
         {
-            List<Vector3> verts = new List<Vector3>();
-            List<Vector2> uvs = new List<Vector2>();
-            List<int> tris = new List<int>();
-
-            foreach (var win in structure.windows)
+            for (int wi = 0; wi < structure.windows.Count; wi++)
             {
+                var win = structure.windows[wi];
+
                 Vector3 n = win.outwardNormal;
                 Vector3 t = new Vector3(-n.z, 0, n.x);
                 Vector3 center = win.position + n * 0.05f;
-                AddOpeningQuad(verts, uvs, tris, center, t, Vector3.up, 1.1f, 1.4f);
-            }
 
-            GameObject winsObj = new GameObject("Windows_Visual");
-            winsObj.transform.SetParent(buildingGo.transform, false);
-            MeshFilter mf = winsObj.AddComponent<MeshFilter>();
-            MeshRenderer mr = winsObj.AddComponent<MeshRenderer>();
-            Mesh m = new Mesh();
-            m.vertices = verts.ToArray();
-            m.uv = uvs.ToArray();
-            m.triangles = tris.ToArray();
-            m.RecalculateNormals();
-            mf.sharedMesh = m;
-            mr.sharedMaterial = sharedWindowMaterial;
+                List<Vector3> verts = new List<Vector3>();
+                List<Vector2> uvs = new List<Vector2>();
+                List<int> tris = new List<int>();
+                AddOpeningQuad(verts, uvs, tris, center, t, Vector3.up, 1.1f, 1.4f);
+
+                GameObject winObj = new GameObject($"Window_{wi}");
+                winObj.transform.SetParent(buildingGo.transform, false);
+
+                MeshFilter mf = winObj.AddComponent<MeshFilter>();
+                MeshRenderer mr = winObj.AddComponent<MeshRenderer>();
+                Mesh m = new Mesh();
+                m.vertices = verts.ToArray();
+                m.uv = uvs.ToArray();
+                m.triangles = tris.ToArray();
+                m.RecalculateNormals();
+                mf.sharedMesh = m;
+                mr.sharedMaterial = sharedWindowMaterial;
+
+                // Collider de sélection, un peu plus généreux que le quad pour rester atteignable au
+                // doigt sur un téléphone.
+                BoxCollider bc = winObj.AddComponent<BoxCollider>();
+                bc.center = center;
+                bc.size = new Vector3(1.3f, 1.6f, 0.5f);
+
+                var windowInteract = winObj.AddComponent<Novgov.Interaction.WindowInteraction>();
+                windowInteract.Initialize(structure, win, sharedWindowMaterial);
+                structure.windowInteractions.Add(windowInteract);
+            }
         }
     }
 

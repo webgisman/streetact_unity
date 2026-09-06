@@ -20,7 +20,15 @@ public partial class TacticalPathManager : MonoBehaviour
     // plutôt que renommé. Les valeurs explicites des autres actions ne bougent PAS : elles restent
     // strictement identiques pour ne pas casser la compatibilité du protocole réseau (NetMessage.
     // PathNode.action transite en entier brut, jamais par nom).
-    public enum NodeAction { Continuer = 0, Guetter = 2, Embuscade = 3, Escalade = 4, GarnisonFenetre = 5, EntrerBatiment = 6, SortirBatiment = 7, GuetterPorte = 8, Attendre30s = 9, SeCacher = 10, TirMortier = 11 }
+    // Descendre = 12 (ajouté le 2026-09-03) : jusque-là "DESCENDRE DU TOIT" réutilisait Escalade,
+    // ce qui rendait la descente IMPOSSIBLE des deux côtés. Côté client, UnitAI_Movement testait
+    // l'action avant la différence de hauteur, donc ExecuteClimb tournait "à l'envers" et
+    // ExecuteClimbDown était du code mort ; l'unité restait marquée isRooftopSniper avec son
+    // NavMeshAgent désactivé pour le reste de la partie. Côté serveur, l'Escalade sur un point de
+    // rue ne trouvait aucun bâtiment et repliait sur un Y=3 arbitraire : l'unité finissait le tour
+    // suspendue en l'air au-dessus de la chaussée, toujours en strate Toit. Une action dédiée lève
+    // l'ambiguïté au lieu de deviner la direction d'après la géométrie.
+    public enum NodeAction { Continuer = 0, Guetter = 2, Embuscade = 3, Escalade = 4, GarnisonFenetre = 5, EntrerBatiment = 6, SortirBatiment = 7, GuetterPorte = 8, Attendre30s = 9, SeCacher = 10, TirMortier = 11, Descendre = 12 }
 
     [Header("Système")]
     public GamePhase phaseActuelle = GamePhase.Planification;
@@ -61,13 +69,41 @@ public partial class TacticalPathManager : MonoBehaviour
     /// 5e flag ajouté à la main aurait pu se reproduire ici).</summary>
     private bool AnyOrderMenuOpen => isDoorSelected || isWindowSelected || isBuildingSelected || isGroundCheckpointSelected || isBarricadeSelected || isBarricadeDeployMenuOpen;
 
-    private Color couleurOriginale;
-    // Pour stocker TOUTES les parties du soldat (corps, arme, etc.)
-    private Renderer[] renderersSelectionnes;
     private LineRenderer lineRenderer;
-    private readonly System.Collections.Generic.List<Vector3> cachedLinePoints = new System.Collections.Generic.List<Vector3>();
-    private Gradient cachedPathGradient;
     private static bool isPathsDirty = true;
+
+    // Dernière valeur de positionClicTemporaire pour laquelle un tracé a été produit — sert à
+    // détecter un changement de cible d'aperçu (voir Update).
+    private Vector3 lastPreviewTargetDrawn = Vector3.positiveInfinity;
+
+    // Un redessin est demandé pour la seule unité sélectionnée (changement de cible d'aperçu).
+    // Distinct du drapeau statique isPathsDirty, qui invalide le tracé de TOUTES les unités.
+    private bool previewRedrawRequested = false;
+
+    /// <summary>Y a-t-il une cible de tap en attente ?
+    ///
+    /// NE JAMAIS tester la sentinelle avec == / != sur Vector3. L'opérateur d'égalité de Unity ne
+    /// compare pas les composantes : il calcule (a-b).sqrMagnitude et le compare à un epsilon. Avec
+    /// des composantes infinies, inf - inf = NaN, et TOUTE comparaison impliquant NaN est fausse —
+    /// donc `Vector3.positiveInfinity == Vector3.positiveInfinity` vaut FALSE et le `!=` vaut TRUE.
+    /// Autrement dit, `positionClicTemporaire != Vector3.positiveInfinity` était TOUJOURS vrai :
+    /// le jeu se croyait en permanence en attente d'un aperçu vers un point à l'infini, redessinait
+    /// tous les tracés à chaque frame et poussait un point infini dans les LineRenderer.
+    /// Un test explicite sur l'infini est la seule façon correcte de lire cette sentinelle.
+    /// La logique vit dans Novgov.Core.VectorSentinel — classe pure, donc couverte par les tests
+    /// automatiques (voir Assets/Editor/TacticalCoreSelfTest_Sentinel.cs).</summary>
+    private static bool HasTapTarget(Vector3 p)
+    {
+        return Novgov.Core.VectorSentinel.IsSet(p);
+    }
+
+    /// <summary>Deux cibles d'aperçu désignent-elles le même point ? Traite correctement le cas
+    /// "les deux sont la sentinelle" (voir <see cref="HasTapTarget"/>), que l'opérateur == de
+    /// Vector3 rapporte à tort comme différent.</summary>
+    private static bool SameTapTarget(Vector3 a, Vector3 b)
+    {
+        return Novgov.Core.VectorSentinel.Same(a, b);
+    }
 
     public static void SetPathsDirty() { isPathsDirty = true; }
 
@@ -140,9 +176,43 @@ public partial class TacticalPathManager : MonoBehaviour
         // Bloquer l'assignation de nouveaux ordres pendant l'exécution ou pendant le placement d'unités
         if (phaseActuelle == GamePhase.Execution || UnitSpawnerUI.IsPlacingUnit) return;
 
-        // Tracé fluide et ultra-léger (recalculé uniquement si dirty ou en phase dynamique)
-        if (isPathsDirty || phaseActuelle == GamePhase.CreationPath)
+        // APERÇU DE DESTINATION (correctif 2026-09-03). Le tracé n'était redessiné que sur
+        // isPathsDirty — posé uniquement à la sélection d'une unité et à l'ajout/retrait d'un nœud —
+        // ou en phase CreationPath, valeur qui n'est JAMAIS assignée nulle part dans le projet. Aucun
+        // tap sur la carte ne déclenchait donc de redessin, et le bloc d'aperçu de
+        // TacticalPathManager_PathDrawing (celui qui utilise AppendGridPathSegment, écrit exprès pour
+        // montrer le VRAI chemin de la grille serveur) était inatteignable : le joueur confirmait
+        // chaque ordre à l'aveugle et ne découvrait le trajet réel qu'après avoir appuyé sur TERMINÉ.
+        //
+        // Surveiller positionClicTemporaire couvre d'un seul coup TOUS les chemins de tap (sol,
+        // bâtiment, porte, fenêtre, toit) et toutes les fermetures de menu, sans dépendre du fait que
+        // chacun d'eux pense à lever le drapeau.
+        //
+        // La comparaison passe OBLIGATOIREMENT par SameTapTarget : écrite avec l'opérateur != de
+        // Vector3, elle était vraie à chaque frame (voir HasTapTarget) et ce bloc marquait donc le
+        // tracé "à redessiner" 60 fois par seconde — recalcul A*/NavMesh de tous les chemins de
+        // toutes les unités en continu sur mobile, plus l'aperçu vers un point infini.
+        //
+        // Le drapeau posé est CELUI DE L'UNITÉ SÉLECTIONNÉE, jamais le drapeau statique
+        // isPathsDirty (correctif 2026-09-04) : l'aperçu ne concerne que cette unité, alors que
+        // isPathsDirty force le recalcul du tracé de TOUTES les unités du joueur — chacune repayant
+        // un GetComponent<NavMeshAgent>, puis par nœud un NavMesh.SamplePosition de rayon 10 m, un
+        // test de décombres et un CalculatePath (ou un A* de grille en ligne). À chaque tap.
+        if (!SameTapTarget(positionClicTemporaire, lastPreviewTargetDrawn))
         {
+            lastPreviewTargetDrawn = positionClicTemporaire;
+            if (uniteSelectionnee != null)
+            {
+                UnitAI selectedForPreview = uniteSelectionnee.GetComponent<UnitAI>();
+                if (selectedForPreview != null) selectedForPreview.isPathDirty = true;
+            }
+            previewRedrawRequested = true;
+        }
+
+        // Tracé fluide et ultra-léger (recalculé uniquement si dirty ou en phase dynamique)
+        if (isPathsDirty || previewRedrawRequested || phaseActuelle == GamePhase.CreationPath)
+        {
+            previewRedrawRequested = false;
             DessinerTousLesChemins();
         }
 

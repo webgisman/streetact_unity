@@ -13,8 +13,15 @@ namespace Novgov.Generation
     /// </summary>
     public class ZoneManager : MonoBehaviour
     {
-        private const string HomeTileXPrefKey = "ZoneManager_HomeTileX";
-        private const string HomeTileYPrefKey = "ZoneManager_HomeTileY";
+        // 2026-09-06 : suffixe ajouté (voir Novgov.Core.EditorPlayerPrefsScope) — sans lui, PlayerPrefs
+        // vit dans une case du Registre Windows PARTAGÉE entre l'Éditeur principal et tous ses clones
+        // Multiplayer Play Mode : le premier lancement local (n'importe lequel) figeait la même tuile
+        // pour toutes les instances futures, quelles que soient les coordonnées GPS simulées calculées
+        // par ailleurs (GameManagerUI.PickEditorMockCity). Un ancien correctif (reset manuel à chaque
+        // lancement d'un Joueur Virtuel, voir historique Git) réglait la lecture mais pas le fond du
+        // problème ; ce suffixe donne à chaque identité sa PROPRE case, une fois pour toutes.
+        private static string HomeTileXPrefKey => "ZoneManager_HomeTileX" + Novgov.Core.EditorPlayerPrefsScope.Suffix;
+        private static string HomeTileYPrefKey => "ZoneManager_HomeTileY" + Novgov.Core.EditorPlayerPrefsScope.Suffix;
 
         public static ZoneManager Instance { get; private set; }
 
@@ -94,6 +101,30 @@ namespace Novgov.Generation
             cityGen.zoneTileX = tileX;
             cityGen.zoneTileY = tileY;
             cityGen.GenerateCity();
+
+            MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
+            if (mapLoader != null) mapLoader.LoadMap();
+        }
+
+        /// <summary>ÉQUITÉ MULTIJOUEUR (2026-09-05) — variante de LoadZone pour un VRAI match : charge
+        /// la Zone à partir du JSON Overpass exact que le serveur autoritaire a lui-même utilisé,
+        /// au lieu de refaire une requête Overpass indépendante qui pourrait diverger du résultat
+        /// serveur (voir CityGenerator.LoadZoneFromServerData pour le détail du risque corrigé).
+        /// Appelée par MultiplayerMatchController dès que "match_found" apporte un
+        /// city_data_json.</summary>
+        public void LoadZoneFromServerData(int tileX, int tileY, string json)
+        {
+            CurrentTileX = tileX;
+            CurrentTileY = tileY;
+
+            CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
+            if (cityGen == null)
+            {
+                Debug.LogError("[ZoneManager] CityGenerator introuvable dans la scène.");
+                return;
+            }
+
+            cityGen.LoadZoneFromServerData(tileX, tileY, json);
 
             MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
             if (mapLoader != null) mapLoader.LoadMap();

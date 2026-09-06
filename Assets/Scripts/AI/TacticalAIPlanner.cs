@@ -298,10 +298,30 @@ public static class TacticalAIPlanner
         MoveTowardsTarget(unit, target.transform.position, 6.0f);
     }
 
+    /// <summary>Budget de déplacement RÉELLEMENT appliqué à cette unité par la résolution du tour,
+    /// par type (<c>Novgov.Server.UnitTypeStats.MovementBudget</c> — 42m char, 46m véhicule-canon,
+    /// 34m mortier, 50m fantassin/défaut), jamais le champ générique <c>UnitAI.maxMovementPerTurn</c>
+    /// (toujours 50f, quel que soit le type — jamais surchargé nulle part dans le projet).
+    ///
+    /// Correctif 2026-09-05 : cette IA planifiait ses déplacements de blindés/mortiers avec un budget
+    /// de 50m alors que TacticalResolver.TruncateToMovementBudget (qui fait foi, côté serveur) les
+    /// limite en réalité à 42/46/34m. Le plan de l'IA visait donc systématiquement plus loin que ce
+    /// qu'elle pouvait réellement atteindre, et toute posture (Guetter/Garnison/Embuscade) placée en
+    /// bout de chemin au-delà du budget réel était silencieusement supprimée par la troncature — sans
+    /// qu'aucun message ne le signale, l'IA "oubliait" son ordre de fin de trajet.</summary>
+    private static float RealMovementBudget(UnitAI unit)
+    {
+        UnitSpawnerUI.UnitType inferred = UnitSpawnerUI.UnitType.Fantassin;
+        if (unit.isMortar) inferred = UnitSpawnerUI.UnitType.Mortier;
+        else if (unit.isCanonVehicle) inferred = UnitSpawnerUI.UnitType.VehiculeCanon;
+        else if (unit.isTank) inferred = UnitSpawnerUI.UnitType.CharLeopard;
+        return Novgov.Server.UnitTypeStats.MovementBudget(inferred);
+    }
+
     /// <summary>
     /// Vrai si le pied de <paramref name="building"/> est atteignable ce tour-ci dans le budget de
-    /// mouvement de l'unité — contrairement à un ordre Escalade posé directement sans passer par
-    /// MoveTowardsTarget, qui ignorait jusqu'ici totalement <c>unit.maxMovementPerTurn</c>.
+    /// mouvement RÉEL de l'unité — contrairement à un ordre Escalade posé directement sans passer par
+    /// MoveTowardsTarget, qui ignorait jusqu'ici totalement ce budget.
     /// </summary>
     private static bool IsBuildingReachableWithinBudget(UnitAI unit, BuildingStructure building, out Vector3 basePosOnNavMesh)
     {
@@ -317,7 +337,7 @@ public static class TacticalAIPlanner
 
         float len = 0f;
         for (int i = 0; i < path.corners.Length - 1; i++) len += Vector3.Distance(path.corners[i], path.corners[i + 1]);
-        return len <= unit.maxMovementPerTurn;
+        return len <= RealMovementBudget(unit);
     }
 
     private static void MoveTowardsTarget(UnitAI unit, Vector3 targetWorldPos, float stopDistance)

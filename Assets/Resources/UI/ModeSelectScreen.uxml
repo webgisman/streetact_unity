@@ -1,21 +1,75 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
-    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.85); picking-mode: Ignore;">
-        <ui:VisualElement name="panel" class="panel" style="width: 65%; max-width: 640px;">
-            <ui:Label text="CHOISIR UN MODE DE JEU" class="title" style="margin-bottom: 32px;" />
-            <ui:Button name="btn-deathmatch" class="btn-team2 btn-with-icon" style="margin-bottom: 20px; min-height: 116px;">
-                <ui:VisualElement class="icon icon-lg" style="background-image: url('/Assets/UI/Icons/skull.png');" />
+    <ui:VisualElement name="root" style="flex-grow: 1; background-color: rgba(8, 10, 12, 0.85); picking-mode: Ignore;">
+        
+        <!-- PROFIL (Haut Gauche) -->
+        <ui:VisualElement style="position: absolute; left: 20px; top: 20px; background-color: rgba(20,25,30,0.9); padding: 12px; border-radius: 8px; border-width: 2px; border-color: var(--color-accent);">
+            <ui:Label name="lbl-username" text="Commandant..." style="color: white; font-size: 24px; -unity-font-style: bold; margin-bottom: 4px;" />
+            <ui:VisualElement style="flex-direction: row; align-items: center;">
+                <ui:VisualElement style="width: 24px; height: 24px; background-image: url('/Assets/UI/Icons/star.png'); -unity-background-image-tint-color: gold; margin-right: 8px;" />
+                <ui:Label name="lbl-action-points" text="Points d'Action : 0" style="color: gold; font-size: 20px;" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- MENU CENTRAL -->
+        <ui:VisualElement name="panel" class="panel" style="width: 65%; max-width: 640px; align-self: center; margin-top: 100px;">
+            <ui:Label text="HUB COMMANDEMENT" class="title" style="margin-bottom: 32px;" />
+            
+            <ui:Button name="btn-conquest" class="btn-primary btn-with-icon" style="margin-bottom: 16px; min-height: 96px;">
+                <ui:VisualElement class="icon icon-lg" style="background-image: url('/Assets/UI/Icons/crosshair.png');" />
                 <ui:VisualElement class="btn-text-col">
-                    <ui:Label text="DEATHMATCH" />
-                    <ui:Label text="Éliminer l'équipe adverse" class="btn-subtitle" />
+                    <ui:Label text="ATTAQUER (CONQUÊTE)" />
+                    <ui:Label text="Lancer une attaque sur une zone contestée" class="btn-subtitle" />
                 </ui:VisualElement>
             </ui:Button>
-            <ui:Button name="btn-zone-control" class="btn-team1 btn-with-icon" style="min-height: 116px;">
-                <ui:VisualElement class="icon icon-lg" style="background-image: url('/Assets/UI/Icons/flag.png');" />
+
+            <ui:Button name="btn-zone-map" class="btn-secondary btn-with-icon" style="margin-bottom: 16px; min-height: 80px;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/flag.png');" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="CARTE DU MONDE" />
+                    <ui:Label text="Stratégie et choix des cibles" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
+
+            <!-- 2026-09-06 : seuls modes où deux joueurs vivants s'affrontent en direct (voir
+                 MultiplayerMatchController.StartDeathmatch/StartZoneControl) — ATTAQUER (CONQUÊTE)
+                 ci-dessus est toujours un joueur seul contre une garnison IA, jamais un adversaire
+                 vivant, quelle que soit la Zone visée. -->
+            <ui:Button name="btn-deathmatch" class="btn-primary btn-with-icon" style="margin-bottom: 16px; min-height: 80px;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/crossed_swords.png');" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="MATCH À MORT" />
+                    <ui:Label text="Affrontement direct contre un vrai joueur" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
+
+            <ui:Button name="btn-zone-control" class="btn-primary btn-with-icon" style="margin-bottom: 16px; min-height: 80px;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/shield.png');" />
                 <ui:VisualElement class="btn-text-col">
                     <ui:Label text="ZONE DE CONTRÔLE" />
-                    <ui:Label text="Tenir la zone centrale" class="btn-subtitle" />
+                    <ui:Label text="Combat en direct pour tenir le terrain" class="btn-subtitle" />
                 </ui:VisualElement>
             </ui:Button>
+
+            <ui:Button name="btn-roster" class="btn-secondary btn-with-icon" style="margin-bottom: 16px; min-height: 80px;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/soldiers.png');" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="CASERNE (UNITÉS)" />
+                    <ui:Label text="Recruter et gérer votre armée" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
+
+            <ui:Button name="btn-buildings" class="btn-secondary btn-with-icon" style="margin-bottom: 24px; min-height: 80px;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/city.png');" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="BÂTIMENTS &amp; RESSOURCES" />
+                    <ui:Label text="Collecter les Points d'Action générés" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
+
+            <ui:Button name="btn-back-startup" class="btn-secondary" style="min-height: 72px;">
+                <ui:Label text="DÉCONNEXION" />
+            </ui:Button>
         </ui:VisualElement>
+
     </ui:VisualElement>
 </ui:UXML>

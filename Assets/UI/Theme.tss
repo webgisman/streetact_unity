@@ -316,6 +316,25 @@ Button.btn-zone-neutral {
     border-width: 3px;
 }
 
+/* 2026-09-06 : cases de la mini-carte 3x3 (ZoneMapScreen.uxml, "map-grid") — ce sont des
+   VisualElement, pas des Button, donc les règles Button.btn-team1/team2/zone-neutral ci-dessus
+   (bordure seulement) ne s'appliquaient JAMAIS à elles : ces cases restaient invisibles, toujours
+   dans leur état par défaut, quelle que soit la vraie propriété de la Zone voisine. Remplissage
+   plein (pas juste une bordure) pour que ce soit visible d'un coup d'œil, avec un symbole (voir
+   ZoneMapController.UpdateMiniMapCell) en plus de la couleur pour rester lisible sans se fier
+   uniquement à la teinte. */
+.zonecell-neutral {
+    background-color: var(--color-panel-border-dim);
+}
+
+.zonecell-mine {
+    background-color: var(--color-team1);
+}
+
+.zonecell-enemy {
+    background-color: var(--color-team2);
+}
+
 /* --- Barre d'escouade (portraits d'unités, coin haut-droit — cf. Commandos) --- */
 
 .squad-portrait {

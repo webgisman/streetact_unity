@@ -14,6 +14,14 @@ using UnityEngine;
 /// </summary>
 public static class RestoreClientBuildSettings
 {
+    // 2026-09-06 : ajout du [MenuItem] — jusque-là cet utilitaire n'était accessible qu'en ligne de
+    // commande Éditeur fermé (voir doc ci-dessus). Or ServerBuildScript laisse standaloneBuildSubtarget
+    // sur Server de façon persistante, ce qui définit UNITY_SERVER pour TOUTE session Play Mode
+    // suivante — y compris chaque instance Multiplayer Play Mode (Éditeur principal ET Joueurs
+    // Virtuels, quel que soit leur "Multiplayer Role" respectif, qui ne contrôle pas cette sous-cible)
+    // — et fait tourner GameServerBootstrap (JWT_SECRET manquant en local) partout au lieu du seul
+    // vrai serveur sur le VPS. Un menu direct évite d'avoir à fermer l'Éditeur juste pour ce toggle.
+    [MenuItem("Novgov/Restaurer le Build Client (désactive UNITY_SERVER)")]
     public static void Run()
     {
         EditorUserBuildSettings.standaloneBuildSubtarget = StandaloneBuildSubtarget.Player;

@@ -9,11 +9,36 @@ using UnityEngine.AI;
 /// </summary>
 public class DestructibleEnvironment : MonoBehaviour
 {
-    public float health = 300f;
-    public float maxHealth = 300f;
+    [Header("Health Settings")]
+    public float maxHealth = 500f;
+    public float health;
     public bool isDestroyed = false;
+    public bool isHQ = false;
 
-    public static readonly List<Bounds> AllRubbleBounds = new List<Bounds>();
+    /// <summary>
+    /// Une zone de ruines franchissable librement. Décrite par l'EMPREINTE RÉELLE du bâtiment
+    /// (polygone OSM) et non par un AABB monde : Collider.bounds reste aligné sur les axes du monde
+    /// même pour un bâtiment tourné, si bien qu'un immeuble à ~45° produisait un rectangle bien plus
+    /// large que sa silhouette. Ce fichier documentait déjà ce piège pour le calcul des victimes (voir
+    /// localFootprint plus bas), mais la liste de franchissement était restée sur l'AABB brut, encore
+    /// gonflé de 3m de chaque côté et sans aucun test de hauteur. Conséquence : dès le premier
+    /// bâtiment détruit, toute unité passant à proximité voyait son NavMeshAgent coupé et glissait en
+    /// ligne droite à travers les murs intacts, les barricades et les autres blindés.
+    /// </summary>
+    private class RubbleZone
+    {
+        public List<Vector2> footprint; // empreinte réelle en XZ ; null si le bâtiment n'en avait pas
+        public Bounds worldBounds;      // repli quand footprint est null
+        public float groundY;           // altitude des gravats
+    }
+
+    private static readonly List<RubbleZone> AllRubble = new List<RubbleZone>();
+
+    // Marge horizontale : de quoi accepter une unité posée pile sur la ligne de l'ancien mur, sans
+    // déborder sur la rue ni sur le bâtiment voisin (l'ancienne valeur était de 3m).
+    private const float RubbleEdgeMargin = 1.0f;
+    // Bande verticale : au-dessus, on n'est plus dans les gravats mais sur un toit ou un étage voisin.
+    private const float RubbleHeightBand = 2.5f;
 
     private BuildingStructure buildingStructure;
     private NavMeshObstacle navObstacle;
@@ -24,18 +49,76 @@ public class DestructibleEnvironment : MonoBehaviour
         navObstacle = GetComponent<NavMeshObstacle>();
     }
 
+    /// <summary>Vide la liste des ruines. INDISPENSABLE entre deux parties : la liste est statique et
+    /// n'était jamais purgée, donc elle survivait au rechargement de scène de l'écran de fin comme à
+    /// l'enchaînement des matchs côté serveur — sur la carte suivante, toute neuve, des unités
+    /// traversaient les murs dès le premier tour sans qu'aucun bâtiment n'ait été détruit.</summary>
+    public static void ResetRubble()
+    {
+        AllRubble.Clear();
+    }
+
     public static bool IsPositionInRubble(Vector3 pos)
     {
-        for (int i = 0; i < AllRubbleBounds.Count; i++)
+        for (int i = 0; i < AllRubble.Count; i++)
         {
-            Bounds b = AllRubbleBounds[i];
-            if (pos.x >= b.min.x - 3.0f && pos.x <= b.max.x + 3.0f &&
-                pos.z >= b.min.z - 3.0f && pos.z <= b.max.z + 3.0f)
+            RubbleZone zone = AllRubble[i];
+
+            // Un toit voisin ou un étage en surplomb n'est pas "dans les gravats".
+            if (pos.y > zone.groundY + RubbleHeightBand) continue;
+
+            Vector2 p = new Vector2(pos.x, pos.z);
+
+            if (zone.footprint != null && zone.footprint.Count >= 3)
+            {
+                if (PointInPolygon(zone.footprint, p)) return true;
+                if (DistanceToPolygonEdge(zone.footprint, p) <= RubbleEdgeMargin) return true;
+                continue;
+            }
+
+            Bounds b = zone.worldBounds;
+            if (p.x >= b.min.x - RubbleEdgeMargin && p.x <= b.max.x + RubbleEdgeMargin &&
+                p.y >= b.min.z - RubbleEdgeMargin && p.y <= b.max.z + RubbleEdgeMargin)
             {
                 return true;
             }
         }
         return false;
+    }
+
+    private static bool PointInPolygon(List<Vector2> polygon, Vector2 pt)
+    {
+        bool inside = false;
+        int count = polygon.Count;
+        for (int i = 0, j = count - 1; i < count; j = i++)
+        {
+            Vector2 pi = polygon[i];
+            Vector2 pj = polygon[j];
+            if (pi.y != pj.y && ((pi.y > pt.y) != (pj.y > pt.y)) &&
+                (pt.x < (pj.x - pi.x) * (pt.y - pi.y) / (pj.y - pi.y) + pi.x))
+            {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    private static float DistanceToPolygonEdge(List<Vector2> polygon, Vector2 pt)
+    {
+        float best = float.MaxValue;
+        int count = polygon.Count;
+        for (int i = 0, j = count - 1; i < count; j = i++)
+        {
+            Vector2 a = polygon[j], b = polygon[i];
+            Vector2 ab = b - a;
+            float sqrLen = ab.x * ab.x + ab.y * ab.y;
+            Vector2 proj = (sqrLen < 0.0001f)
+                ? a
+                : a + ab * Mathf.Clamp01(((pt.x - a.x) * ab.x + (pt.y - a.y) * ab.y) / sqrLen);
+            float d = Vector2.Distance(pt, proj);
+            if (d < best) best = d;
+        }
+        return best;
     }
 
     public void TakeDamage(float damage)
@@ -56,6 +139,12 @@ public class DestructibleEnvironment : MonoBehaviour
         isDestroyed = true;
         
         Debug.Log($"<color=red><b>💥 EFFONDREMENT DU BÂTIMENT : {gameObject.name} EST PULVÉRISÉ EN RUINES TRAVERSABLES !</b></color>");
+
+        if (isHQ && Novgov.Network.MultiplayerMatchController.Instance != null && Novgov.Network.MultiplayerMatchController.IsFlowActive)
+        {
+            Debug.Log($"<color=magenta><b>🚨 LE QUARTIER GÉNÉRAL A ÉTÉ DÉTRUIT ! 🚨</b></color>");
+            Novgov.Server.MatchSessionManager.IsHQDestroyedThisMatch = true;
+        }
 
         // 1. Tremblement de caméra
         if (Camera.main != null)
@@ -79,7 +168,17 @@ public class DestructibleEnvironment : MonoBehaviour
                 }
             }
         }
-        AllRubbleBounds.Add(totalBounds);
+        // Empreinte réelle si le bâtiment en a une (cas normal, générée depuis OSM) ; sinon repli sur
+        // l'AABB, faute de mieux, mais avec une marge et une bande de hauteur strictes.
+        BuildingStructure bs = buildingStructure != null ? buildingStructure : GetComponent<BuildingStructure>();
+        AllRubble.Add(new RubbleZone
+        {
+            footprint = (bs != null && bs.polygonFootprint != null && bs.polygonFootprint.Count >= 3)
+                ? new List<Vector2>(bs.polygonFootprint)
+                : null,
+            worldBounds = totalBounds,
+            groundY = totalBounds.min.y
+        });
 
         // Désactiver tous les NavMeshObstacle
         NavMeshObstacle obs = GetComponent<NavMeshObstacle>();

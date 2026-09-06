@@ -47,7 +47,13 @@ namespace Novgov.Auth
         // lancement de l'app — le mot de passe reste vérifié normalement par GoTrue à la
         // première connexion, seule la ré-authentification silencieuse ultérieure est basée
         // sur ce token (comme "rester connecté" dans n'importe quelle app mobile).
-        private const string RefreshTokenPrefKey = "novgov_refresh_token";
+        //
+        // 2026-09-06 : suffixe ajouté (voir Novgov.Core.EditorPlayerPrefsScope) — sans lui, PlayerPrefs
+        // vit dans une case du Registre Windows PARTAGÉE entre l'Éditeur principal et tous ses clones
+        // Multiplayer Play Mode. Un Joueur Virtuel qui se connectait à un compte de test ÉCRASAIT
+        // cette case, et l'Éditeur principal héritait ensuite silencieusement de CE compte à son
+        // prochain lancement — pas juste une lecture erronée, une vraie pollution en écriture.
+        private static string RefreshTokenPrefKey => "novgov_refresh_token" + Novgov.Core.EditorPlayerPrefsScope.Suffix;
 
         public static bool HasSavedSession() => PlayerPrefs.HasKey(RefreshTokenPrefKey);
 
@@ -58,12 +64,22 @@ namespace Novgov.Auth
             return RefreshSession(saved);
         }
 
-        public static Task<(bool ok, string error)> SignUp(string email, string password, string username)
+        public static async Task<(bool ok, string error)> SignUp(string email, string password, string username)
         {
             string escapedUsername = username.Replace("\"", "\\\"");
             string body = "{\"email\":\"" + EscapeJson(email) + "\",\"password\":\"" + EscapeJson(password) +
                           "\",\"data\":{\"username\":\"" + escapedUsername + "\"}}";
-            return PostJson($"{BaseUrl}/signup", body);
+            var (ok, err) = await PostJson($"{BaseUrl}/signup", body);
+            if (!ok) return (false, err);
+
+            // Si le signup a réussi mais n'a pas inclus de session directe (selon config GoTrue),
+            // on effectue immédiatement un SignIn pour acquérir le JWT d'accès.
+            if (CurrentSession == null || string.IsNullOrEmpty(CurrentSession.access_token))
+            {
+                return await SignIn(email, password);
+            }
+
+            return (true, null);
         }
 
         public static Task<(bool ok, string error)> SignIn(string email, string password)
@@ -85,7 +101,7 @@ namespace Novgov.Auth
             PlayerPrefs.Save();
         }
 
-        private static string EscapeJson(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        private static string EscapeJson(string s) => (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
 
         private static async Task<(bool ok, string error)> PostJson(string url, string jsonBody)
         {
@@ -111,10 +127,23 @@ namespace Novgov.Auth
                     {
                         message = !string.IsNullOrEmpty(errBody.msg) ? errBody.msg
                                 : !string.IsNullOrEmpty(errBody.error_description) ? errBody.error_description
+                                : !string.IsNullOrEmpty(errBody.error) ? errBody.error
                                 : message;
                     }
                 }
                 catch { /* corps d'erreur non-JSON, on garde req.error */ }
+
+                if (!string.IsNullOrEmpty(message))
+                {
+                    if (message.IndexOf("Invalid login credentials", StringComparison.OrdinalIgnoreCase) >= 0)
+                        message = "Identifiants invalides (email ou mot de passe incorrect).";
+                    else if (message.IndexOf("User already registered", StringComparison.OrdinalIgnoreCase) >= 0)
+                        message = "Un compte existe déjà avec cette adresse email.";
+                    else if (message.IndexOf("Password should be at least", StringComparison.OrdinalIgnoreCase) >= 0)
+                        message = "Le mot de passe doit comporter au moins 6 caractères.";
+                    else if (message.IndexOf("Unable to validate email", StringComparison.OrdinalIgnoreCase) >= 0)
+                        message = "Format d'adresse email invalide.";
+                }
 
                 Debug.LogWarning($"[SupabaseAuthClient] Échec auth : {message}");
                 return (false, message);
@@ -123,7 +152,7 @@ namespace Novgov.Auth
             try
             {
                 CurrentSession = JsonUtility.FromJson<AuthSession>(responseText);
-                if (!string.IsNullOrEmpty(CurrentSession.refresh_token))
+                if (CurrentSession != null && !string.IsNullOrEmpty(CurrentSession.refresh_token))
                 {
                     PlayerPrefs.SetString(RefreshTokenPrefKey, CurrentSession.refresh_token);
                     PlayerPrefs.Save();

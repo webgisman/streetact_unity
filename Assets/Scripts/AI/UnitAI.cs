@@ -12,6 +12,7 @@ public partial class UnitAI : MonoBehaviour
 
     [Header("Unit Settings")]
     public int teamID;
+    public string sourceUnitType = "Fantassin"; // Tracks UnitType.ToString() for roster sync
     public bool isPlayerControlled = true;
     // Vrai UNIQUEMENT le temps d'un tour où le joueur propriétaire de cette unité
     // (isPlayerControlled = true) est absent/déconnecté/n'a rien soumis à temps (voir
@@ -26,7 +27,12 @@ public partial class UnitAI : MonoBehaviour
     [System.NonSerialized] public bool teamAssignedBySpawner = false;
     public bool isVisible = true; // Visibilité par rapport au brouillard de guerre
     public bool isSelected = false; // Permet de savoir si le joueur planifie pour cette unité
-    public float maxMovementPerTurn = 50f;
+    /// <summary>Budget de déplacement par tour, en mètres. Il n'était consulté que par
+    /// TacticalAIPlanner : seule l'IA se l'imposait, un joueur pouvait traverser toute la carte en un
+    /// tour. Désormais appliqué côté serveur pour TOUT LE MONDE (voir
+    /// TacticalResolver.TruncateToMovementBudget) et affiché dans l'aperçu de trajectoire.</summary>
+    public const float DefaultMaxMovementPerTurn = 50f;
+    public float maxMovementPerTurn = DefaultMaxMovementPerTurn;
 
     [Header("Combat")]
     public int health = 100;
@@ -52,10 +58,57 @@ public partial class UnitAI : MonoBehaviour
 
     [Header("Escalade & Toits")]
     public bool isClimbing = false;
+
+    /// <summary>Seuil unique "cette unité est en hauteur". Était dupliqué en 1.8f
+    /// (TacticalPathManager_ContextMenu, deux endroits), 2.0f (idem) et 2.2f (ici et dans
+    /// TacticalCore) : trois valeurs différentes pour une même question, si bien qu'une unité pouvait
+    /// être "sur un toit" pour le menu contextuel et "au sol" pour le combat. Miroir exact de
+    /// Novgov.TacticalCore.TacticalResolver.RoofStrataThresholdY — les deux doivent rester égaux,
+    /// TacticalCore n'ayant volontairement aucune dépendance vers les composants de scène.</summary>
+    public const float RoofStrataThresholdY = 2.2f;
+
+    /// <summary>Masque des raycasts qui doivent voir le DÉCOR et rien d'autre (surface de toit,
+    /// façade à escalader). Les sondes de toit et de façade tiraient jusqu'ici sans masque : un
+    /// autre soldat, un lampadaire, un arbre ou un véhicule pouvait donc être pris pour un sol ou
+    /// pour un mur, et l'unité grimpait alors sur un objet de décor ou dans le vide. Calculé
+    /// paresseusement : LayerMask.NameToLayer n'est pas fiable avant le chargement des couches.</summary>
+    private static int _worldGeometryMask = 0;
+    public static int WorldGeometryMask
+    {
+        get
+        {
+            if (_worldGeometryMask == 0)
+            {
+                int mask = Physics.DefaultRaycastLayers; // exclut déjà "Ignore Raycast"
+                foreach (string excluded in new[] { "Units_3D", "Units_UI_Markers", "UI", "TransparentFX", "Water" })
+                {
+                    int layer = LayerMask.NameToLayer(excluded);
+                    if (layer >= 0) mask &= ~(1 << layer);
+                }
+                _worldGeometryMask = mask;
+            }
+            return _worldGeometryMask;
+        }
+    }
+
     private bool _isRooftopSniperManual = false;
     public bool isRooftopSniper
     {
-        get => (!isTank && (transform.position.y > 2.2f || _isRooftopSniperManual));
+        // Le drapeau manuel ne peut plus survivre à une redescente : il n'était remis à false que
+        // dans ExecuteClimbDown, or cette coroutine était inatteignable pour tout ordre de descente
+        // du joueur (voir NodeAction.Descendre). Une unité revenue en bas gardait donc les bonus de
+        // toit ET un NavMeshAgent définitivement éteint. Ancrer la lecture sur la hauteur RÉELLE rend
+        // l'état auto-cohérent quelle que soit la façon dont l'unité a fini par redescendre.
+        get
+        {
+            if (isTank) return false;
+            if (transform.position.y > RoofStrataThresholdY) return true;
+            if (_isRooftopSniperManual && !isClimbing)
+            {
+                _isRooftopSniperManual = false; // redescendue pour de bon : on purge le drapeau
+            }
+            return _isRooftopSniperManual;
+        }
         set => _isRooftopSniperManual = value;
     }
 
@@ -159,19 +212,22 @@ public partial class UnitAI : MonoBehaviour
             marker.RefreshMarker();
         }
 
-        // Assignation des composants 3D au layer 'Units_3D' pour masquage en vue 2D
-        int units3DLayer = LayerMask.NameToLayer("Units_3D");
-        if (units3DLayer != -1)
-        {
-            Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
-            foreach (var r in renderers)
-            {
-                if (!r.name.Contains("TacticalMarker"))
-                {
-                    r.gameObject.layer = units3DLayer;
-                }
-            }
-        }
+        // MASQUAGE EN VUE 2D DÉSACTIVÉ (correctif 2026-09-06, demande explicite : « l'utilisation de
+        // la vraie image au lieu d'une icône est très bien »). Ce bloc replaçait les renderers 3D sur
+        // le layer "Units_3D", exclu du masque de culling de la vue Commandement (voir
+        // CameraStateManager.commandViewMask) — le modèle réel disparaissait alors en 2D, remplacé par
+        // le badge procédural de UnitTacticalMarker. VehiculeCanon/Mortier échappaient déjà à ce
+        // masquage par accident (un bug séparé — voir UnitSpawnerUI.SpawnUnitAt — les empêchait
+        // d'avoir un UnitAI du tout, donc ce Start() ne s'exécutait jamais pour eux), ce qui montrait
+        // leur vrai modèle en 2D et a fait remarquer la préférence pour ce rendu. Une fois ce bug
+        // corrigé, TOUS les types auraient basculé vers l'icône sans ce retrait explicite du masquage
+        // — désormais tous cohérents sur le vrai modèle 3D. Le marqueur (UnitTacticalMarker) reste
+        // créé, réduit à un simple anneau de couleur d'équipe au sol (voir markerSize) pour ne pas
+        // perdre la distinction ami/ennemi au premier coup d'œil en vue large.
+        //
+        // (int units3DLayer = LayerMask.NameToLayer("Units_3D"); ... — logique retirée, pas seulement
+        // commentée : réactiver nécessiterait de re-designer le marqueur en plus, pas un simple
+        // dé-commentage.)
 
         // Optimisation CPU : Ne pas calculer l'animation des os quand le modèle 3D est masqué
         Animator anim = GetComponentInChildren<Animator>();
@@ -197,10 +253,15 @@ public partial class UnitAI : MonoBehaviour
             isMortar = true;
         }
 
+        // Diamètre au sol utilisé plus bas pour dimensionner l'anneau de sélection (correctif
+        // 2026-09-06) — 1.2m par défaut (valeur historique, correcte pour un fantassin), écrasé par
+        // chaque branche ci-dessous une fois les bounds réels du modèle connus.
+        float unitFootprintDiameter = 1.2f;
+
         if (isLeopard || isCanonVehicle || isMortar)
         {
             isTank = true;
-            
+
             // 1. CALCUL DYNAMIQUE PROPRE DES DIMENSIONS (Fini les valeurs magiques)
             Bounds bounds = new Bounds(transform.position, Vector3.zero);
             Renderer[] renderers = GetComponentsInChildren<Renderer>();
@@ -211,6 +272,7 @@ public partial class UnitAI : MonoBehaviour
                 if (!hasBounds) { bounds = r.bounds; hasBounds = true; }
                 else { bounds.Encapsulate(r.bounds); }
             }
+            if (hasBounds) unitFootprintDiameter = Mathf.Max(Mathf.Max(bounds.size.x, bounds.size.z) * 1.3f, unitFootprintDiameter);
 
             // 2. CONFIGURATION PHYSIQUE (BoxCollider parfait)
             BoxCollider box = gameObject.GetComponent<BoxCollider>();
@@ -238,12 +300,55 @@ public partial class UnitAI : MonoBehaviour
         }
         else
         {
+            // DIMENSIONS DÉRIVÉES DU VRAI MAILLAGE (correctif 2026-09-06), même principe que la
+            // branche isTank juste au-dessus ("Fini les valeurs magiques") — jusqu'ici seule
+            // l'infanterie gardait un CapsuleCollider à valeurs FIGÉES (rayon 0.4, hauteur 2),
+            // indépendantes du modèle réellement chargé. Tant que le masquage 2D remplaçait le
+            // modèle par un badge plat, l'écart entre ce cylindre et le maillage réel n'avait aucune
+            // conséquence : rien de visible ne dépassait jamais du collider. Depuis son retrait
+            // (voir plus haut dans cette méthode), le vrai modèle (silhouette humaine, arme tenue en
+            // avant, sac à dos) déborde largement de ce cylindre trop étroit — un tap visé sur une
+            // partie visible mais hors-collider retombait sur le Physics.Raycast, qui continuait
+            // alors jusqu'au premier AUTRE collider rencontré sur le même rayon (souvent un allié
+            // voisin, dans un groupe resserré) : le joueur sélectionnait la mauvaise unité sans le
+            // moindre indice. Trouvé et vérifié par audit adversarial (2026-09-06).
+            Bounds bounds = new Bounds(transform.position, Vector3.zero);
+            Renderer[] renderers = GetComponentsInChildren<Renderer>();
+            bool hasBounds = false;
+            foreach (Renderer r in renderers)
+            {
+                if (r.gameObject.name.Contains("Health") || r.gameObject.name.Contains("selectionRing")) continue;
+                if (!hasBounds) { bounds = r.bounds; hasBounds = true; }
+                else { bounds.Encapsulate(r.bounds); }
+            }
+
             CapsuleCollider cap = gameObject.GetComponent<CapsuleCollider>();
             if (cap == null) cap = gameObject.AddComponent<CapsuleCollider>();
-            cap.center = new Vector3(0, 1f, 0);
-            cap.radius = 0.4f;
-            cap.height = 2f;
-            
+
+            if (hasBounds) unitFootprintDiameter = Mathf.Max(Mathf.Max(bounds.size.x, bounds.size.z) * 1.3f, unitFootprintDiameter);
+
+            if (hasBounds && transform.lossyScale.y != 0f)
+            {
+                float localHeight = bounds.size.y / transform.lossyScale.y;
+                // Rayon dérivé de l'emprise horizontale (X/Z) réelle — une marge de 55% du rayon
+                // capsule couvre la largeur du corps ET les bras/l'arme tenue en avant, sans devenir
+                // pour autant plus large que la tolérance de sélection à l'écran (45px) ne le permet.
+                float horizontalExtent = Mathf.Max(bounds.extents.x, bounds.extents.z);
+                float localRadius = Mathf.Max(0.4f, (horizontalExtent / Mathf.Max(transform.lossyScale.x, 0.0001f)) * 1.15f);
+                cap.center = new Vector3(0, Mathf.Max(localHeight, 0.5f) * 0.5f, 0);
+                cap.radius = localRadius;
+                cap.height = Mathf.Max(localHeight, localRadius * 2f);
+            }
+            else
+            {
+                // Repli sur les anciennes valeurs si les Renderer ne sont pas encore présents
+                // (ex: fallback GameObject.CreatePrimitive sans modèle réel) — mêmes constantes
+                // qu'avant ce correctif, jamais pires qu'auparavant dans ce cas précis.
+                cap.center = new Vector3(0, 1f, 0);
+                cap.radius = 0.4f;
+                cap.height = 2f;
+            }
+
             Rigidbody rb = gameObject.GetComponent<Rigidbody>();
             if (rb == null) rb = gameObject.AddComponent<Rigidbody>();
             rb.isKinematic = true;
@@ -270,9 +375,19 @@ public partial class UnitAI : MonoBehaviour
         Destroy(selectionRing.GetComponent<Collider>());
         selectionRing.transform.SetParent(this.transform);
         selectionRing.transform.localPosition = new Vector3(0, 0.05f, 0); // Au ras du sol
-        selectionRing.transform.localScale = new Vector3(1.2f, 0.02f, 1.2f);
-        
+        // Mis à l'échelle du VRAI diamètre de l'unité (correctif 2026-09-06), pas un 1.2m fixe :
+        // depuis le retrait du masquage 2D, la coque opaque des véhicules (Char/Canon/Mortier,
+        // souvent 2-3m d'empreinte) est directement rendue en vue Commandement, et un anneau de
+        // 1.2m se retrouvait entièrement SOUS elle — invisible, sans plus aucun moyen de confirmer
+        // visuellement quelle unité est sélectionnée parmi plusieurs blindés regroupés. Un anneau au
+        // moins aussi large que l'empreinte réelle dépasse toujours du contour du modèle.
+        selectionRing.transform.localScale = new Vector3(unitFootprintDiameter, 0.02f, unitFootprintDiameter);
+
         Material ringMat = SafeMaterialFactory.CreateUnlit(new Color(1f, 0.8f, 0f, 0.65f)); // Jaune/Or
+        // Défense en profondeur contre l'occlusion par la coque (n'a d'effet que si le shader résolu
+        // expose _ZTest — sans effet, jamais d'erreur, sinon) : passe toujours le test de profondeur,
+        // pour rester visible même sous un maillage plus proche de la caméra.
+        if (ringMat != null && ringMat.HasProperty("_ZTest")) ringMat.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
         selectionRing.GetComponent<MeshRenderer>().sharedMaterial = ringMat;
         selectionRing.SetActive(false); // Caché par défaut
 
@@ -581,7 +696,18 @@ public partial class UnitAI : MonoBehaviour
         }
         
         // Mode Obstacle explicite : si le char est sélectionné, on le repasse en Agent pour pouvoir dessiner sa trajectoire
-        if (isTank && !isExecuting)
+        //
+        // 2026-09-06 : jamais en multijoueur — SetObstacleMode(false) réactive agent.enabled, et
+        // Unity RECALE AUTOMATIQUEMENT tout NavMeshAgent qu'on réactive sur le point de NavMesh le
+        // plus proche de sa position actuelle. Or en multijoueur, la position d'un char vient
+        // uniquement des ticks du serveur (grille A* de TacticalCore.Pathfinding, jamais du
+        // NavMesh) — les NavMeshAgent y sont d'ailleurs délibérément désactivés pour tout le monde
+        // (voir MultiplayerMatchController, "le client ne simule jamais de mouvement localement").
+        // Sélectionner un char rallumait quand même SON agent, qui recalait aussitôt sa position sur
+        // le NavMesh le plus proche — un petit saut visible pile au moment de la sélection, sans
+        // aucun rapport avec un ordre ou un déplacement (rapporté par le joueur : "des fois quand je
+        // sélectionne une unité elle bouge un peu").
+        if (isTank && !isExecuting && !Novgov.Network.MultiplayerMatchController.IsActive)
         {
             SetObstacleMode(!isSelected);
         }
@@ -903,12 +1029,24 @@ public partial class UnitAI : MonoBehaviour
     /// </summary>
     public void ResetOrderState()
     {
+        bool wasInterruptedMidClimb = isClimbing;
+
         isExecuting = false;
         isPerformingCheckpointAction = false;
         isClimbing = false;
         tacticalPath.Clear();
         currentNodeIndex = 0;
         if (tacticalLineRenderer != null) tacticalLineRenderer.positionCount = 0;
+
+        // Une escalade coupée en plein vol (bouton "Passer", plafond de durée du tour, mort de
+        // l'adversaire) laissait le soldat figé à mi-façade, en l'air, avec l'animation d'escalade
+        // verrouillée et son NavMeshAgent éteint : plus rien ne le remettait jamais d'aplomb. On le
+        // repose donc sur la première surface valide, toit ou trottoir.
+        if (wasInterruptedMidClimb && !isTank)
+        {
+            if (animator != null) animator.SetBool("IsClimbing", false);
+            SnapToNearestStandableSurface();
+        }
 
         if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
         {
@@ -920,6 +1058,30 @@ public partial class UnitAI : MonoBehaviour
         {
             animator.SetFloat("Speed", 0f);
             animator.SetBool("IsShooting", false);
+        }
+    }
+
+    /// <summary>Repose l'unité sur une surface tenable : le toit sous ses pieds s'il y en a un, sinon
+    /// le sol/NavMesh le plus proche — et remet l'état "perché" et le NavMeshAgent en accord avec la
+    /// hauteur obtenue. Utilisé quand une escalade est interrompue à mi-façade.</summary>
+    private void SnapToNearestStandableSurface()
+    {
+        if (Physics.Raycast(transform.position + Vector3.up * 1.5f, Vector3.down, out RaycastHit below, 60f, WorldGeometryMask, QueryTriggerInteraction.Ignore))
+        {
+            transform.position = new Vector3(transform.position.x, below.point.y + 0.05f, transform.position.z);
+        }
+        else if (UnityEngine.AI.NavMesh.SamplePosition(transform.position, out UnityEngine.AI.NavMeshHit navHit, 25f, UnityEngine.AI.NavMesh.AllAreas))
+        {
+            transform.position = navHit.position;
+        }
+
+        bool onRoof = transform.position.y > RoofStrataThresholdY;
+        _isRooftopSniperManual = onRoof;
+
+        if (!onRoof && agent != null && UnityEngine.AI.NavMesh.SamplePosition(transform.position, out UnityEngine.AI.NavMeshHit groundHit, 6f, UnityEngine.AI.NavMesh.AllAreas))
+        {
+            agent.enabled = true;
+            agent.Warp(groundHit.position);
         }
     }
 

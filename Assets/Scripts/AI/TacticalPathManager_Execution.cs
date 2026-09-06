@@ -75,13 +75,25 @@ public partial class TacticalPathManager
             if (u != null && !u.isDead) livingUnits.Add(u);
         }
 
-        // Lancer les ordres pour toutes les unités (IA et Joueur)
+        // Lancer les ordres pour toutes les unités (IA et Joueur).
+        //
+        // PAS DE PLAFOND DE DÉPLACEMENT POUR LE JOUEUR EN SOLO (rétabli le 2026-09-04). Un
+        // raccourcissement du chemin au budget du tour (50 m) avait été inséré ici le 2026-09-03
+        // pour aligner le solo sur les règles en ligne. Il était à la fois cassé et non désiré :
+        //   - CASSÉ : il abandonnait tous les nœuds au-delà du budget. Quand c'était le PREMIER
+        //     nœud qui dépassait — le cas courant, la caméra de commandement montre ~190 m de
+        //     terrain, le joueur désigne donc naturellement des points à 60-100 m — le chemin
+        //     entier était vidé, UnitAI.ExecuterOrdres ne trouvait plus rien à exécuter et l'unité
+        //     ne bougeait PAS DU TOUT. Le serveur, lui, ne jette rien : il coupe le tronçon pile à
+        //     la limite (TacticalResolver.TruncateToMovementBudget), donc l'unité avance toujours.
+        //     Le commentaire retiré prétendait précisément s'aligner sur ce serveur.
+        //   - NON DÉSIRÉ : c'était une modification d'équilibrage jamais demandée ; le solo n'a
+        //     jamais plafonné le déplacement du joueur.
+        // Les ordres du joueur sont donc exécutés en entier, comme avant. Le budget reste appliqué
+        // par le SERVEUR pour les parties en ligne, où il départage deux camps.
         foreach (var unit in livingUnits)
         {
-            if (!unit.isPlayerControlled)
-            {
-                unit.PlanifierTourIA();
-            }
+            if (!unit.isPlayerControlled) unit.PlanifierTourIA();
             unit.ExecuterOrdres();
         }
 
@@ -100,9 +112,17 @@ public partial class TacticalPathManager
         yield return new WaitForSeconds(0.4f);
 
         // 1. PHASE DE PROGRESSION & ACTIONS AUX CHECKPOINTS
-        // L'action dure tant que des unités avancent ou exécutent des pauses tactiques (supporte l'attente 30s)
+        // L'action dure tant que des unités avancent ou exécutent des pauses tactiques.
+        //
+        // Le plafond de sécurité était un 45s fixe, alors qu'un SEUL checkpoint "ATTENDRE 30
+        // SECONDES" — proposé dans presque tous les menus contextuels — en consomme 30 à lui seul. Un
+        // trajet A(halte 30s) -> B -> C était donc systématiquement coupé à 45s : ForcerFinExecution
+        // appelait StopAllCoroutines() puis ResetOrderState(), B et C n'étaient jamais exécutés, la
+        // ligne de trajet disparaissait et le joueur n'en était pas informé. Le plafond tient
+        // maintenant compte des haltes réellement demandées.
+        float safetyCap = ComputeExecutionSafetyCap();
         float safetyMovementTimer = 0f;
-        while (UnitesEncoreEnDeplacementOuAction() && safetyMovementTimer < 45.0f)
+        while (UnitesEncoreEnDeplacementOuAction() && safetyMovementTimer < safetyCap)
         {
             safetyMovementTimer += Time.deltaTime;
             yield return null;
@@ -125,6 +145,39 @@ public partial class TacticalPathManager
         }
 
         ForcerFinExecution();
+    }
+
+    /// <summary>Plafond de sécurité du tour : une allocation de base pour le déplacement, plus le
+    /// temps des haltes tactiques RÉELLEMENT demandées sur le chemin le plus chargé. Empêche le
+    /// plafond de trancher au milieu d'un ordre légitime, tout en gardant un garde-fou borné contre
+    /// une unité définitivement bloquée.
+    ///
+    /// Le total est PLAFONNÉ (correctif 2026-09-04). Ce plafond est global à la boucle d'exécution :
+    /// l'allonger allonge d'autant la fenêtre pendant laquelle une unité définitivement coincée
+    /// (char nez à nez, seuil de porte inatteignable) retient toute l'escouade ET le joueur devant
+    /// un écran figé. Les haltes s'exécutant en PARALLÈLE, empiler leur durée n'a pas de sens :
+    /// trois haltes portaient le plafond à plus de deux minutes.</summary>
+    private float ComputeExecutionSafetyCap()
+    {
+        const float baseMovementAllowance = 45.0f;
+        const float perWaitNodeSeconds = 31.0f; // 30s de halte + une marge de transition
+        const float absoluteCapSeconds = 110.0f; // ~45s de trajet + 2 haltes, jamais plus
+
+        int maxWaitNodes = 0;
+        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
+        {
+            UnitAI u = UnitAI.AllLivingUnits[i];
+            if (u == null || u.isDead || u.tacticalPath == null) continue;
+
+            int waitNodes = 0;
+            for (int n = 0; n < u.tacticalPath.Count; n++)
+            {
+                if (u.tacticalPath[n].action == NodeAction.Attendre30s) waitNodes++;
+            }
+            if (waitNodes > maxWaitNodes) maxWaitNodes = waitNodes;
+        }
+
+        return Mathf.Min(baseMovementAllowance + perWaitNodeSeconds * maxWaitNodes, absoluteCapSeconds);
     }
 
     /// <summary>
@@ -169,6 +222,22 @@ public partial class TacticalPathManager
 
         phaseActuelle = GamePhase.Planification;
 
+        // Compter les unités qui n'ont PAS fini leur trajet avant de tout effacer : la troncature était
+        // entièrement silencieuse, le joueur voyait juste sa ligne de trajet disparaître et croyait à
+        // un ordre perdu.
+        //
+        // Uniquement les unités DU JOUEUR (correctif 2026-09-04) : le message lui demande de
+        // « redonner un ordre », ce qui n'a aucun sens pour une unité ennemie qu'il ne commande pas et
+        // ne voit peut-être même pas. Il annonçait des unités inexistantes de son point de vue.
+        int truncatedUnits = 0;
+        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
+        {
+            UnitAI u = UnitAI.AllLivingUnits[i];
+            if (u == null || u.isDead || !u.isPlayerControlled) continue;
+            if (u.tacticalPath == null || u.tacticalPath.Count == 0) continue;
+            if (u.GetCurrentNodeIndex() < u.tacticalPath.Count) truncatedUnits++;
+        }
+
         for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
         {
             UnitAI u = UnitAI.AllLivingUnits[i];
@@ -177,6 +246,17 @@ public partial class TacticalPathManager
                 u.StopAllCoroutines();
                 u.ResetOrderState();
             }
+        }
+
+        if (truncatedUnits > 0)
+        {
+            string message = truncatedUnits == 1
+                ? "1 unité n'a pas terminé son trajet — redonnez-lui un ordre."
+                : $"{truncatedUnits} unités n'ont pas terminé leur trajet — redonnez-leur un ordre.";
+            Debug.Log($"<color=yellow>[TacticalPathManager] {message}</color>");
+#if !UNITY_SERVER
+            if (UnitSpawnerUI.Instance != null) UnitSpawnerUI.Instance.ShowMessage(message, 3.5f);
+#endif
         }
 
         // Nettoyer les marqueurs au sol
@@ -212,6 +292,15 @@ public partial class TacticalPathManager
             : team2Wiped ? "VICTOIRE" : "DÉFAITE";
         string detail = (team1Wiped && team2Wiped) ? "Les deux camps ont été anéantis."
             : team2Wiped ? "L'ennemi a été entièrement anéanti." : "Votre escouade a été entièrement anéantie.";
+
+        // Poser le drapeau ICI (correctif 2026-09-04) : il ne l'était NULLE PART, alors que trois
+        // garde-fous le lisent — le return anticipé d'Update, hideBottomBar dans RefreshTacticalUI et
+        // le masquage du dock de déploiement. Tous étaient donc inatteignables. Or le recouvrement
+        // visuel ne suffit pas : UIScreenManager force pickingMode = Ignore sur le "root" de chaque
+        // écran, les taps traversent donc le voile de fin de partie et le joueur pouvait continuer à
+        // sélectionner ses unités, tracer des trajets et lancer un tour DERRIÈRE l'écran VICTOIRE.
+        IsSoloGameOver = true;
+
         ShowSoloGameOver(result, detail);
     }
 
@@ -237,6 +326,16 @@ public partial class TacticalPathManager
             menuButton.userData = true;
             menuButton.clicked += () =>
             {
+                // MASQUER AVANT DE RECHARGER (correctif 2026-09-04). UIScreenManager est en
+                // DontDestroyOnLoad et se détruit lui-même s'une instance existe déjà : ses
+                // VisualElement survivent donc intacts à LoadScene, écran GameOver toujours en
+                // display:Flex. Comme rien n'appelait jamais SetVisible("GameOver", false), le voile
+                // à 85% d'opacité restait collé par-dessus la partie rechargée, y compris par-dessus
+                // le menu de démarrage : le joueur ne pouvait plus rien atteindre et seul un
+                // redémarrage complet de l'application débloquait la situation. Le chemin
+                // multijoueur, lui, encadrait déjà son LoadScene par HideAll().
+                UIScreenManager.Instance.HideAll();
+                IsSoloGameOver = false; // la scène rechargée redémarre une partie jouable
                 UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
             };
         }

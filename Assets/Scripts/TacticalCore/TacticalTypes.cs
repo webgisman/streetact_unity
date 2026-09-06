@@ -127,6 +127,14 @@ namespace Novgov.TacticalCore
         public int health;
         public bool isDead;
 
+        // Distance maximale parcourue en UN tour, en mètres (UnitAI.maxMovementPerTurn). Ajouté le
+        // 2026-09-03 : cette limite n'était lue que par TacticalAIPlanner, donc SEULE l'IA se
+        // l'imposait. Un joueur pouvait traverser toute la tuile en un tour tandis que l'IA avançait
+        // de 50m — l'approche, le contournement et le repli ne coûtaient rien et la structure en
+        // tours perdait tout son sens. Appliquée maintenant dans TacticalResolver.ExpandOrder, donc
+        // pour tout le monde et du côté qui fait autorité.
+        public float movementBudget = 50f;
+
         // --- Portées (UnitAI_Combat.cs) ---
         // Portée de REPÉRAGE (IsUnitSpottedByTeam) : 55m toit, 25m mortier, 35m sinon (ligne 207).
         public float spottingRange = 35f;
@@ -140,6 +148,11 @@ namespace Novgov.TacticalCore
         public float weaponCooldownSeconds;   // ligne 87-91 : 0.35 infanterie / 1.4 canon-véhicule / 1.8 char lourd, 0 = pas de tir direct (mortier)
         public float cooldownRemaining;       // état d'exécution — décrémenté à chaque tick, tir permis quand <= 0
         public bool isMortar;                 // le mortier n'engage JAMAIS directement (ligne 42-54/248-264) — uniquement via mortarStrikes
+        // 2026-09-06 : un char pouvait être envoyé jusque dans un bâtiment — TacticalResolver.
+        // ExpandOrder/AppendLeg n'avaient aucune notion de type d'unité (contrairement à isMortar
+        // ci-dessus) pour refuser/redresser un ordre dont la destination tombe dans une empreinte de
+        // bâtiment (seule l'infanterie, via enterBuildingId/currentInterior, a le droit d'y entrer).
+        public bool isTank;
 
         public VisionType visionType = VisionType.Normale;
 
@@ -223,6 +236,20 @@ namespace Novgov.TacticalCore
         public int enterBuildingId = -1;  // EntrerBatiment -> currentBuildingId
         public bool exitBuilding;         // SortirBatiment -> currentBuildingId = -1 ET LeaveGarrison (rapport §2.8)
         public float? setPositionY;       // Escalade (monte sur le toit)
+
+        /// <summary>Attendre30s -> l'unité reste immobile PENDANT cette durée une fois ce checkpoint
+        /// atteint, avant de reprendre son chemin vers le nœud suivant (voir TacticalResolver.Resolve,
+        /// la garde "attente en cours" au tout début de la boucle par unité). Ajouté le 2026-09-05 :
+        /// jusque-là, cette action n'existait dans AUCUN champ de PathCheckpoint — le switch qui la
+        /// construisait (MatchSessionManager.BuildUnitOrders/BuildUnitOrdersPure) tombait dans son cas
+        /// par défaut, produisant un PathCheckpoint sans aucun drapeau spécial, strictement identique à
+        /// un simple "Continuer". "ATTENDRE 30 SECONDES", proposé dans presque tous les menus contextuels,
+        /// n'avait donc RIEN d'autre effet qu'un déplacement en multijoueur — la pause promise par
+        /// l'intitulé n'existait que côté solo (bloc NodeAction.Attendre30s dans
+        /// UnitAI_Movement.ExecuteMovementCoroutine, simulation Unity locale).
+        /// Toujours en secondes, jamais en ticks : TacticalResolver.TickSeconds reste un détail interne
+        /// de granularité de simulation, pas une unité que les checkpoints devraient connaître.</summary>
+        public float? waitSeconds;
     }
 
     /// <summary>Un ordre de tour pour une unité : une SUITE de checkpoints (jamais un unique point
@@ -236,6 +263,12 @@ namespace Novgov.TacticalCore
         // dès que le prochain ordre ne ré-escalade pas, sans action dédiée dans l'enum — appliquée
         // une fois, après le TOUT DERNIER checkpoint de cet ordre (pas liée à un checkpoint précis,
         // voir MatchSessionManager.BuildUnitOrders).
+        // OBSOLÈTE depuis le 2026-09-03 et plus lu par personne : TacticalResolver.ExpandOrder déduit
+        // désormais la strate (Sol/Toit) de la GÉOMÉTRIE, pas à pas. Ce drapeau posait la descente une
+        // fois pour tout l'ordre dès qu'il ne contenait pas d'Escalade — ce qui ramenait aussi au sol
+        // une unité qui se déplaçait simplement SUR son toit ("CONTINUER SUR LE TOIT"), alors que le
+        // client la laissait perchée : une divergence client/serveur à chaque tour. Champ conservé pour
+        // ne pas casser la sérialisation d'un ordre déjà en vol pendant un déploiement.
         public float? implicitDescentY;
     }
 
@@ -245,13 +278,22 @@ namespace Novgov.TacticalCore
     /// secondes.</summary>
     public class TacticalEvent
     {
-        public enum Kind { Move, Shot, Death, WallDestroyed, OverwatchTriggered }
+        // Elevation (ajouté le 2026-09-03) : l'unité change de strate À CE PAS précis (montée sur un
+        // toit, descente vers la rue). Sans cet événement, le rejeu n'avait aucune source de hauteur
+        // par pas : il lisait MatchState.CurrentYById, qui n'est mis à jour qu'APRÈS la construction
+        // des snapshots. Une unité qui descendait d'un toit de 6m était donc dessinée 6m au-dessus du
+        // sol pendant TOUT le rejeu — elle traversait visiblement la rue en l'air — et ne retombait
+        // qu'au premier pas du tour suivant ; à la montée, elle marchait au sol tout le tour puis
+        // se téléportait verticalement sur le toit. Le client avait ainsi toujours un tour de retard
+        // sur la strate réelle, donc les menus de toit ne s'ouvraient pas au bon moment.
+        public enum Kind { Move, Shot, Death, WallDestroyed, OverwatchTriggered, Elevation }
         public Kind kind;
         public string unitId;
         public string targetUnitId;
         public Vector2 position;
         public int damage;
         public int buildingId;
+        public float y; // seulement pour Kind.Elevation : la nouvelle hauteur à ce pas
 
         // Index de "pas" de résolution (incrémenté une fois par itération de la boucle de
         // déplacement dans TacticalResolver.Resolve) — sert uniquement à reconstruire une

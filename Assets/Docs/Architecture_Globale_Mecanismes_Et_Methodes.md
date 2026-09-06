@@ -31,7 +31,7 @@ Fichiers clés : [`TacticalCamera.cs`](file:///e:/streetact/My%20project/Assets/
   - Taille par défaut : `commandOrthographicSize = 95f` (couvre un large rayon urbain de 250m).
   - Plage de Zoom : de `minOrthoSize = 40f` (zoom rapproché) à `maxOrthoSize = 180f` (vue stratégique de l'ensemble de la ville).
   - Orientation : Fixe au zénith (`Pitch = 90°`, `Yaw = 0°`).
-  - Culling Layer : Masque les modèles 3D complexes au profit d'icônes militaires légères (`Units_UI_Markers`).
+  - Culling Layer : depuis le 2026-09-06, ne masque plus les modèles 3D (demande explicite : "l'utilisation de la vraie image au lieu d'une icône est très bien" — voir `UnitAI.cs`). `Units_UI_Markers` ne porte plus qu'un simple anneau de couleur d'équipe au sol sous chaque unité, plus le badge OTAN qu'il affichait déjà.
 
 ### 2.2. Vue 3D (Mode Action)
 - **Rôle** : Plonger le joueur au cœur de l'action, observer les lignes de vue, les toits, les ouvertures et la verticalité des combats.
@@ -269,7 +269,29 @@ Emplacement : `Assets/Editor/`
 
 ---
 
-## 13. Synthèse Exhaustive des Scripts et Responsabilités
+## 13. Architecture Multijoueur, Conquête et Persistance (Supabase)
+
+Fichiers clés : [`SupabaseAuthClient.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Auth/SupabaseAuthClient.cs), [`SupabaseDatabaseClient.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Auth/SupabaseDatabaseClient.cs), [`MultiplayerMatchController.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Network/MultiplayerMatchController.cs), [`MatchSessionManager.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Server/MatchSessionManager.cs), [`ZoneMapController.cs`](file:///e:/streetact/My%20project/Assets/Scripts/UI/ZoneMapController.cs)
+
+### 13.1. Gestion des Comptes & Monétisation
+- L'authentification (Inscription / Connexion) est gérée nativement via **Supabase Auth** (`SupabaseAuthClient`).
+- Chaque joueur possède un profil persistant (Table `profiles`) contenant ses **Points d'Action (AP)** et son **Elo / Rating**.
+- Les Points d'Action servent de monnaie d'échange pour l'achat de nouvelles unités dans la **Boutique de Recrutement (Hub)**.
+
+### 13.2. Persistance d'Armée (Roster)
+- L'inventaire d'unités du joueur est enregistré sur le cloud (Table `player_roster`).
+- L'achat d'unités déduit les AP en toute sécurité via l'API REST de Supabase.
+- Chaque déploiement tactique en Conquête puise strictement dans cette réserve, garantissant un système d'économie fermé.
+
+### 13.3. Guerre de Territoires & Défense Asynchrone
+- Le serveur autoritaire (`MatchSessionManager`) gère l'arbitrage complet des combats (Timer, Déconnexions, Déploiements).
+- La **Carte des Zones** (`ZoneMapController`) affiche une Minimap stratégique 3x3 basée sur les données `zones` de Supabase (les zones alliées en bleu, ennemies en rouge).
+- **Défense Asynchrone :** En cas d'attaque sur une zone appartenant à un joueur déconnecté, le serveur télécharge automatiquement l'inventaire (`Roster`) du défenseur et **déploie ses unités autour du Quartier Général (HQ)** pour assurer la défense !
+- **Victoire & Pillage (Loot) :** Si l'attaquant détruit le Quartier Général du défenseur, le serveur déclare une victoire totale et pille **100% des Points d'Action (AP)** du vaincu pour les transférer à l'attaquant !
+
+---
+
+## 14. Synthèse Exhaustive des Scripts et Responsabilités
 
 | Script / Classe | Emplacement | Rôle Principal |
 | :--- | :--- | :--- |
@@ -298,3 +320,9 @@ Emplacement : `Assets/Editor/`
 | **[`MapTileLoader.cs`](file:///e:/streetact/My%20project/Assets/MapTileLoader.cs)** | `Assets/` | Téléchargement des tuiles cartographiques et génération du maillage de sol. |
 | **[`ProceduralAudioBuilder.cs`](file:///e:/streetact/My%20project/Assets/ProceduralAudioBuilder.cs)** | `Assets/` | Génération d'ondes audio PCM procédurales temps réel (zéro asset externe). |
 | **[`SafeMaterialFactory.cs`](file:///e:/streetact/My%20project/Assets/SafeMaterialFactory.cs)** | `Assets/` | Usine de matériaux et shaders compatibles multi-pipelines. |
+| **[`SupabaseAuthClient.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Auth/SupabaseAuthClient.cs)** | `Assets/Scripts/Auth/` | Gestion de l'authentification (Email/Mdp, Inscription, Connexion) via l'API REST Supabase. |
+| **[`SupabaseDatabaseClient.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Auth/SupabaseDatabaseClient.cs)** | `Assets/Scripts/Auth/` | Couche d'accès aux données persistantes (AP, Rating, Roster d'unités). |
+| **[`MultiplayerMatchController.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Network/MultiplayerMatchController.cs)** | `Assets/Scripts/Network/` | Orchestration du Hub central, boutique de recrutement, file d'attente réseau et UI multijoueur. |
+| **[`MatchSessionManager.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Server/MatchSessionManager.cs)** | `Assets/Scripts/Server/` | Serveur autoritaire gérant la conquête, l'IA de garnison asynchrone, les timers, et le pillage. |
+| **[`ZoneMapController.cs`](file:///e:/streetact/My%20project/Assets/Scripts/UI/ZoneMapController.cs)** | `Assets/Scripts/UI/` | Affichage stratégique de la Minimap 3x3 et sélection des territoires à conquérir. |
+| **[`GameServerClient.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Network/GameServerClient.cs)** | `Assets/Scripts/Network/` | Couche réseau client connectant Unity au serveur autoritaire (TCP). |

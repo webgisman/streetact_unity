@@ -21,6 +21,49 @@ quelle session future.
 
 ---
 
+## 0. Addendum 2026-09-06 — premier vrai test Deathmatch/Zone de Contrôle à 2 comptes réels
+
+Testé en local via Unity Multiplayer Play Mode (2 comptes de test distincts, `testlille1`/
+`testlille2`), pas encore à 2 téléphones physiques — mais la PREMIÈRE fois que ces deux modes sont
+réellement joués de bout en bout par 2 joueurs vivants plutôt que vérifiés par lecture de code
+(voir §14, "jamais vérifié en conditions réelles"). Aucun bouton client n'y menait avant cette
+session (ajouté : `MultiplayerMatchController.StartDeathmatch/StartZoneControl`,
+`ModeSelectScreen.uxml`). Bugs trouvés et corrigés en conséquence :
+
+- **Déconnexion pendant le chargement de carte** : le serveur pouvait rester jusqu'à 60s sans
+  envoyer le moindre message pendant l'attente `deployment_ready`, alors que le client coupait après
+  15s sans réception — signal de vie serveur→client ajouté (`MatchSessionManager_Deployment.cs`),
+  timeout client relevé en conséquence (`GameServerClient.cs`).
+- **Unités auto-déployées sans placement manuel** : le compte à rebours de déploiement démarrait
+  pour les deux joueurs dès que 60s s'écoulaient, MÊME pour celui dont la carte n'était pas encore
+  prête — son délai s'écoulait donc en partie dans le vide. Chaque joueur a maintenant son propre
+  décompte, démarré à SA PROPRE readiness.
+- **Unités qui ne démarrent pas ensemble** : `TacticalResolver` gaspillait le reste du budget de
+  déplacement d'un tick dès qu'un point de cheminement A* (souvent à moins d'1m) était atteint —
+  reporté sur le(s) point(s) suivant(s) dans le même tick désormais.
+- **Char pouvant foncer dans un bâtiment** : `TacticalResolver`/`TacticalUnit` n'avaient aucune
+  notion de type de véhicule ; un char est désormais redirigé vers le point praticable le plus
+  proche hors de tout bâtiment visé.
+- **Mortier indisponible pour un camp si l'autre en a un** : le contrôle de caserne
+  (`UnitSpawnerUI.StartPlacingUnit`) était câblé en dur sur l'équipe 1 uniquement — corrigé pour
+  s'appliquer symétriquement aux deux camps.
+- **Unités affichées ailleurs qu'à leur position réelle** : `UnitSpawnerUI.SpawnUnitAt` recalculait
+  systématiquement (anti-triche "posé sur un bâtiment") même une position DÉJÀ authentifiée par le
+  serveur (résultat de déploiement, apparition d'un ennemi repéré) — ce recalage est maintenant sauté
+  pour ces rejeux serveur.
+- Session de connexion et tuile domicile (PlayerPrefs) étaient partagées via le Registre Windows
+  entre l'Éditeur principal et ses clones Multiplayer Play Mode — chaque identité a maintenant sa
+  propre case (`Novgov.Core.EditorPlayerPrefsScope`), pertinent uniquement pour ce type de test
+  local, sans effet en production (2 vrais appareils n'ont jamais ce problème).
+- `MatchSessionManager.cs` (3384 lignes) découpé en 7 fichiers `partial class` par domaine
+  (Matchmaking/Deployment/CombatPure/CombatLive/Conquest/Persistence), même convention que
+  `TacticalPathManager_*.cs` — aucun changement de comportement.
+
+Non revérifié depuis cet addendum : un vrai test à 2 téléphones physiques (toujours en attente,
+voir §10/§14 plus bas).
+
+---
+
 ## 1. Résumé — ce qui est fait vs ce qui reste
 
 | Composant | État |
@@ -1266,3 +1309,122 @@ radar sur une seule ligne propre a été reconfirmé visuellement sur cet appare
 **Reste à faire avant la prochaine session** : un vrai test de rotation sur un appareil physique ou
 un émulateur dont les commandes de rotation fonctionnent réellement (seul point du §17 jamais
 confirmé visuellement, uniquement au niveau du fichier manifeste).
+
+## 18. Session du 2026-09-04/05 — chasse aux régressions "jouabilité cassée" + équité géométrique multijoueur
+
+**Contexte** : le joueur a rapporté après la session du 2026-09-03 (§ précédent implicite, roof/
+mouvement) "tu as cassé la jouabilité et la sélection des unités", puis "j'ai des doutes, il y a des
+bugs" après une première vague de correctifs. Deux audits successifs (14 correctifs + vérification
+adversariale, puis 6 nouveaux bugs sur les dimensions jamais couvertes) ont été menés — détail complet
+dans la conversation de session, pas reproduit ici pour ne pas dupliquer ; retenir seulement le plus
+grave : un ordre "Garnison Fenêtre" sur une fenêtre d'étage (≥1) était intercepté par le code
+d'escalade et envoyait le soldat sur le toit au lieu de le mettre en garnison à couvert
+(UnitAI_Movement.cs, isClimbUp/branche toit n'excluaient pas NodeAction.GarnisonFenetre). Une notion
+d'attente réelle ("ATTENDRE 30 SECONDES") a aussi été ajoutée au moteur pur multijoueur
+(PathCheckpoint.waitSeconds, TacticalResolver.Resolve) — elle n'existait auparavant que côté solo,
+l'action tombait dans le cas par défaut du switch serveur et ne faisait rien de plus qu'un simple
+déplacement en ligne. 55+ tests ajoutés au harnais hors-éditeur pour tout ce qui précède.
+
+**Question posée ensuite par l'utilisateur, sujet principal de ce §18** : « comment les joueurs
+reçoivent les cartes et comment elles sont élaborées en bâtiments ? Je veux que les deux joueurs
+aient les mêmes polygones/bâtiments/disposition, cette vérification devrait être au niveau serveur. »
+
+**Diagnostic confirmé (lecture complète de `CityGenerator.cs`, `MatchSessionManager.cs`,
+`ZoneManager.cs`, `GeoProjection.cs`, `NetMessage.cs`, `docker-compose.yml`)** — l'architecture des
+Zones de Conquête (§11) avait un trou d'équité connu mais jamais corrigé, documenté noir sur blanc
+dans son propre commentaire (`MatchSessionManager.cs`, ancien commentaire de `RunConquestSkirmish`) :
+la géométrie d'une vraie tuile GPS est chargée « à la fois côté serveur et côté client via le même
+(tileX,tileY), **jamais transmise sur le réseau** » — chacun refait sa PROPRE requête Overpass
+indépendante, en pariant que « même tuile + même code déterministe ⇒ même résultat ». Trois failles
+concrètes identifiées :
+
+1. **Aucune vérification ni transmission** : le client (`ZoneManager.LoadZone` →
+   `CityGenerator.GenerateCity()`) et le serveur (`MatchSessionManager.LoadZoneOnServer`, même
+   appel) interrogent chacun Overpass, potentiellement deux miroirs différents parmi les 3 de repli
+   (`overpass.openstreetmap.fr`/`lz4.overpass-api.de`/`overpass-api.de`, pas garantis synchronisés),
+   sans aucune garde-fou si les deux réponses diffèrent (édition OSM entre les deux appels, retard de
+   réplication). Aggravant : `CityGenerator.FetchCityData` écrivait un cache disque par tuile
+   (`CityCache_Z17_{x}_{y}.json`) mais ne le relisait **jamais** — chaque combat sur une vraie tuile
+   déclenchait donc systématiquement un nouvel appel réseau, des deux côtés, à chaque fois.
+2. **Mobilier urbain non déterministe avec colliders réels** (`StreetPropsGenerator.cs`) :
+   lampadaires/arbres/bancs/poubelles placés via `Random.value`/`Random.Range` non seedé, intégrés au
+   bake NavMesh Unity (`CityGenerator.cs`, `surface.useGeometry = PhysicsColliders`) — deux
+   générations du même JSON produisaient un mobilier différent en nombre et position. Sans
+   conséquence sur la résolution AUTORITAIRE d'un tour (`TacticalGridBuilder.BuildFromScene` ne lit
+   que `BuildingStructure.AllBuildings`, jamais les props), mais bien une vraie différence de
+   "disposition" visible/NavMesh entre deux joueurs — exactement ce que la question posait.
+3. **Hauteur de toit par hash trigonométrique** (`DeterministicLotHeight`/`JitterBuildingColor`,
+   `Mathf.Sin(...) * grand_facteur` puis `Mathf.Floor`) : déterministe sur UNE plateforme donnée, mais
+   `sin()` n'est pas garantie bit-identique par IEEE754 entre la libm Android/ARM du client et la
+   glibc Linux du serveur dédié — un écart d'un seul bit, amplifié par le facteur, pouvait en théorie
+   faire basculer `Floor()` d'une unité et changer la hauteur d'un toit (donc la position Y d'un
+   tireur perché) de ~3m entre client et serveur, pour le MÊME bâtiment.
+
+**Correctifs appliqués — le serveur devient la seule autorité géométrique, comme demandé** :
+
+- **`Novgov.Core.DeterministicHash`** (nouveau, `Assets/Scripts/Core/DeterministicHash.cs`) : hash
+  entier pur (FNV-1a + finalisateur type MurmurHash3, uniquement XOR/shift/multiplication sur des
+  `uint` 32 bits) remplaçant le hash trigonométrique — bit-identique sur TOUTE plateforme .NET/Mono/
+  IL2CPP, contrairement à `Mathf.Sin`. `DeterministicLotHeight`/`JitterBuildingColor` l'utilisent
+  maintenant. 4 tests dédiés (déterminisme, plage [0,1), distribution, insensibilité à un bruit
+  flottant sous le millimètre).
+- **`UnityEngine.Random` réamorcé déterministement** (`CityGenerator.ProcessDataCoroutine`, tout au
+  début) : seed dérivé de `zoneTileX`/`zoneTileY` (jamais de `string.GetHashCode()`, non garanti
+  stable entre process/plateformes) pour une vraie Zone, constante fixe pour "Default". Couvre les
+  tirages de matériaux ET `StreetPropsGenerator` — déterministe car l'ORDRE et le NOMBRE d'appels à
+  `Random` qui suivent sont une fonction pure du JSON, désormais garanti identique des deux côtés
+  (point suivant).
+- **`CityGenerator.LoadZoneFromServerData(tileX, tileY, json)`** (nouveau, remplace l'appel côté
+  client à `GenerateCity()`/Overpass pour un VRAI match) : rejoue le JSON fourni par le serveur dans
+  EXACTEMENT le même pipeline que `FetchCityData` (extrait dans `FinishZoneLoadFromJson`, partagé par
+  les trois origines de JSON — réseau direct, cache disque, serveur). Repli explicite et bruyamment
+  journalisé sur l'ancien comportement (requête Overpass locale indépendante) si le serveur n'a
+  exceptionnellement rien fourni.
+- **Cache disque de tuile enfin relu** (`CityGenerator.TryReadZoneCacheFromDisk`, appelé en tête de
+  `FetchCityData` avant toute requête réseau) — et **relocalisé** dans le même sous-dossier persistant
+  que `TacticalGridBuilder` (`TacticalGridCache/`, déjà monté sur le volume Docker nommé
+  `tactical-grid-cache`) au lieu de la racine de `Application.persistentDataPath` (effacée à chaque
+  redéploiement du conteneur) — survit maintenant aux redéploiements, sans le moindre changement de
+  `docker-compose.yml`.
+- **`NetMessage.city_data_json`** (nouveau champ) + **serveur** (`MatchSessionManager.cs`, les deux
+  sites d'envoi de `match_found` — Deathmatch/Zone de Contrôle ET Conquête) : lit le JSON qu'il vient
+  lui-même d'utiliser (`CityGenerator.TryReadZoneCacheFromDisk`, toujours disponible à ce point
+  puisque `EnsureTileLoadedAndSnapshot`/`LoadZoneOnServer` ont déjà résolu la géométrie AVANT l'envoi
+  de `match_found` dans les deux chemins — vérifié par lecture, aucun changement de séquencement
+  réseau nécessaire) et le joint au message. Jamais pour la carte "Default" (bundle Resources
+  identique des deux côtés). **`ZoneManager.LoadZoneFromServerData`** + **`MultiplayerMatchController.
+  LoadMatchMapThenOpenDeployment`** (nouveau paramètre `serverCityDataJson`) côté client consomment ce
+  champ. Documenté dans `03-network-protocol.md`.
+- **`TacticalGridBuilder.DiskCacheVersion` : 2 → 3** — trouvaille de l'audit adversarial de ce même
+  correctif. Le passage du hash trigonométrique à `DeterministicHash` change la valeur de
+  `DeterministicLotHeight` pour un même bâtiment ; sans ce bump, tout cache disque L2 écrit AVANT ce
+  correctif aurait continué à servir indéfiniment des hauteurs calculées avec l'ANCIENNE formule
+  pendant qu'un client appliquant le `city_data_json` du serveur calcule la NOUVELLE — recréant, par
+  la péremption du cache et non par `Sin()`, exactement le bug que ce correctif visait à éliminer.
+  Même règle explicitement documentée par le commentaire du v2 précédent (2026-09-03), simplement pas
+  appliquée du premier coup cette fois.
+
+**Non traité, signalé au joueur (mobilier urbain)** : le mobilier urbain (lampadaires/arbres/bancs)
+reste protégé de tout mélange entre deux générations concurrentes uniquement par un effet de bord non
+documenté comme tel (`matchInProgress`, un verrou pensé pour la sécurité de la scène, pas pour le
+déterminisme de `UnityEngine.Random`) — sans conséquence aujourd'hui (cosmétique seulement : jamais le
+footprint ni la hauteur d'un bâtiment, protégés séparément), mais à surveiller si ce verrou est un jour
+assoupli pour scaler la Conquête (voir le paragraphe précédent).
+
+**Non traité, signalé au joueur (triangulation/subdivision)** : le seuil epsilon quasi nul de la triangulation (`Snip`, ear-
+clipping) et le tri non stable de `BuildingSubdivider` (égalité exacte de longueur d'arête) restent
+des sources résiduelles TRÈS improbables de divergence (diagonales de maillage / découpage parcellaire
+rare), non corrigées faute de temps — impact jugé mineur (ne change ni le contour d'un bâtiment ni sa
+marchabilité). Autre limite structurelle **déjà connue et explicitement assumée par la session du
+2026-08-30** (pas nouvelle, pas traitée ici) : la génération d'une VRAIE tuile jamais vue reste
+sérialisée par `matchInProgress` (verrou global du processus serveur unique) — un combat de Conquête
+sur une tuile inédite bloque toute AUTRE génération de tuile inédite pendant jusqu'à 60s ; sans
+conséquence sur Deathmatch/Zone de Contrôle "Option B" (résolution pure-donnée, aucune scène vivante).
+Si la Conquête doit un jour supporter des milliers de tuiles inédites simultanément, ceci nécessiterait
+un processus de génération dédié, séparé de la résolution de match — hors budget de cette session.
+
+**Non testé en conditions réelles** (pas d'accès à 2 téléphones/VPS depuis cette session, comme les
+sessions précédentes) : compile-check propre sur les 3 configurations (client Android/serveur dédié/
+éditeur) + tests unitaires du hash déterministe, mais le flux réseau complet (match_found portant
+`city_data_json`, application côté client, absence de divergence visible) n'a pu être vérifié que par
+lecture de code, pas par une vraie partie à 2 joueurs.

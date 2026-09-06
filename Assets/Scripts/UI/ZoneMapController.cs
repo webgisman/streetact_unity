@@ -43,6 +43,7 @@ namespace Novgov.UI
         private Label currentZoneLabel;
         private Label statusLabel;
         private Label resultLabel;
+        private Label enemyAlertLabel;
         private Button btnAttackNorth, btnAttackSouth, btnAttackEast, btnAttackWest;
 
         // Un double-tap sur un bouton d'attaque envoyait deux "join_matchmaking" successifs sur la
@@ -88,6 +89,7 @@ namespace Novgov.UI
 
             currentZoneLabel = mapRoot.Q<Label>("zone-current-label");
             statusLabel = mapRoot.Q<Label>("zone-status-label");
+            enemyAlertLabel = mapRoot.Q<Label>("enemy-alert-label");
 
             btnAttackNorth = mapRoot.Q<Button>("btn-attack-north");
             btnAttackSouth = mapRoot.Q<Button>("btn-attack-south");
@@ -154,11 +156,7 @@ namespace Novgov.UI
             SetNeighborStatus(btnAttackWest, "⬅ OUEST", "…");
 
             (int x, int y) north = (cx, cy - 1), south = (cx, cy + 1), east = (cx + 1, cy), west = (cx - 1, cy);
-            string filter =
-                $"or=(and(tile_x.eq.{north.x},tile_y.eq.{north.y})," +
-                $"and(tile_x.eq.{south.x},tile_y.eq.{south.y})," +
-                $"and(tile_x.eq.{east.x},tile_y.eq.{east.y})," +
-                $"and(tile_x.eq.{west.x},tile_y.eq.{west.y}))";
+            string filter = $"tile_x=gte.{cx - 1}&tile_x=lte.{cx + 1}&tile_y=gte.{cy - 1}&tile_y=lte.{cy + 1}";
             string url = $"{SupabaseAuthClient.RestBaseUrl}/zones?zoom=eq.{CityGenerator.ZONE_ZOOM}&{filter}&select=tile_x,tile_y,owner_user_id";
 
             using (UnityWebRequest req = UnityWebRequest.Get(url))
@@ -201,11 +199,60 @@ namespace Novgov.UI
                     yield break;
                 }
 
-                ApplyNeighborStatus(btnAttackNorth, "⬆ NORD", owners, north, myUserId);
-                ApplyNeighborStatus(btnAttackSouth, "⬇ SUD", owners, south, myUserId);
-                ApplyNeighborStatus(btnAttackEast, "➡ EST", owners, east, myUserId);
-                ApplyNeighborStatus(btnAttackWest, "⬅ OUEST", owners, west, myUserId);
+                ApplyNeighborStatus(btnAttackNorth, "⬆ ATTAQUER NORD", owners, north, myUserId);
+                ApplyNeighborStatus(btnAttackSouth, "⬇ ATTAQUER SUD", owners, south, myUserId);
+                ApplyNeighborStatus(btnAttackEast, "➡ ATTAQUER EST", owners, east, myUserId);
+                ApplyNeighborStatus(btnAttackWest, "⬅ ATTAQUER OUEST", owners, west, myUserId);
+
+                // Minimap cells (huit voisines, "cell-c" au centre reste juste "VOUS" — voir UXML)
+                bool anyEnemyNearby = false;
+                anyEnemyNearby |= UpdateMiniMapCell("cell-nw", (cx - 1, cy - 1), owners, myUserId);
+                anyEnemyNearby |= UpdateMiniMapCell("cell-n", (cx, cy - 1), owners, myUserId);
+                anyEnemyNearby |= UpdateMiniMapCell("cell-ne", (cx + 1, cy - 1), owners, myUserId);
+                anyEnemyNearby |= UpdateMiniMapCell("cell-w", (cx - 1, cy), owners, myUserId);
+                anyEnemyNearby |= UpdateMiniMapCell("cell-e", (cx + 1, cy), owners, myUserId);
+                anyEnemyNearby |= UpdateMiniMapCell("cell-sw", (cx - 1, cy + 1), owners, myUserId);
+                anyEnemyNearby |= UpdateMiniMapCell("cell-s", (cx, cy + 1), owners, myUserId);
+                anyEnemyNearby |= UpdateMiniMapCell("cell-se", (cx + 1, cy + 1), owners, myUserId);
+
+                // Bannière "ENNEMI DÉTECTÉ" — sans elle, la seule façon de remarquer un ennemi était
+                // de lire le mot "(Ennemi)" sur le bon bouton de boussole parmi les 4, facile à
+                // manquer (voir plainte "rien n'est clair").
+                if (enemyAlertLabel != null) enemyAlertLabel.style.display = anyEnemyNearby ? DisplayStyle.Flex : DisplayStyle.None;
             }
+        }
+
+        private static readonly string[] MiniMapCellClasses = { "zonecell-neutral", "zonecell-mine", "zonecell-enemy" };
+
+        /// <summary>Colore ET écrit un symbole sur la case (voir Theme.tss "zonecell-*" — les cases de
+        /// la mini-carte sont des VisualElement, pas des Button, donc les classes btn-team1/btn-team2/
+        /// btn-zone-neutral utilisées par les boutons de boussole ne s'y appliquaient jamais : ces
+        /// cases restaient invisibles quelle que soit la vraie propriété de la Zone (voir plainte
+        /// "rien n'est clair"). Renvoie vrai si cette Zone est ennemie, pour la bannière d'alerte.</summary>
+        private bool UpdateMiniMapCell(string cellName, (int x, int y) tile, System.Collections.Generic.Dictionary<(int, int), string> owners, string myUserId)
+        {
+            VisualElement mapRoot = UIScreenManager.Instance.GetScreen("ZoneMap");
+            var cell = mapRoot?.Q<VisualElement>(cellName);
+            var symbol = mapRoot?.Q<Label>(cellName + "-symbol");
+            if (cell == null) return false;
+
+            string status = DescribeOwner(owners, tile, myUserId);
+            string cssClass = status switch
+            {
+                "À vous" => "zonecell-mine",
+                "Ennemi" => "zonecell-enemy",
+                _ => "zonecell-neutral",
+            };
+            foreach (string c in MiniMapCellClasses)
+                if (c != cssClass) cell.RemoveFromClassList(c);
+            if (!cell.ClassListContains(cssClass)) cell.AddToClassList(cssClass);
+
+            if (symbol != null)
+            {
+                symbol.text = status switch { "À vous" => "★", "Ennemi" => "⚔", _ => "" };
+            }
+
+            return status == "Ennemi";
         }
 
         private static string DescribeOwner(System.Collections.Generic.Dictionary<(int, int), string> owners, (int x, int y) tile, string myUserId)

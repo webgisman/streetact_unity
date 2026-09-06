@@ -51,10 +51,17 @@ namespace Novgov.TacticalCore
                 if (!wall.BlocksSight(state)) continue;
                 if (!SegmentHit(observer.position, target.position, wall.p1, wall.p2, out float hitDist)) continue;
 
-                // Exception ligne 226 : un obstacle à moins de 2m du CIBLE sniper de toit ne bloque
-                // pas (parapet du toit lui-même) — hitDist mesuré depuis l'observateur, donc
-                // "à moins de 2m de la cible" = hitDist > fullDist - 2.
-                if (target.zStrata == ZStrata.Toit && hitDist > fullDist - 2f) continue;
+                // Exception "parapet" : le mur du bâtiment sur lequel la cible est perchée ne la cache
+                // pas — elle est en hauteur, au-dessus de ce mur.
+                //
+                // Le test portait sur la seule PROXIMITÉ de l'impact (moins de 2m de la cible), ce qui
+                // ne fonctionnait que si l'unité se tenait quasiment contre le bord du toit. Posée au
+                // centre du toit — exactement là que visent le menu contextuel et TacticalAIPlanner —
+                // la ligne de vue croisait sa propre façade à une demi-largeur de bâtiment, donc bien
+                // au-delà de 2m : l'unité devenait INVISIBLE pour l'adversaire, et par symétrie
+                // (CanEngageTarget) invulnérable. Se poster sur un toit était une stratégie sans
+                // risque, et le repérage dépendait invisiblement de l'endroit exact du toit tapé.
+                if (target.zStrata == ZStrata.Toit && WallBelongsToOwnBuilding(wall, target, hitDist, fullDist)) continue;
                 return false;
             }
             foreach (var barricade in state.barricades)
@@ -63,6 +70,17 @@ namespace Novgov.TacticalCore
                 if (GeometryMath.SegmentsIntersect(observer.position, target.position, barricade.p1, barricade.p2)) return false;
             }
             return true;
+        }
+
+        /// <summary>Ce mur est-il celui du bâtiment sur lequel l'unité perchée se tient — donc un mur
+        /// qu'elle surplombe et qui ne la dissimule pas ? On se fie d'abord au rattachement explicite
+        /// (currentBuildingId, posé par le checkpoint d'Escalade). Repli sur l'ancienne règle de
+        /// proximité quand ce rattachement est absent (unité héritée d'un tour antérieur, ou toit sans
+        /// bâtiment identifié) : mieux vaut la tolérance historique qu'une unité soudain invisible.</summary>
+        private static bool WallBelongsToOwnBuilding(WallSegment wall, TacticalUnit perched, float hitDist, float fullDist)
+        {
+            if (perched.currentBuildingId >= 0) return wall.buildingId == perched.currentBuildingId;
+            return hitDist > fullDist - 2.5f;
         }
 
         /// <summary>GetVisibleEnemy (UnitAI_Combat.cs:242-339) : LE TIREUR peut-il engager cette
@@ -107,7 +125,10 @@ namespace Novgov.TacticalCore
                 // passe par l'ouverture).
                 bool targetPosted = target.isGarrisoned || target.currentBuildingId >= 0 || target.zStrata == ZStrata.Toit;
                 if (targetPosted && wall.buildingId == target.currentBuildingId && hitDist > fullDist - 2.5f) continue;
-                if (targetPosted && target.zStrata == ZStrata.Toit && hitDist > fullDist - 2.5f) continue;
+                // Symétrique de l'exception "parapet" de CanBeSpotted : une cible perchée n'est pas
+                // protégée par le mur de SON propre bâtiment (elle est au-dessus). Sans cette symétrie,
+                // une unité repérable restait malgré tout impossible à toucher.
+                if (targetPosted && target.zStrata == ZStrata.Toit && WallBelongsToOwnBuilding(wall, target, hitDist, fullDist)) continue;
 
                 return false;
             }

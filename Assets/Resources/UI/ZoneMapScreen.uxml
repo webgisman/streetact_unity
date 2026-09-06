@@ -1,21 +1,72 @@
-<ui:UXML xmlns:ui="UnityEngine.UIElements">
-    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.9); picking-mode: Ignore;">
-        <ui:VisualElement class="panel" style="width: 75%; max-width: 620px;">
-            <ui:Label text="ZONES DE CONQUÊTE" class="title" style="margin-bottom: 6px;" />
-            <ui:Label name="zone-current-label" text="Zone actuelle : (?,?)" style="-unity-text-align: middle-center; color: var(--color-accent); margin-bottom: 20px;" />
+﻿<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.95); picking-mode: Ignore;">
+        <ui:VisualElement class="panel" style="width: 85%; max-width: 800px;">
+            <ui:Label text="CARTE STRATÉGIQUE DES ZONES" class="title" style="margin-bottom: 6px;" />
+            <ui:Label name="zone-current-label" text="Zone actuelle : (?,?)" style="-unity-text-align: middle-center; color: var(--color-accent); margin-bottom: 6px;" />
 
+            <!-- Bannière ennemi : cachée par défaut, montrée par ZoneMapController dès qu'une Zone
+                 voisine appartient à quelqu'un d'autre (voir RefreshNeighborOwnership). -->
+            <ui:Label name="enemy-alert-label" text="⚔ ENNEMI DÉTECTÉ" style="display: none; -unity-text-align: middle-center; color: white; background-color: var(--color-team2); padding: 6px; border-radius: 4px; -unity-font-style: bold; margin-bottom: 10px;" />
+
+            <!-- Mini Map Grid : chaque case = une Zone voisine réelle (voir UpdateMiniMapCell) —
+                 couleur PLEINE (pas juste une bordure, voir Theme.tss zonecell-*) + symbole texte,
+                 pour rester lisible même sans bien distinguer les couleurs. -->
+            <ui:VisualElement name="map-grid" style="align-self: center; background-color: rgba(0,0,0,0.5); padding: 10px; border-radius: 8px; margin-bottom: 20px;">
+                <ui:VisualElement style="flex-direction: row; justify-content: center;">
+                    <ui:VisualElement name="cell-nw" class="zonecell-neutral" style="width: 60px; height: 60px; margin: 4px; border-radius: 4px; align-items: center; justify-content: center;">
+                        <ui:Label name="cell-nw-symbol" text="" style="font-size: 22px; color: white; -unity-font-style: bold;" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="cell-n" class="zonecell-neutral" style="width: 60px; height: 60px; margin: 4px; border-radius: 4px; align-items: center; justify-content: center;">
+                        <ui:Label name="cell-n-symbol" text="" style="font-size: 22px; color: white; -unity-font-style: bold;" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="cell-ne" class="zonecell-neutral" style="width: 60px; height: 60px; margin: 4px; border-radius: 4px; align-items: center; justify-content: center;">
+                        <ui:Label name="cell-ne-symbol" text="" style="font-size: 22px; color: white; -unity-font-style: bold;" />
+                    </ui:VisualElement>
+                </ui:VisualElement>
+                <ui:VisualElement style="flex-direction: row; justify-content: center;">
+                    <ui:VisualElement name="cell-w" class="zonecell-neutral" style="width: 60px; height: 60px; margin: 4px; border-radius: 4px; align-items: center; justify-content: center;">
+                        <ui:Label name="cell-w-symbol" text="" style="font-size: 22px; color: white; -unity-font-style: bold;" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="cell-c" style="width: 60px; height: 60px; margin: 4px; border-radius: 4px; border-color: white; border-width: 2px; align-items: center; justify-content: center;">
+                        <ui:Label text="VOUS" style="font-size: 13px; color: white; -unity-font-style: bold;" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="cell-e" class="zonecell-neutral" style="width: 60px; height: 60px; margin: 4px; border-radius: 4px; align-items: center; justify-content: center;">
+                        <ui:Label name="cell-e-symbol" text="" style="font-size: 22px; color: white; -unity-font-style: bold;" />
+                    </ui:VisualElement>
+                </ui:VisualElement>
+                <ui:VisualElement style="flex-direction: row; justify-content: center;">
+                    <ui:VisualElement name="cell-sw" class="zonecell-neutral" style="width: 60px; height: 60px; margin: 4px; border-radius: 4px; align-items: center; justify-content: center;">
+                        <ui:Label name="cell-sw-symbol" text="" style="font-size: 22px; color: white; -unity-font-style: bold;" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="cell-s" class="zonecell-neutral" style="width: 60px; height: 60px; margin: 4px; border-radius: 4px; align-items: center; justify-content: center;">
+                        <ui:Label name="cell-s-symbol" text="" style="font-size: 22px; color: white; -unity-font-style: bold;" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="cell-se" class="zonecell-neutral" style="width: 60px; height: 60px; margin: 4px; border-radius: 4px; align-items: center; justify-content: center;">
+                        <ui:Label name="cell-se-symbol" text="" style="font-size: 22px; color: white; -unity-font-style: bold;" />
+                    </ui:VisualElement>
+                </ui:VisualElement>
+            </ui:VisualElement>
+
+            <!-- Légende : sans elle, couleurs/symboles restent arbitraires pour qui découvre l'écran. -->
+            <ui:VisualElement style="flex-direction: row; justify-content: center; margin-bottom: 14px;">
+                <ui:Label text="⬜ Neutre" style="color: white; margin-right: 14px; font-size: 12px;" />
+                <ui:Label text="★ À vous" style="color: var(--color-team1); margin-right: 14px; font-size: 12px; -unity-font-style: bold;" />
+                <ui:Label text="⚔ Ennemi" style="color: var(--color-team2); font-size: 12px; -unity-font-style: bold;" />
+            </ui:VisualElement>
+
+            <!-- Actions -->
             <ui:VisualElement style="flex-direction: row; justify-content: center; margin-bottom: 10px;">
-                <ui:Button name="btn-attack-north" text="⬆ NORD&#10;(…)" class="btn-zone-neutral" style="width: 48%; margin-right: 4%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
-                <ui:Button name="btn-attack-south" text="⬇ SUD&#10;(…)" class="btn-zone-neutral" style="width: 48%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
+                <ui:Button name="btn-attack-north" text="⬆ ATTAQUER NORD" class="btn-zone-neutral" style="width: 48%; margin-right: 4%; min-height: 50px;" />
+                <ui:Button name="btn-attack-south" text="⬇ ATTAQUER SUD" class="btn-zone-neutral" style="width: 48%; min-height: 50px;" />
             </ui:VisualElement>
             <ui:VisualElement style="flex-direction: row; justify-content: center; margin-bottom: 20px;">
-                <ui:Button name="btn-attack-west" text="⬅ OUEST&#10;(…)" class="btn-zone-neutral" style="width: 48%; margin-right: 4%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
-                <ui:Button name="btn-attack-east" text="➡ EST&#10;(…)" class="btn-zone-neutral" style="width: 48%; min-height: 72px; white-space: normal; -unity-text-align: middle-center;" />
+                <ui:Button name="btn-attack-west" text="⬅ ATTAQUER OUEST" class="btn-zone-neutral" style="width: 48%; margin-right: 4%; min-height: 50px;" />
+                <ui:Button name="btn-attack-east" text="➡ ATTAQUER EST" class="btn-zone-neutral" style="width: 48%; min-height: 50px;" />
             </ui:VisualElement>
 
             <ui:Label name="zone-status-label" text="" style="-unity-text-align: middle-center; white-space: normal; margin-bottom: 16px; min-height: 40px;" />
 
-            <ui:Button name="btn-zone-back" text="RETOUR" class="btn-secondary" />
+            <ui:Button name="btn-zone-back" text="RETOUR AU HUB" class="btn-secondary" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

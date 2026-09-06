@@ -84,6 +84,14 @@ namespace Novgov.Network
             try
             {
                 tcpClient = new TcpClient();
+                tcpClient.NoDelay = true;
+                // 25s, pas 15s : le serveur envoie désormais un signal de vie toutes les 15s pendant
+                // l'attente de chargement de carte (voir MatchSessionManager_Deployment.cs,
+                // ServerKeepaliveIntervalSeconds) — avec un timeout EXACTEMENT égal à cet intervalle,
+                // la moindre latence réseau aurait suffi à redéclencher la même déconnexion
+                // "connection_lost" qu'on vient de corriger. Marge large et volontaire.
+                tcpClient.ReceiveTimeout = 25000;
+                tcpClient.SendTimeout = 10000;
                 tcpClient.Connect(ServerHost, ServerPort);
                 stream = tcpClient.GetStream();
                 isConnected = true;
@@ -97,6 +105,9 @@ namespace Novgov.Network
             {
                 Debug.LogError($"[GameServerClient] Connexion échouée : {ex.Message}");
                 isConnected = false;
+                try { stream?.Close(); } catch { }
+                try { tcpClient?.Close(); } catch { }
+                pendingDisconnectReason = "connection_failed";
             }
         }
 
@@ -136,11 +147,14 @@ namespace Novgov.Network
 
         public void Disconnect(string reason)
         {
-            if (!isConnected) return;
+            bool wasConnected = isConnected;
             isConnected = false;
             try { stream?.Close(); } catch { }
             try { tcpClient?.Close(); } catch { }
-            pendingDisconnectReason = reason; // dispatché sur le thread principal via Update()
+            if (wasConnected || !string.IsNullOrEmpty(reason))
+            {
+                pendingDisconnectReason = reason; // dispatché sur le thread principal via Update()
+            }
         }
 
         private void OnDestroy()

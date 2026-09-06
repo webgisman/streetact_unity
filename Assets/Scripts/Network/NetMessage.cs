@@ -73,6 +73,19 @@ namespace Novgov.Network
         // positions candidates : il efface tout et respawn exactement cette liste (y compris pour
         // son propre camp, au cas où le serveur ait dû recadrer une position hors zone).
         public DeployedUnit[] deployed_units;
+
+        // zone_geometry_ready (serveur -> client, correctif 2026-09-05 — voir 03-network-protocol.md
+        // §équité géométrique) : le JSON Overpass BRUT exact que le serveur autoritaire a lui-même
+        // utilisé pour générer la Zone (zone_tile_x/y ci-dessus) de cette partie. Envoyé UNE FOIS,
+        // dès que la géométrie serveur est prête, à TOUS les joueurs concernés (jamais pour la carte
+        // "Default" : elle est bundle identique des deux côtés, inutile de la faire transiter).
+        //
+        // AVANT ce message, chaque client refaisait sa PROPRE requête Overpass indépendante pour la
+        // même tuile (CityGenerator.GenerateCity()) — rien ne garantissait que les bâtiments reçus
+        // soient identiques à ceux que le serveur utilise pour arbitrer le combat (miroirs Overpass
+        // différents, édition OSM survenue entre les deux requêtes). Le client applique maintenant
+        // ce JSON tel quel (CityGenerator.LoadZoneFromServerData) au lieu de le redemander lui-même.
+        public string city_data_json;
     }
 
     [Serializable]

@@ -28,7 +28,25 @@ public class TacticalCamera : MonoBehaviour
 
     [Header("Orientation (Angles)")]
     public float minPitch = 25f;
+    // maxPitch est désormais DYNAMIQUE (correctif 2026-09-06) : CameraStateManager.SwitchState le
+    // fixe à maxPitchAction (3D) ou maxPitchCommand (2D) selon l'état visé, JUSTE avant d'appeler
+    // SetInstantView — cette classe elle-même n'a plus besoin de connaître les deux valeurs, elle
+    // continue de clamper avec le champ courant, exactement comme avant.
+    //
+    // Pourquoi : un seul plafond à 75° s'appliquait aveuglément aux DEUX vues. La vue Commandement
+    // (2D) demandait pourtant explicitement 90° (CameraStateManager.commandPitch) — un vrai
+    // zénithal — mais se retrouvait écrêtée à 75°, une vue oblique. Sous cet angle, un fantassin
+    // d'environ 2m de haut projette son sommet décalé d'environ h·tan(15°)≈0.5m par rapport à sa
+    // base : largement de quoi chevaucher visuellement un allié posté 1 à 1.5m plus près de la
+    // caméra (espacement courant en formation resserrée) — la cause directe d'un bug de sélection
+    // corrigé le même jour (voir TacticalPathManager_Input, arbitrage par distance-écran). Un vrai
+    // zénithal élimine ce décalage de projection à la racine, au lieu de seulement blinder la
+    // sélection contre ses conséquences.
     public float maxPitch = 75f;
+    public float maxPitchAction = 75f;   // Vue Action (3D) — comportement inchangé.
+    public float maxPitchCommand = 89f;  // Vue Commandement (2D) — quasi 90° (jamais pile 90 : à
+                                          // l'exacte verticale, le yaw devient indéterminé, ce qui
+                                          // ferait tressauter l'orientation de la caméra).
     public float currentPitch = 50f;
     private float targetPitch = 50f;
     public float currentYaw = 45f;

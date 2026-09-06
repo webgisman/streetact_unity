@@ -204,6 +204,26 @@ public class UnitSpawnerUI : MonoBehaviour
                               Mathf.Abs(targetWorldPos.y - navHit.position.y) < 2.5f;
                 }
 
+                // ZONE DE DÉPART (correctif 2026-09-03) : en déploiement PvP le serveur ramène de
+                // force toute position hors de son cercle de 22m (ClampToDeploymentZone). Le client
+                // l'ignorait, donc un placement à 80m paraissait valide puis "sautait" ailleurs à la
+                // confirmation. On refuse maintenant sur place, avec un message qui nomme la cause.
+                //
+                // Le test porte sur navHit.position (correctif 2026-09-04), la position RÉELLEMENT
+                // utilisée pour poser l'unité — pas sur le point de raycast brut, qui peut en être
+                // distant de 8 m (le rayon du SamplePosition ci-dessus). Sur la couronne de 8 m
+                // autour de la limite, les deux points tombent de part et d'autre : le joueur voyait
+                // un refus qui ne collait pas à l'anneau dessiné à l'écran.
+                if (isValid && IsMultiplayerDeploymentActive() && !IsInsideDeploymentZone(navHit.position))
+                {
+                    isValid = false;
+                    outOfDeploymentZone = true;
+                }
+                else
+                {
+                    outOfDeploymentZone = false;
+                }
+
                 if (previewRing != null)
                 {
                     previewRing.SetActive(true);
@@ -289,9 +309,13 @@ public class UnitSpawnerUI : MonoBehaviour
                         }
                         else
                         {
-                            string errMsg = (isHeavyUnit && isBuildingOrRoof)
-                                ? "Les véhicules et canons doivent être placés sur la rue, pas sur les toits !"
-                                : "Emplacement hors-carte ! Touchez une rue pour déployer l'unité.";
+                            string errMsg;
+                            if (outOfDeploymentZone)
+                                errMsg = "Hors de votre zone de départ ! Déployez à l'intérieur du cercle de votre camp.";
+                            else if (isHeavyUnit && isBuildingOrRoof)
+                                errMsg = "Les véhicules et canons doivent être placés sur la rue, pas sur les toits !";
+                            else
+                                errMsg = "Emplacement hors-carte ! Touchez une rue pour déployer l'unité.";
                             ShowMessage(errMsg, 2.5f);
                         }
                     }
@@ -404,7 +428,55 @@ public class UnitSpawnerUI : MonoBehaviour
             ShowMessage($"Limite atteinte pour l'équipe {teamName} ({maxUnitsPerTeam} unités max par camp) !", 3.0f);
             return;
         }
+        // 2026-09-06 : "selectedTeam == 1" en dur ci-dessous ne vérifiait la caserne QUE pour
+        // l'équipe 1 — quel que soit le camp local réel. En multijoueur, chaque compte est TOUJOURS
+        // son PROPRE camp local (jamais littéralement "1"), donc ce garde ne s'appliquait qu'à
+        // celui des deux joueurs qui se trouvait être équipe 1 pour cette partie, tandis que l'autre
+        // (équipe 2) déployait n'importe quel type SANS AUCUNE vérification de caserne — d'où
+        // "quand un camp choisit mortier l'autre ne peut pas" : le mortier vaut 0 par défaut
+        // (SupabaseDatabaseClient.GetRoster), donc le joueur réellement soumis au contrôle (équipe 1)
+        // était bloqué tant qu'il n'en avait pas acheté, pendant que son adversaire (équipe 2) ne
+        // l'était jamais.
+        if (Novgov.Network.MultiplayerMatchController.IsFlowActive && type != UnitType.BarricadeRoutiere)
+        {
+            var roster = Novgov.Auth.SupabaseDatabaseClient.CurrentRoster;
 
+            // FAIL-OPEN tant que la caserne n'est pas encore chargée (correctif 2026-09-06) :
+            // CurrentRoster reste null tant qu'aucun appel réseau à GetRoster() n'a abouti (voir
+            // MultiplayerMatchController.OpenDeploymentDock, qui le déclenche maintenant en arrivant
+            // en déploiement — mais un aléa réseau/latence peut toujours faire arriver ce tap AVANT
+            // la réponse). Sans ce garde, "roster == null" faisait rester `owned` à 0 pour TOUS les
+            // types, et `deployed(0) >= owned(0)` bloquait ALORS LE TOUT PREMIER placement de
+            // N'IMPORTE QUELLE unité en multijoueur — le joueur ne pouvait plus rien déployer du tout.
+            if (roster == null)
+            {
+                _ = Novgov.Auth.SupabaseDatabaseClient.GetRoster(); // relance une tentative en tâche de fond, au cas où
+            }
+            else
+            {
+                int owned = 0;
+                foreach (var item in roster)
+                {
+                    if (item.unit_type.Equals(type.ToString(), System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        owned = item.quantity;
+                        break;
+                    }
+                }
+
+                int deployed = 0;
+                foreach (var u in FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude))
+                {
+                    if (u.teamID == selectedTeam && u.sourceUnitType == type.ToString()) deployed++;
+                }
+
+                if (deployed >= owned)
+                {
+                    ShowMessage($"Vous ne possédez pas d'unité {type} supplémentaire dans votre caserne !", 3.0f);
+                    return;
+                }
+            }
+        }
         if (type == UnitType.BarricadeRoutiere && RemainingBarricadeStock(selectedTeam) <= 0)
         {
             ShowMessage($"Stock de barricades épuisé ({maxBarricadesPerTeam} max par camp) !", 3.0f);
@@ -461,7 +533,17 @@ public class UnitSpawnerUI : MonoBehaviour
     /// partout ailleurs (solo, hotseat, et les appels serveur eux-mêmes) : le nom auto-généré
     /// habituel (ex: "Fantassin_1_2") reste inchangé.
     /// </param>
-    public UnitAI SpawnUnitAt(UnitType type, Vector3 position, int team, string forcedName = null)
+    /// <param name="skipSafeSpawnAdjustment">
+    /// Vrai UNIQUEMENT quand "position" vient déjà d'une source faisant autorité — le rejeu de
+    /// "deployment_result" (voir MultiplayerMatchController.OnDeploymentResult), où le SERVEUR a
+    /// déjà validé/recadré cette position (voir MatchSessionManager.PlaceCombatUnitPure). Sans ce
+    /// garde, FindSafeSpawnPoint ci-dessous (2026-09-06) écrasait AVEUGLÉMENT cette position
+    /// pourtant déjà sûre par sa propre recherche de point dégagé — déplaçant l'unité loin de "là
+    /// où le joueur l'avait posée" (rapporté : "les unités ne sont pas dans les places déjà
+    /// prévues"). Faux partout ailleurs (placement manuel frais, repli automatique, IA Solo/
+    /// Conquête) : ces positions-là n'ont jamais été validées et ont toujours besoin du recalage.
+    /// </param>
+    public UnitAI SpawnUnitAt(UnitType type, Vector3 position, int team, string forcedName = null, bool skipSafeSpawnAdjustment = false)
     {
         int teamCount = GetTeamLivingUnitsCount(team);
         if (teamCount >= maxUnitsPerTeam)
@@ -483,7 +565,13 @@ public class UnitSpawnerUI : MonoBehaviour
         // pile sur l'empreinte 2D d'un bâtiment (BuildingStructure.polygonFootprint) sans que rien
         // ne le détecte. FindSafeSpawnPoint exclut explicitement ces empreintes et élargit
         // progressivement la recherche si le point visé est en pleine zone bâtie.
-        position = FindSafeSpawnPoint(position, type, 6f);
+        //
+        // ... SAUF si skipSafeSpawnAdjustment (voir doc du paramètre ci-dessus) : la position est
+        // alors déjà faite autorité (rejeu serveur), ce recalage ferait plus de mal que de bien.
+        if (!skipSafeSpawnAdjustment)
+        {
+            position = FindSafeSpawnPoint(position, type, 6f);
+        }
 
         GameObject newUnitObj = null;
 
@@ -493,7 +581,12 @@ public class UnitSpawnerUI : MonoBehaviour
             GameObject template = null;
             foreach (var u in FindObjectsByType<UnitAI>(FindObjectsInactive.Include))
             {
-                if (!u.isTank && !u.isDead) { template = u.gameObject; break; }
+                string lowerName = u.gameObject.name.ToLower();
+                if (!u.isTank && !u.isDead && (lowerName.Contains("unite") || lowerName.Contains("fantassin"))) 
+                { 
+                    template = u.gameObject; 
+                    break; 
+                }
             }
             if (template == null) template = GameObject.Find("Unite_1") ?? GameObject.Find("Unite_2");
 
@@ -671,14 +764,35 @@ public class UnitSpawnerUI : MonoBehaviour
             if (residualSmoke != null) Destroy(residualSmoke.gameObject);
             foreach (var ps in newUnitObj.GetComponentsInChildren<ParticleSystem>()) Destroy(ps.gameObject);
 
-            UnitAI unitAI = newUnitObj.GetComponent<UnitAI>();
-            if (unitAI == null) unitAI = newUnitObj.AddComponent<UnitAI>();
+            // FILET DE SÉCURITÉ UNIVERSEL (correctif 2026-09-06). VehiculeCanon (Resources/engins/
+            // canon-vehicle.fbx) et Mortier (Resources/lowpoly_turret.fbx) chargent un fichier .fbx
+            // BRUT — un mesh importé, jamais un vrai Prefab — via Resources.Load<GameObject>(...) puis
+            // Instantiate(...) : un import de modèle FBX ne peut STRUCTURELLEMENT porter aucun script
+            // MonoBehaviour (contrainte Unity, pas un oubli d'auteur), contrairement à
+            // "Kucher/Tank Leopard2/Prefabs/Leopard2" (un vrai Prefab, déjà équipé de UnitAI/
+            // NavMeshAgent) utilisé par Fantassin/CharLeopard. Le code juste en dessous déréférence
+            // "ai" sans le re-vérifier (ai.currentBuilding = null, etc.) : une NullReferenceException
+            // interrompait donc SILENCIEUSEMENT (une simple ligne en console/logcat) le déploiement
+            // d'un Canon ou d'un Mortier À CHAQUE FOIS, en plein milieu de cette méthode. Le
+            // GameObject restait actif et positionné (SetActive/position déjà appliqués juste
+            // au-dessus) mais SANS AUCUN script : jamais d'icône 2D (UnitTacticalMarker n'est ajouté
+            // que par UnitAI.Start(), qui ne s'exécute jamais sur un objet sans UnitAI), jamais masqué
+            // en vue Commandement (c'est ce même Start() qui bascule les renderers sur le layer
+            // "Units_3D") — d'où le vrai maillage 3D visible en 2D au lieu de l'icône — et surtout
+            // AUCUNE unité au sens du jeu : injouable, invisible pour toute la sélection tactile
+            // (qui cherche partout un composant UnitAI), sans équipe ni PV jamais assignés.
+            if (newUnitObj.GetComponent<UnitAI>() == null) newUnitObj.AddComponent<UnitAI>();
+            if (newUnitObj.GetComponent<NavMeshAgent>() == null) newUnitObj.AddComponent<NavMeshAgent>();
 
-            unitAI.teamID = team;
-            // Mode solo strictement joueur (équipe 1) contre IA (équipe 2, voir TacticalAIPlanner).
-            unitAI.isPlayerControlled = (team == 1);
-            unitAI.teamAssignedBySpawner = true;
-            unitAI.isDead = false;
+            UnitAI ai = newUnitObj.GetComponent<UnitAI>();
+            if (ai != null)
+            {
+                ai.teamID = team;
+                ai.isPlayerControlled = (team == 1);
+                ai.teamAssignedBySpawner = true;
+                ai.sourceUnitType = type.ToString();
+                ai.isDead = false;
+            }
 
             // Le Fantassin est cloné depuis une unité vivante existante (voir plus haut) pour
             // récupérer son rig/mesh — sans ce nettoyage, l'unité fraîchement déployée hérite de
@@ -686,37 +800,37 @@ public class UnitSpawnerUI : MonoBehaviour
             // garnison active), invisible à l'œil puisqu'elle apparaît bien dans la rue, mais qui
             // fausse silencieusement le menu contextuel, la réduction de dégâts de garnison et
             // l'angle de tir à la fenêtre pour la nouvelle unité.
-            unitAI.currentBuilding = null;
-            unitAI.currentWindow = null;
-            unitAI.isGarrisoned = false;
-            unitAI.isGuarding = false;
-            unitAI.isCamouflaged = false;
+            ai.currentBuilding = null;
+            ai.currentWindow = null;
+            ai.isGarrisoned = false;
+            ai.isGuarding = false;
+            ai.isCamouflaged = false;
 
             if (type == UnitType.CharLeopard)
             {
-                unitAI.isTank = true;
-                unitAI.maxHealth = 500f;
-                unitAI.health = 500;
+                ai.isTank = true;
+                ai.maxHealth = 500f;
+                ai.health = 500;
             }
             else if (type == UnitType.VehiculeCanon)
             {
-                unitAI.isTank = true;
-                unitAI.maxHealth = 250f;
-                unitAI.health = 250;
+                ai.isTank = true;
+                ai.maxHealth = 250f;
+                ai.health = 250;
             }
             else if (type == UnitType.Mortier)
             {
-                unitAI.isTank = true;
-                unitAI.isMortar = true;
-                unitAI.porteeDetection = 120f;
-                unitAI.maxHealth = 350f;
-                unitAI.health = 350;
+                ai.isTank = true;
+                ai.isMortar = true;
+                ai.porteeDetection = 120f;
+                ai.maxHealth = 350f;
+                ai.health = 350;
             }
             else
             {
-                unitAI.isTank = false;
-                unitAI.maxHealth = 100f;
-                unitAI.health = 100;
+                ai.isTank = false;
+                ai.maxHealth = 100f;
+                ai.health = 100;
             }
 
             // Réinitialisation de l'animateur pour le fantassin
@@ -741,9 +855,9 @@ public class UnitSpawnerUI : MonoBehaviour
                 }
             }
 
-            unitAI.ResetOrderState();
-            unitAI.OnNavMeshReady();
-            unitAI.SetupHealthBar();
+            ai.ResetOrderState();
+            ai.OnNavMeshReady();
+            ai.SetupHealthBar();
 
             if (newUnitObj.GetComponent<FogOfWarEntity>() == null)
             {
@@ -758,7 +872,7 @@ public class UnitSpawnerUI : MonoBehaviour
             if (confirmClip != null) AudioSource.PlayClipAtPoint(confirmClip, Camera.main.transform.position, 0.8f);
 #endif
             ShowMessage($"{newUnitObj.name} déployé avec succès !", 2.0f);
-            return unitAI;
+            return ai;
         }
         return null;
     }
@@ -778,6 +892,12 @@ public class UnitSpawnerUI : MonoBehaviour
             if (b != null) Destroy(b.gameObject);
         }
         RoadBarrier.AllBarriers.Clear();
+
+        // Les zones de ruines sont un état STATIQUE de la partie précédente : sans cette purge, le
+        // serveur (qui réutilise la même scène d'un match au suivant, voir MatchSessionManager) fait
+        // démarrer la partie suivante avec des rectangles de franchissement libre hérités — des unités
+        // traversent alors les murs dès le premier tour sur une carte où rien n'a été détruit.
+        DestructibleEnvironment.ResetRubble();
 
         ShowMessage("Toutes les unités et barricades ont été retirées.", 2.0f);
     }
@@ -997,7 +1117,11 @@ public class UnitSpawnerUI : MonoBehaviour
         ShowMessage("Champ de bataille prêt : Escouades Joueur & IA déployées !", 3.5f);
     }
 
-    private void ShowMessage(string msg, float duration)
+    /// <summary>Bandeau d'information temporaire. Rendu public le 2026-09-03 : c'est le seul canal
+    /// de message existant vers le joueur, et TacticalPathManager en a besoin pour signaler qu'un
+    /// trajet a été tronqué par le plafond de durée du tour (voir ForcerFinExecution) — ce que
+    /// l'ancien code faisait en silence.</summary>
+    public void ShowMessage(string msg, float duration)
     {
         statusMessage = msg;
         statusMessageTimer = duration;
@@ -1050,6 +1174,47 @@ public class UnitSpawnerUI : MonoBehaviour
         }
     }
 
+    public void AutoDeployRoster(int team, Novgov.Auth.PlayerRosterItem[] roster)
+    {
+        Vector3 anchor = FindGroundLevelNavPoint(team == 1 ? new Vector3(-25f, 0f, -25f) : new Vector3(25f, 0f, 25f), 40f);
+        
+        int spawnedCount = 0;
+        foreach (var item in roster)
+        {
+            if (item.quantity <= 0) continue;
+            // Correctif 2026-09-06 : ces comparaisons utilisaient encore "Char"/"Canon", les
+            // anciens noms périmés remplacés le 2026-09-06 par les vraies valeurs de l'énum
+            // (voir SupabaseDatabaseClient.KnownUnitTypes, dont le commentaire documente ce même
+            // bug déjà corrigé PARTOUT AILLEURS — cette méthode avait été oubliée). Equals exige une
+            // égalité stricte : avec le roster réel qui contient désormais "CharLeopard"/
+            // "VehiculeCanon", ces deux comparaisons ne matchaient plus JAMAIS, et la garnison IA de
+            // Conquête (RunConquestSkirmish -> AutoDeployRoster) tombait systématiquement dans le
+            // cas par défaut Fantassin — un défenseur possédant pourtant un char et un canon (valeurs
+            // par défaut de tout nouveau compte) se retrouvait déployé sans le moindre blindage.
+            UnitType ut = UnitType.Fantassin;
+            if (item.unit_type.Equals("CharLeopard", System.StringComparison.OrdinalIgnoreCase)) ut = UnitType.CharLeopard;
+            else if (item.unit_type.Equals("VehiculeCanon", System.StringComparison.OrdinalIgnoreCase)) ut = UnitType.VehiculeCanon;
+            else if (item.unit_type.Equals("Mortier", System.StringComparison.OrdinalIgnoreCase)) ut = UnitType.Mortier;
+            else if (item.unit_type.Equals("Drone", System.StringComparison.OrdinalIgnoreCase)) ut = UnitType.Fantassin;
+
+            for (int i = 0; i < item.quantity; i++)
+            {
+                float angle = spawnedCount * 47f;
+                float radius = 3f + (spawnedCount * 0.5f);
+                Vector3 offset = Quaternion.Euler(0f, angle, 0f) * new Vector3(radius, 0f, 0f);
+                SpawnUnitAt(ut, anchor + offset, team);
+                spawnedCount++;
+            }
+        }
+
+        if (team == 2)
+        {
+            Vector3 towardCenter = (Vector3.zero - anchor).normalized;
+            if (towardCenter == Vector3.zero) towardCenter = Vector3.forward;
+            SpawnUnitAt(UnitType.BarricadeRoutiere, anchor + towardCenter * 10f, 2);
+        }
+    }
+
     /// <summary>Appelé par MultiplayerMatchController au tout début de la phase de déploiement PvP :
     /// ouvre directement le dock (pas besoin de taper sur l'onglet DÉPLOIEMENT) et verrouille
     /// l'équipe sur celle du joueur local — impossible pour un client de placer des unités pour
@@ -1060,6 +1225,78 @@ public class UnitSpawnerUI : MonoBehaviour
         selectedTeam = team;
         isPanelOpen = true;
         CancelPlacement();
+        // ShowDeploymentZoneMarker(team) retiré le 2026-09-06 : dessinait un anneau au sol pour une
+        // zone de départ qui n'existe plus (IsInsideDeploymentZone/ClampToDeploymentZone sont
+        // maintenant des no-op) — le garder aurait affiché un cercle qui ne restreint plus rien, ce
+        // qui prêtait justement à confusion ("il sert à quoi ce cercle ?").
+        HideDeploymentZoneMarker();
+    }
+
+    // Vrai quand un placement hors zone de départ vient d'être refusé — sert à donner la VRAIE
+    // raison au joueur au lieu du message générique "hors-carte".
+    private bool outOfDeploymentZone = false;
+
+    private GameObject deploymentZoneMarker;
+
+    private static bool IsMultiplayerDeploymentActive()
+    {
+        return Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive;
+    }
+
+    /// <summary>Le point est-il dans la zone de départ du camp local ? Utilise EXACTEMENT les
+    /// constantes du serveur (Novgov.Server.MatchSessionManager) pour qu'il n'y ait qu'une seule
+    /// définition de la zone.</summary>
+    // 2026-09-06 : restriction de rayon désactivée sur demande explicite (voir MatchSessionManager.
+    // ClampToDeploymentZone, devenu un no-op côté serveur) — le placement manuel est maintenant
+    // accepté n'importe où sur la carte, plus seulement près du point d'ancrage de l'équipe.
+    private bool IsInsideDeploymentZone(Vector3 worldPos) => true;
+
+    /// <summary>Anneau au sol matérialisant la zone de départ pendant le déploiement PvP. Rien ne
+    /// signalait cette zone auparavant, alors que le serveur la faisait respecter.</summary>
+    private void ShowDeploymentZoneMarker(int team)
+    {
+        HideDeploymentZoneMarker();
+
+        Vector3 center = Novgov.Server.MatchSessionManager.DeploymentZoneCenterForTeam(team);
+        float radius = Novgov.Server.MatchSessionManager.DeploymentZoneRadius;
+
+        deploymentZoneMarker = new GameObject("DeploymentZoneRing");
+        deploymentZoneMarker.transform.position = new Vector3(center.x, 0.08f, center.z);
+
+        var lr = deploymentZoneMarker.AddComponent<LineRenderer>();
+        const int segments = 72;
+        lr.positionCount = segments + 1;
+        lr.useWorldSpace = false;
+        lr.loop = false;
+        lr.widthMultiplier = 0.55f;
+        lr.numCapVertices = 2;
+        lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        lr.receiveShadows = false;
+
+        for (int i = 0; i <= segments; i++)
+        {
+            float a = (i / (float)segments) * Mathf.PI * 2f;
+            lr.SetPosition(i, new Vector3(Mathf.Cos(a) * radius, 0f, Mathf.Sin(a) * radius));
+        }
+
+        Color zoneColor = team == 1 ? NovgovTheme.TeamPlayer : NovgovTheme.TeamEnemy;
+        zoneColor.a = 0.85f;
+        Material mat = SafeMaterialFactory.CreateUnlit(zoneColor);
+        if (mat != null)
+        {
+            lr.material = mat;
+            lr.startColor = zoneColor;
+            lr.endColor = zoneColor;
+        }
+    }
+
+    private void HideDeploymentZoneMarker()
+    {
+        if (deploymentZoneMarker != null)
+        {
+            Destroy(deploymentZoneMarker);
+            deploymentZoneMarker = null;
+        }
     }
 
 #if !UNITY_SERVER
@@ -1192,6 +1429,11 @@ public class UnitSpawnerUI : MonoBehaviour
         if (pathManager != null && pathManager.phaseActuelle == TacticalPathManager.GamePhase.Execution) hidden = true;
         bool mpDeployment = Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive;
         if (Novgov.Network.MultiplayerMatchController.IsFlowActive && !mpDeployment) hidden = true;
+
+        // L'anneau de zone de départ ne vit que pendant la phase de déploiement. Piloté ici, depuis
+        // le rafraîchissement appelé chaque frame, plutôt qu'à chacune des sorties de phase — aucune
+        // transition ne peut ainsi le laisser affiché.
+        if (!mpDeployment && deploymentZoneMarker != null) HideDeploymentZoneMarker();
         // Le menu de démarrage (choix de carte hors-ligne/GPS/multijoueur) n'a encore chargé aucune
         // carte ni unité — sans ce garde-fou, ce dock plein écran (même vide) reste au-dessus du
         // menu de démarrage dans l'arbre UI Toolkit et intercepte silencieusement tous les taps
@@ -1246,6 +1488,12 @@ public class UnitSpawnerUI : MonoBehaviour
             // déjà gagné ?") plutôt que de simplement ne rien dire sur un camp qu'on ne peut pas voir.
             bool isMultiplayer = Novgov.Network.MultiplayerMatchController.IsFlowActive;
             string label = isMultiplayer ? $"DÉPLOIEMENT ({playerUnits}/{maxUnitsPerTeam})" : $"DÉPLOIEMENT ({playerUnits} vs {enemyUnits})";
+
+            // 2026-09-06 : compte à rebours retiré de l'affichage sur demande explicite ("ne stresse
+            // pas le joueur") — la limite de temps serveur existe toujours en coulisses (voir
+            // MatchSessionManager.DeploymentSeconds, désormais 5 min) comme filet de sécurité contre
+            // un adversaire réellement absent, mais ne s'affiche plus nulle part.
+            tabButtonLabel.style.color = StyleKeyword.Null;
             tabButtonLabel.text = IsPlacingUnit ? "Annuler Placement" : (isPanelOpen ? "Fermer Menu" : label);
         }
         dockPanel.style.display = isPanelOpen ? DisplayStyle.Flex : DisplayStyle.None;

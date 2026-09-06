@@ -235,8 +235,9 @@ namespace Novgov.Server
     /// valeurs) : un seul et même barème, jamais dupliqué ailleurs.</summary>
     public static class UnitTypeStats
     {
-        public static void Get(UnitSpawnerUI.UnitType type, out int health, out float porteeDetection, out int weaponDamage, out float weaponCooldownSeconds, out bool isMortar)
+        public static void Get(UnitSpawnerUI.UnitType type, out int health, out float porteeDetection, out int weaponDamage, out float weaponCooldownSeconds, out bool isMortar, out bool isTank)
         {
+            isTank = type == UnitSpawnerUI.UnitType.CharLeopard;
             switch (type)
             {
                 case UnitSpawnerUI.UnitType.CharLeopard:
@@ -251,6 +252,25 @@ namespace Novgov.Server
                 default: // Fantassin
                     health = 100; porteeDetection = 15f; weaponDamage = 15; weaponCooldownSeconds = 0.35f; isMortar = false;
                     break;
+            }
+        }
+
+        /// <summary>Distance maximale parcourue en un tour, en mètres. Source UNIQUE, partagée par les
+        /// deux moteurs de résolution : le moteur pur codait la valeur en dur et le moteur vivant
+        /// lisait le champ d'instance de l'UnitAI, deux chemins qui donnaient la même chose aujourd'hui
+        /// mais qui auraient divergé silencieusement dès qu'un type d'unité aurait eu sa propre valeur.
+        ///
+        /// Les blindés sont un peu plus lents que l'infanterie, ce qui correspond à leurs vitesses de
+        /// déplacement respectives (UnitAI.OnNavMeshReady : 3.8 contre 4.2 m/s pour la traversée
+        /// directe) et donne une raison tactique de plus de faire avancer l'infanterie en tête.</summary>
+        public static float MovementBudget(UnitSpawnerUI.UnitType type)
+        {
+            switch (type)
+            {
+                case UnitSpawnerUI.UnitType.CharLeopard: return 42f;
+                case UnitSpawnerUI.UnitType.VehiculeCanon: return 46f;
+                case UnitSpawnerUI.UnitType.Mortier: return 34f; // pièce lourde à remettre en batterie
+                default: return UnitAI.DefaultMaxMovementPerTurn; // Fantassin : 50m, la référence
             }
         }
 

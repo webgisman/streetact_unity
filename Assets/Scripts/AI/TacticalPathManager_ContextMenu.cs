@@ -38,14 +38,21 @@ public partial class TacticalPathManager
 #endif
     }
 
-    /// <summary>Pour un blindé qui vient d'être bloqué (bâtiment/porte/fenêtre), tente un repli sur
-    /// le sol RÉEL à ces mêmes coordonnées X/Z avant de rejeter le tap. En ville dense, la caméra
-    /// tactique (vue oblique) fait souvent "raser" la façade d'un bâtiment PROCHE alors que le
-    /// joueur visait la rue juste devant/à côté — le raycast touche alors le mur (parfois assez
-    /// haut, voir le diagnostic loggé plus haut) au lieu du sol derrière. Sans ce repli, un blindé ne
-    /// pouvait plus du tout être commandé près de la moindre façade, même en visant la rue. Retourne
-    /// true si un point de sol marchable existe à proximité et que le menu d'ordre a été ouvert à sa
-    /// place (le tap est alors traité comme résolu, l'appelant doit `return` immédiatement).</summary>
+    /// <summary>Tente un repli sur le sol RÉEL aux mêmes coordonnées X/Z avant de rejeter un tap ou
+    /// de l'interpréter comme un ordre lié au bâtiment. En ville dense, la caméra tactique (vue
+    /// oblique, bridée à 75°) fait souvent "raser" la façade d'un bâtiment PROCHE alors que le joueur
+    /// visait la rue juste devant/à côté — le raycast touche alors le mur (parfois assez haut, voir
+    /// le diagnostic loggé plus haut) au lieu du sol derrière. Sans ce repli, un blindé ne pouvait
+    /// plus du tout être commandé près de la moindre façade, même en visant la rue.
+    ///
+    /// Utilisé pour les blindés (tap rejeté) ET, depuis le 2026-09-03, pour l'infanterie quand le
+    /// bâtiment n'a été identifié que par le collider touché et non par l'empreinte : dans ce cas les
+    /// coordonnées visées sont hors du bâtiment, le joueur montrait donc bien la rue (voir
+    /// TacticalPathManager_Input, "FAÇADE RASÉE PAR LA VUE OBLIQUE").
+    ///
+    /// Retourne true si un point de sol marchable existe à proximité et que le menu d'ordre a été
+    /// ouvert à sa place (le tap est alors traité comme résolu, l'appelant doit `return`
+    /// immédiatement).</summary>
     private bool TryFallbackAuSolPourBlinde(Vector3 tapPoint)
     {
         Vector3 flatPoint = new Vector3(tapPoint.x, 0f, tapPoint.z);
@@ -58,6 +65,22 @@ public partial class TacticalPathManager
         isDoorSelected = false;
         isWindowSelected = false;
         isGroundCheckpointSelected = true;
+
+        // Recalculer isNearBuildingWall ICI (correctif 2026-09-05) : ce champ n'était mis à jour que
+        // par la branche "CAS SOL NORMAL" de HandlePointerInput, jamais par ce repli. L'option "4. SE
+        // CACHER (Contre mur)" du menu Fantassin affichait donc la valeur laissée par le tap
+        // précédent — parfois pour une AUTRE unité, plus tôt dans la partie — au lieu de refléter ce
+        // point-ci. Même test que la branche normale (même rayon, mêmes critères).
+        isNearBuildingWall = false;
+        Collider[] nearbyWalls = Physics.OverlapSphere(positionClicTemporaire, 2.2f);
+        foreach (var c in nearbyWalls)
+        {
+            if (c.GetComponentInParent<BuildingStructure>() != null || c.gameObject.name.Contains("Building") || c.gameObject.name.Contains("Mur") || c.gameObject.name.Contains("Wall") || c.gameObject.name.Contains("Polygone"))
+            {
+                isNearBuildingWall = true;
+                break;
+            }
+        }
 
         AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
         if (menuPanel != null) menuPanel.SetActive(false);
@@ -174,8 +197,20 @@ public partial class TacticalPathManager
         }
         else if (choice == 2) // Escalade / Toit
         {
+            // Hauteur du toit prise sur la SURFACE RÉELLEMENT rendue au point visé, pas sur
+            // BuildingStructure.height. Ce champ vaut le niveau du larmier (haut des murs), alors que
+            // CityGenerator.CreateHipRoofMesh ajoute une coursive plate de 2.5m au périmètre PUIS une
+            // pente qui remonte jusqu'à +1m vers le centre : viser le milieu du toit — le geste
+            // naturel — plaçait donc le nœud et son marqueur jusqu'à 1m SOUS le toit, et l'unité
+            // paraissait enfoncée dedans.
             float roofHeight = (selectedBuilding.height > 0) ? selectedBuilding.height : 6.0f;
-            Vector3 roofPos = new Vector3(positionClicTemporaire.x, roofHeight, positionClicTemporaire.z);
+            if (Physics.Raycast(new Vector3(positionClicTemporaire.x, roofHeight + 4f, positionClicTemporaire.z),
+                                Vector3.down, out RaycastHit roofSurface, 10f, UnitAI.WorldGeometryMask, QueryTriggerInteraction.Ignore)
+                && roofSurface.point.y > UnitAI.RoofStrataThresholdY)
+            {
+                roofHeight = roofSurface.point.y;
+            }
+            Vector3 roofPos = new Vector3(positionClicTemporaire.x, roofHeight + 0.05f, positionClicTemporaire.z);
             unitAI.AddTacticalNode(new TacticalNode { position = roofPos, action = NodeAction.Escalade });
 
             GameObject marker = new GameObject("WaypointMarker");
@@ -201,25 +236,6 @@ public partial class TacticalPathManager
 
         if (menuPanel != null) menuPanel.SetActive(false);
         DessinerTousLesChemins();
-    }
-
-    // --- ANIMATION UI (Bounce) --- (legacy, menu GameObject pré-UI Toolkit ; conservé tel quel)
-    private System.Collections.IEnumerator AnimateMenuBounce()
-    {
-        menuPanel.SetActive(true);
-        Vector3 finalScale = Vector3.one;
-        menuPanel.transform.localScale = Vector3.zero;
-
-        float t = 0f;
-        while (t < 1f)
-        {
-            t += Time.deltaTime * 4f; // Vitesse de l'animation
-            // Formule mathématique d'un "Spring/Bounce" d'amortissement
-            float scale = 1f - Mathf.Exp(-t * 8f) * Mathf.Cos(t * 15f);
-            menuPanel.transform.localScale = finalScale * scale;
-            yield return null;
-        }
-        menuPanel.transform.localScale = finalScale;
     }
 
 #if !UNITY_SERVER
@@ -348,14 +364,15 @@ public partial class TacticalPathManager
 
         // Menu Fantassin
         UnitAI uAI = uniteSelectionnee.GetComponent<UnitAI>();
-        bool isTargetOnRoof = positionClicTemporaire.y > 1.8f;
+        // Seuil UNIQUE partout (UnitAI.RoofStrataThresholdY) : ces trois tests utilisaient 1.8f, 2.0f
+        // et 2.0f alors que le combat et le serveur tranchaient à 2.2f — une unité pouvait donc être
+        // "sur un toit" pour le menu et "au sol" pour la résolution, et inversement.
+        bool isTargetOnRoof = positionClicTemporaire.y > UnitAI.RoofStrataThresholdY;
 
-        bool unitIsAlreadyOnRoof = (uAI != null && (uAI.isRooftopSniper || uAI.transform.position.y > 2.0f));
-        if (uAI != null && uAI.tacticalPath.Count > 0)
-        {
-            var lastN = uAI.tacticalPath[uAI.tacticalPath.Count - 1];
-            if (lastN.action == NodeAction.Escalade || lastN.position.y > 2.0f) unitIsAlreadyOnRoof = true;
-        }
+        // Voir IsUnitAlreadyOnOrHeadedToRoof (TacticalPathManager_Input.cs) : même règle partagée avec
+        // le routage du tap, pour que "quel menu s'ouvre" et "que propose ce menu" restent toujours
+        // d'accord entre eux.
+        bool unitIsAlreadyOnRoof = IsUnitAlreadyOnOrHeadedToRoof(uAI);
 
         bool unitIsInsideBuilding = (uAI != null && uAI.currentBuilding != null && !uAI.isRooftopSniper);
         if (uAI != null && uAI.tacticalPath.Count > 0)
@@ -389,7 +406,7 @@ public partial class TacticalPathManager
         if (unitIsAlreadyOnRoof)
         {
             ShowContextMenu("INFANTERIE : DESCENTE VERS RUE", onCancel,
-                ("1. DESCENDRE DU TOIT", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Escalade)),
+                ("1. DESCENDRE DU TOIT", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Descendre)),
                 ("2. GUETTER (+50% Défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
                 ("3. ATTENDRE 30 SECONDES", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
             );

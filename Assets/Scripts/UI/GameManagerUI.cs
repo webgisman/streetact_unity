@@ -129,10 +129,6 @@ public class GameManagerUI : MonoBehaviour
                     MusicManager.SetGameplayVolume();
                     GameManagerUI.Instance?.StartCoroutine(GameManagerUI.Instance.StartDeviceGPS(thenConnectMultiplayer: true));
                 };
-                root.Q<UnityEngine.UIElements.Button>("btn-zone-map").clicked += () =>
-                {
-                    Novgov.UI.ZoneMapController.EnsureInstance().Show();
-                };
                 startupButtonsBound = true;
             }
             catch (System.Exception ex)
@@ -265,14 +261,77 @@ public class GameManagerUI : MonoBehaviour
     /// <paramref name="thenConnectMultiplayer"/> est vrai (bouton MODE CAMPAGNE MULTIJOUEUR) —
     /// enchaîne directement sur la connexion PvP une fois la carte prête. En mode solo, le GPS
     /// n'est jamais utilisé : ce paramètre est donc toujours vrai pour l'unique appelant restant.</summary>
-    // Position simulée pour les tests en Éditeur (Lille Sud, à côté de l'Hôpital Sud) — le service
-    // Input.location d'Unity n'est de toute façon jamais fonctionnel dans l'Éditeur (pas de matériel
-    // GPS), donc ce court-circuit ne retire aucune fonctionnalité réelle : sans lui, StartDeviceGPS()
-    // finissait systématiquement par échouer après 20s d'attente ("Impossible de capter le signal
-    // GPS"), rendant tout test du flux multijoueur en Play Mode impossible sans passer par un vrai
-    // appareil. Uniquement actif en Éditeur (#if UNITY_EDITOR) : aucun effet sur un build Android/iOS.
-    private const float EditorMockLatitude = 50.5975f;
-    private const float EditorMockLongitude = 3.0553f;
+    // Position simulée pour les tests en Éditeur — le service Input.location d'Unity n'est de toute
+    // façon jamais fonctionnel dans l'Éditeur (pas de matériel GPS), donc ce court-circuit ne retire
+    // aucune fonctionnalité réelle : sans lui, StartDeviceGPS() finissait systématiquement par
+    // échouer après 20s d'attente ("Impossible de capter le signal GPS"), rendant tout test du flux
+    // multijoueur en Play Mode impossible sans passer par un vrai appareil.
+    //
+    // 2026-09-06 : d'abord une liste de centres-villes réels ÉLOIGNÉS (Lille/Paris/Lyon/Marseille)
+    // pour éviter qu'Éditeur principal et Joueurs Virtuels ne tapent tous EXACTEMENT la même bbox
+    // Overpass au même instant ("Échec de connexion au serveur OSM" en testant à deux instances).
+    // Mais ça rendait le test PvP réel impossible : ATTAQUER (CONQUÊTE) n'affiche que 4 boutons
+    // Nord/Sud/Est/Ouest relatifs à la Zone COURANTE (voir ZoneMapController), donc deux comptes
+    // dans des villes différentes ne peuvent jamais viser la Zone de l'autre — chaque attaque ne
+    // fait alors que capturer une Zone neutre (zone_captured) et revient au menu, sans jamais
+    // déclencher de vraie bataille (match_found), ce qui ressemblait à un bug de navigation mais
+    // n'en était pas un (voir MatchSessionManager.RunConquestRequest côté serveur).
+    //
+    // Remplacé par 4 points calculés (voir script Python de vérification, jamais commité) EXACTEMENT
+    // à 2 tuiles Slippy Zoom 17 (~390m à cette latitude) de la Zone de l'Éditeur principal — PAS 1 :
+    // à 1 tuile, la Zone de chacun est directement voisine de celle de l'autre, mais on ne peut
+    // jamais attaquer sa PROPRE Zone courante (ce n'est le voisin de personne), donc aucun des deux
+    // ne peut jamais riposter sur la Zone exacte que l'autre vient de prendre. À 2 tuiles, il existe
+    // une Zone neutre PARTAGÉE entre les deux (voisin Est de l'Éditeur principal = voisin Ouest du
+    // Joueur Virtuel) : le premier qui l'attaque la capture (neutre), puis l'autre l'attaque à son
+    // tour et tombe cette fois sur un propriétaire RÉEL différent de lui → vraie bataille. Chaque
+    // point reste sur une tuile différente de celle de l'Éditeur principal (bbox Overpass différente
+    // — le problème de requêtes simultanées identiques reste évité).
+#if UNITY_EDITOR
+    // Tout ce bloc référence Unity.Multiplayer.PlayMode (package Éditeur uniquement, jamais présent
+    // dans un build Android/iOS) — englobé dans #if UNITY_EDITOR à partir d'ici (correctif : avant,
+    // seul l'appel dans StartDeviceGPS() était gardé, pas la définition de la méthode elle-même, ce
+    // qui aurait cassé la compilation d'un build appareil dès que ce code y serait aussi compilé).
+    private static readonly (string Name, float Lat, float Lon)[] EditorMockCities =
+    {
+        ("Lille Sud",           50.5975f,    3.0553f),     // Éditeur principal — Zone (66648, 44111)
+        ("Lille Sud (Est)",     50.5975f,    3.061066f),   // 2 tuiles EST      — Zone (66650, 44111)
+        ("Lille Sud (Sud)",     50.594571f,  3.0553f),     // 2 tuiles SUD      — Zone (66648, 44113)
+        ("Lille Sud (Nord)",    50.601544f,  3.0553f),     // 2 tuiles NORD     — Zone (66648, 44109)
+    };
+
+    // Tag (Window > Multiplayer Play Mode > [Joueur] > Tags) pour FORCER une ville précise sur un
+    // Joueur Virtuel donné plutôt que de laisser le choix automatique ci-dessous décider : nommer le
+    // tag "TestCity0", "TestCity1"... (indices de EditorMockCities). Optionnel — sans tag, chaque
+    // clone reçoit quand même une ville différente basée sur son propre dossier de projet cloné.
+    private const string EditorMockCityTagPrefix = "TestCity";
+
+    /// <summary>Choisit la ville simulée pour CETTE instance Éditeur. L'Éditeur principal (ou une
+    /// session Play Mode normale sans Multiplayer Play Mode actif) reçoit toujours la première
+    /// entrée (comportement historique inchangé, Lille Sud). Un Joueur Virtuel reçoit soit la ville
+    /// forcée par son tag, soit — à défaut — une ville dérivée du hash de son propre Application.
+    /// dataPath (chemin du clone), stable d'une session à l'autre pour CE clone mais différent des
+    /// autres instances qui tournent en même temps.</summary>
+    // Non-private (voir EditorDebugOverlay.cs) : le panneau de diagnostic Éditeur affiche cette même
+    // ville simulée sans dupliquer la logique de choix.
+    public static (string Name, float Lat, float Lon) PickEditorMockCity()
+    {
+        if (Unity.Multiplayer.PlayMode.CurrentPlayer.IsMainEditor) return EditorMockCities[0];
+
+        string[] tags = Unity.Multiplayer.PlayMode.CurrentPlayer.ReadOnlyTags();
+        if (tags != null)
+        {
+            for (int i = 0; i < EditorMockCities.Length; i++)
+            {
+                if (System.Array.IndexOf(tags, EditorMockCityTagPrefix + i) >= 0) return EditorMockCities[i];
+            }
+        }
+
+        int range = EditorMockCities.Length - 1;
+        int offset = ((Application.dataPath.GetHashCode() % range) + range) % range;
+        return EditorMockCities[1 + offset];
+    }
+#endif
 
     private IEnumerator StartDeviceGPS(bool thenConnectMultiplayer)
     {
@@ -287,9 +346,10 @@ public class GameManagerUI : MonoBehaviour
             float lat, lon;
 
 #if UNITY_EDITOR
-            gpsStatus = "[Éditeur] Position simulée : Lille Sud.";
-            lat = EditorMockLatitude;
-            lon = EditorMockLongitude;
+            var mockCity = PickEditorMockCity();
+            gpsStatus = $"[Éditeur] Position simulée : {mockCity.Name}.";
+            lat = mockCity.Lat;
+            lon = mockCity.Lon;
             yield return new WaitForSeconds(0.3f);
 #else
             gpsStatus = "Recherche du signal GPS de l'appareil...";

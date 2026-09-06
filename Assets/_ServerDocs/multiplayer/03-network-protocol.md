@@ -119,6 +119,24 @@ imprécision de tap, mais impossible de déployer au contact immédiat de l'adve
 ```json
 { "type": "match_found", "match_id": "uuid", "team_id": 1, "opponent_username": "xX_Sniper_Xx", "mode": "deathmatch" }
 ```
+Pour une VRAIE tuile GPS (Conquête toujours, Deathmatch/Zone de Contrôle si le serveur en a
+assigné une — `has_home_tile: true`), le message porte aussi `zone_tile_x`/`zone_tile_y` ET,
+depuis le 2026-09-05, `city_data_json` : le JSON Overpass BRUT exact que le serveur autoritaire a
+lui-même utilisé pour générer cette tuile.
+
+**Pourquoi (équité multijoueur)** : avant ce champ, chaque client refaisait sa PROPRE requête
+Overpass indépendante pour la même tuile (`CityGenerator.GenerateCity()`) — rien ne garantissait
+que les deux clients (ni le client et le serveur) reçoivent exactement les mêmes bâtiments : les 3
+miroirs Overpass de repli ne sont pas garantis parfaitement synchronisés entre eux, et une édition
+OSM peut survenir entre deux requêtes même séparées de quelques secondes. Le serveur est maintenant
+la SEULE source qui interroge Overpass pour une vraie tuile (avec son propre cache disque persistant,
+voir `CityGenerator.TryReadZoneCacheFromDisk`) ; les clients appliquent ce JSON tel quel
+(`CityGenerator.LoadZoneFromServerData`) au lieu de le redemander. Absent (`null`/vide) pour la
+carte "Default" (`has_home_tile: false`) — elle est un bundle Resources identique des deux côtés,
+inutile de la faire transiter.
+```json
+{ "type": "match_found", "match_id": "uuid", "team_id": 1, "opponent_username": "xX_Sniper_Xx", "mode": "conquest", "zone_tile_x": 66701, "zone_tile_y": 44060, "city_data_json": "{\"version\":0.6,\"elements\":[...]}" }
+```
 
 ### `turn_timer`
 Diffusé chaque seconde pendant la phase de planification, pour afficher le décompte côté

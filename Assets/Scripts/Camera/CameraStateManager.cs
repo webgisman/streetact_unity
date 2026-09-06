@@ -133,7 +133,18 @@ public class CameraStateManager : MonoBehaviour
         {
             float dist = (newState == CameraState.Action) ? actionDistance : commandDistance;
             float pitch = (newState == CameraState.Action) ? actionPitch : commandPitch;
-            
+
+            // Plage de tangage PROPRE À CHAQUE VUE (correctif 2026-09-06) — voir le commentaire de
+            // TacticalCamera.maxPitchCommand pour le pourquoi. Fixé ICI, avant SetInstantView, qui
+            // clampe justement pitch contre ce champ : sans ce changement, la vue Commandement
+            // (pitch=90 demandé ci-dessus) restait écrêtée à l'ancien maxPitch=75, jamais un vrai
+            // zénithal. Assigné aussi (pas seulement lu) pour que le glisser-déposer manuel ultérieur
+            // (TacticalCamera, pincement/glisser de tangage) respecte la MÊME plage tant que cette
+            // vue reste active, plutôt que de re-clamper brutalement au premier geste du joueur.
+            TacticalCamera.Instance.maxPitch = (newState == CameraState.Action)
+                ? TacticalCamera.Instance.maxPitchAction
+                : TacticalCamera.Instance.maxPitchCommand;
+
             TacticalCamera.Instance.SetInstantView(dist, pitch);
             
             if (newState == CameraState.Action && focusedUnit != null)

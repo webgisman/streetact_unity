@@ -62,6 +62,23 @@ public partial class TacticalPathManager
             );
         }
 
+        // GRILLE D'APERÇU CONSTRUITE UNE SEULE FOIS PAR PASSE (correctif 2026-09-04).
+        //
+        // AppendGridPathSegment appelait TacticalGridBuilder.BuildFromScene() une fois par SEGMENT
+        // tracé — donc une fois par nœud et par unité, plus une fois pour l'aperçu. Le commentaire
+        // de la méthode affirmait que l'appel était « bon marché » grâce au cache interne : c'est
+        // faux. Même sur son chemin de cache valide, BuildFromScene fait un
+        // FindAnyObjectByType<CityGenerator>() puis DEUX passes sur BuildingStructure.AllBuildings
+        // (236 bâtiments sur la carte de référence) avec un GetComponent<DestructibleEnvironment>()
+        // à chaque tour, et réalloue autant d'objets TacticalBuilding plus un TacticalWorldState.
+        // Avec 4 unités de 2-3 nœuds, un seul redessin payait une dizaine de reconstructions.
+        // Une passe de tracé n'a besoin que de la GRILLE, et elle ne change pas en cours de passe.
+        TacticalGrid previewGrid = null;
+        if (Novgov.Network.MultiplayerMatchController.IsActive)
+        {
+            previewGrid = TacticalGridBuilder.BuildFromScene().grid;
+        }
+
         for (int uIdx = 0; uIdx < UnitAI.AllLivingUnits.Count; uIdx++)
         {
             UnitAI unitAI = UnitAI.AllLivingUnits[uIdx];
@@ -98,7 +115,10 @@ public partial class TacticalPathManager
             lr.colorGradient = isSelected ? selectedGradient : normalGradient;
 
             // Recalculer le chemin uniquement s'il est marqué 'dirty'
-            if (unitAI.isPathDirty || isPathsDirty || unitAI.cachedDrawPoints.Count == 0 || (isSelected && positionClicTemporaire != Vector3.positiveInfinity))
+            // HasTapTarget, jamais `!= Vector3.positiveInfinity` : ce test-là est toujours vrai (voir
+            // TacticalPathManager.HasTapTarget), donc le chemin de l'unité sélectionnée était
+            // recalculé à chaque appel, même sans aucun tap en attente.
+            if (unitAI.isPathDirty || isPathsDirty || unitAI.cachedDrawPoints.Count == 0 || (isSelected && HasTapTarget(positionClicTemporaire)))
             {
                 unitAI.cachedDrawPoints.Clear();
                 Vector3 positionCourante = unitAI.transform.position;
@@ -120,7 +140,19 @@ public partial class TacticalPathManager
 
                     bool isMultiplayer = Novgov.Network.MultiplayerMatchController.IsActive;
 
-                    if (isNodeOnRoof || positionCourante.y > 1.8f || DestructibleEnvironment.IsPositionInRubble(targetPos))
+                    // 2026-09-06 : un tir de mortier n'est pas un déplacement — la ligne de visée
+                    // suivait pourtant le même routage (NavMesh en solo, grille A* en multijoueur)
+                    // qu'une unité qui marche, la faisant contourner les bâtiments comme si le tir
+                    // devait emprunter les rues au sol. Un mortier tire au vol d'oiseau (voir
+                    // UnitAI.FireMortarShell/MortarShell.Launch, aucune vérification de ligne de vue
+                    // ni de chemin) : la prévisualisation doit montrer un segment direct vers la
+                    // cible, jamais un détour, quel que soit le mode (solo ou multijoueur).
+                    if (unitAI.tacticalPath[i].action == NodeAction.TirMortier)
+                    {
+                        unitAI.cachedDrawPoints.Add(targetPos + Vector3.up * 0.2f);
+                        positionCourante = targetPos;
+                    }
+                    else if (isNodeOnRoof || positionCourante.y > 1.8f || DestructibleEnvironment.IsPositionInRubble(targetPos))
                     {
                         unitAI.cachedDrawPoints.Add(targetPos + Vector3.up * 0.2f);
                         positionCourante = targetPos;
@@ -132,7 +164,7 @@ public partial class TacticalPathManager
                         // (grille A* déterministe), jamais par le NavMeshAgent — la ligne bleue doit
                         // suivre EXACTEMENT ce même calcul, sinon elle montre un chemin que l'unité
                         // ne suit pas réellement à l'exécution (bug remonté en jeu, 2026-08-30).
-                        if (!AppendGridPathSegment(unitAI.cachedDrawPoints, positionCourante, targetPos))
+                        if (!AppendGridPathSegment(previewGrid, unitAI.cachedDrawPoints, positionCourante, targetPos))
                             unitAI.cachedDrawPoints.Add(targetPos + Vector3.up * 0.2f);
                         positionCourante = targetPos;
                     }
@@ -151,12 +183,17 @@ public partial class TacticalPathManager
                     }
                 }
 
-                // Prévisualisation pour l'unité sélectionnée vers la position du clic temporaire
-                if (isSelected && (phaseActuelle == GamePhase.Planification || phaseActuelle == GamePhase.CreationPath) && positionClicTemporaire != Vector3.positiveInfinity)
+                // Prévisualisation pour l'unité sélectionnée vers la position du clic temporaire.
+                // HasTapTarget est indispensable ici : avec l'ancien `!= Vector3.positiveInfinity`
+                // (toujours vrai), ce bloc s'exécutait sans aucune cible et finissait par pousser un
+                // point INFINI dans le LineRenderer de l'unité sélectionnée — bornes de rendu
+                // infinies, ligne monstrueuse partant vers l'infini, et un chemin calculé vers un
+                // point hors carte à chaque redessin.
+                if (isSelected && (phaseActuelle == GamePhase.Planification || phaseActuelle == GamePhase.CreationPath) && HasTapTarget(positionClicTemporaire))
                 {
                     if (Novgov.Network.MultiplayerMatchController.IsActive)
                     {
-                        if (!AppendGridPathSegment(unitAI.cachedDrawPoints, positionCourante, positionClicTemporaire))
+                        if (!AppendGridPathSegment(previewGrid, unitAI.cachedDrawPoints, positionCourante, positionClicTemporaire))
                             unitAI.cachedDrawPoints.Add(positionClicTemporaire + Vector3.up * 0.2f);
                     }
                     else if (UnityEngine.AI.NavMesh.CalculatePath(positionCourante, positionClicTemporaire, areaMask, cachedNavPath) && cachedNavPath.corners.Length > 1)
@@ -191,16 +228,20 @@ public partial class TacticalPathManager
     /// NavMesh.CalculatePath (précis, suit les rues) alors que l'exécution réelle suivait cette
     /// grille bien plus grossière (1m/cellule) — les deux pouvaient diverger nettement, surtout
     /// dans les virages, donnant l'impression que l'unité "ignore" le chemin dessiné (bug remonté
-    /// en jeu, 2026-08-30). TacticalGridBuilder.BuildFromScene() est mis en cache en interne (voir
-    /// ce fichier) : l'appeler ici à chaque frame où le tracé est "dirty" reste bon marché après le
-    /// tout premier appel. Retourne false si aucun chemin n'a été trouvé (grille non chargée,
-    /// point hors zone, etc.) — l'appelant doit alors se rabattre sur une ligne droite.</summary>
-    private static bool AppendGridPathSegment(List<Vector3> drawPoints, Vector3 from, Vector3 to)
+    /// en jeu, 2026-08-30).
+    ///
+    /// La grille est fournie par l'APPELANT, construite une seule fois par passe de tracé (voir
+    /// DessinerTousLesChemins) : elle était auparavant reconstruite ici à chaque segment, ce que la
+    /// documentation de cette méthode déclarait à tort « bon marché ».
+    ///
+    /// Retourne false si aucun chemin n'a été trouvé (grille absente, point hors zone, arrivée
+    /// impraticable — typiquement l'intérieur d'un bâtiment) : l'appelant se rabat alors sur une
+    /// ligne droite.</summary>
+    private static bool AppendGridPathSegment(TacticalGrid grid, List<Vector3> drawPoints, Vector3 from, Vector3 to)
     {
-        TacticalWorldState previewState = TacticalGridBuilder.BuildFromScene();
-        if (previewState.grid == null) return false;
+        if (grid == null) return false;
 
-        List<Vector2> gridPath = Pathfinding.FindPath(previewState.grid, new Vector2(from.x, from.z), new Vector2(to.x, to.z));
+        List<Vector2> gridPath = Pathfinding.FindPath(grid, new Vector2(from.x, from.z), new Vector2(to.x, to.z));
         if (gridPath.Count < 2) return false;
 
         for (int j = 1; j < gridPath.Count; j++)
@@ -210,17 +251,4 @@ public partial class TacticalPathManager
         return true;
     }
 
-    private Vector3 GetMousePositionOnNavMesh()
-    {
-        if (Pointer.current == null) return Vector3.zero;
-
-        Ray ray = Camera.main.ScreenPointToRay(Pointer.current.position.ReadValue());
-        if (Physics.Raycast(ray, out RaycastHit hit))
-        {
-            UnityEngine.AI.NavMeshHit navHit;
-            if (UnityEngine.AI.NavMesh.SamplePosition(hit.point, out navHit, 1.0f, UnityEngine.AI.NavMesh.AllAreas))
-                return navHit.position;
-        }
-        return Vector3.zero;
-    }
 }

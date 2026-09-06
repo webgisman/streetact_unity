@@ -375,7 +375,27 @@ namespace Novgov.TacticalCore
         [Serializable] private class GeometryCacheFile { public List<WallSegmentDto> wallSegments; public List<BuildingTemplateDto> buildingTemplates; public GridDto grid; }
 
         private static string CacheDirectory => Path.Combine(Application.persistentDataPath, "TacticalGridCache");
-        private static string DiskCachePath(string cacheKey) => Path.Combine(CacheDirectory, $"GridCache_{cacheKey}.json");
+        // Version du FORMAT/CONTENU du cache disque. À incrémenter dès qu'un changement de génération
+        // rend les fichiers déjà écrits incorrects — un ancien fichier n'est alors simplement plus
+        // trouvé, donc régénéré, au lieu d'être relu avec des valeurs périmées.
+        //   v2 (2026-09-03) : les hauteurs de lot proviennent désormais d'un hachage déterministe de
+        //   la géométrie (CityGenerator.DeterministicLotHeight) et non d'un tirage aléatoire non
+        //   initialisé. Tout cache antérieur contient des hauteurs de toit que ni le client ni le
+        //   serveur ne reproduiraient aujourd'hui.
+        //   v3 (2026-09-05) : ce hachage déterministe est passé d'un hash TRIGONOMÉTRIQUE
+        //   (Mathf.Sin(x*a+y*b) * grand_facteur puis Mathf.Floor — non garanti bit-identique entre la
+        //   libm Android/ARM et la glibc Linux du serveur dédié) à un hash ENTIER pur
+        //   (Novgov.Core.DeterministicHash, uniquement XOR/shift/multiplication sur des uint 32 bits).
+        //   Exactement la même règle que pour v2 : tout fichier écrit AVANT ce bump contient des
+        //   hauteurs calculées avec l'ANCIENNE formule, que le nouveau pipeline client
+        //   (CityGenerator.LoadZoneFromServerData, qui rejoue le JSON serveur avec le NOUVEAU hash)
+        //   ne reproduirait plus — laisser DiskCacheVersion à 2 aurait fait resservir indéfiniment ces
+        //   hauteurs périmées par TacticalGridBuilder pendant que les clients calculent la nouvelle
+        //   valeur, recréant exactement le bug "unité perchée qui flotte au-dessus du toit" que le
+        //   changement de hash visait à éliminer — mais par la staleness du cache, pas par sin().
+        private const int DiskCacheVersion = 3;
+
+        private static string DiskCachePath(string cacheKey) => Path.Combine(CacheDirectory, $"GridCache_v{DiskCacheVersion}_{cacheKey}.json");
 
         /// <summary>Écrit le gabarit géométrique (murs + grille + bâtiments) sur disque pour cette
         /// clé de carte/tuile — jamais appelée avec un bâtiment déjà détruit (voir BuildFromScene).
@@ -387,6 +407,21 @@ namespace Novgov.TacticalCore
             try
             {
                 if (!Directory.Exists(CacheDirectory)) Directory.CreateDirectory(CacheDirectory);
+
+                // Ménage des versions précédentes (correctif 2026-09-04). Le bump vers
+                // GridCache_v2_* laisse les anciens GridCache_<clé>.json / GridCache_v1_* sur disque
+                // pour toujours — TryLoadFromDisk ne les trouve plus (nom différent) mais rien ne les
+                // supprime. Sans conséquence sur la partie en cours (capturé comme le reste de cette
+                // méthode) : au pire, l'espace disque n'est pas repris.
+                try
+                {
+                    string currentPrefix = $"GridCache_v{DiskCacheVersion}_";
+                    foreach (string stale in Directory.GetFiles(CacheDirectory, "GridCache_*.json"))
+                    {
+                        if (!Path.GetFileName(stale).StartsWith(currentPrefix)) File.Delete(stale);
+                    }
+                }
+                catch { /* purge best-effort, jamais bloquante */ }
 
                 var file = new GeometryCacheFile
                 {
@@ -434,8 +469,10 @@ namespace Novgov.TacticalCore
                 // du pool lisant EN MÊME TEMPS ne tombe sur un fichier à moitié écrit si deux
                 // instances construisent la même carte pour la première fois au même instant.
                 File.WriteAllText(tempPath, json);
-                File.Copy(tempPath, finalPath, true);
-                File.Delete(tempPath);
+                // File.Move (renommage), pas Copy+Delete : Copy réécrit tout le contenu une seconde
+                // fois sur le disque pour rien, Move est en principe une opération de métadonnées.
+                if (File.Exists(finalPath)) File.Delete(finalPath);
+                File.Move(tempPath, finalPath);
             }
             catch (Exception ex)
             {
