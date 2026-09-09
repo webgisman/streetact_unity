@@ -31,39 +31,69 @@ namespace Novgov.Server
         // Fantassin/CharLeopard/VehiculeCanon/Mortier) + jusqu'à 8 barricades (même stock que le
         // dock solo, voir UnitSpawnerUI.maxBarricadesPerTeam) — au-delà, ou un type d'unité hors de
         // l'enum, la soumission ENTIÈRE est rejetée et ce camp reçoit le repli automatique.
-        private const int MaxDeployedCombatUnits = 6;
-        private const int MaxDeployedBarricades = 8;
+        // Publics depuis le 2026-09-08, même raison que Team1/2DeploymentZoneCenter ci-dessus :
+        // UnitSpawnerUI en a besoin pour afficher le budget réel PENDANT le déploiement (voir
+        // GetTeamDeploymentPointCost) au lieu de le laisser invisible jusqu'au rejet côté serveur.
+        public const int MaxDeployedCombatUnits = 6;
+        public const int MaxDeployedBarricades = 8;
         // Budget en points (voir UnitTypeStats.DeploymentCost) : plafonne la PUISSANCE
         // totale déployée, pas seulement le nombre d'unités — sans ça, déployer le nombre max
         // d'unités les plus lourdes (CharLeopard) était toujours strictement supérieur à toute
         // composition mixte, tuant toute variété tactique (voir rapport d'audit jouabilité, défaut
         // bloquant #1). 8 points permet par ex. 2 CharLeopard + 2 Fantassin, ou 4 VehiculeCanon, ou
         // 1 CharLeopard + 1 Mortier + 1 VehiculeCanon + 1 Fantassin — mais jamais 4 CharLeopard (12).
-        private const int CombatPointBudget = 8;
+        public const int CombatPointBudget = 8;
 
-        /// <summary>Vrai si le multi-ensemble de placements respecte le budget autorisé (voir
-        /// MaxDeployedCombatUnits/MaxDeployedBarricades/CombatPointBudget) et ne contient que des
-        /// types/coordonnées valides — sinon la soumission ENTIÈRE est rejetée (repli automatique
-        /// pour tout ce camp), plutôt que d'essayer de n'en garder qu'une partie.</summary>
-        private static bool IsRosterValid(UnitPlacement[] placements)
+        /// <summary>Garde EXACTEMENT les placements que le joueur a lui-même choisis (même type, même
+        /// position) qui tiennent dans le budget — dans l'ORDRE de soumission — et ne rejette qu'un
+        /// placement individuellement invalide (type hors énum, coordonnée NaN/Infinity) ou celui qui
+        /// ferait dépasser un plafond. <paramref name="anyDropped"/> est vrai si au moins un placement
+        /// a été écarté.
+        ///
+        /// POURQUOI CE N'EST PLUS UN "TOUT OU RIEN" (2026-09-08). L'ancienne version
+        /// (`IsRosterValid`, booléenne) rejetait la soumission ENTIÈRE au moindre dépassement, et
+        /// `ResolveDeployment(Pure)` remplaçait alors TOUT le camp par `AutoDeployTeamFallback`(Pure) —
+        /// une escouade FIXE (2 Fantassin + 1 CharLeopard + 1 Mortier) à des positions FIXES ancrées
+        /// sur un coin de la carte, sans le moindre rapport avec ce que le joueur avait réellement
+        /// tapé. Or le dock de déploiement (`UnitSpawnerUI`/`MultiplayerMatchController.
+        /// OpenDeploymentDock`) ne plafonne QUE le nombre d'unités (`maxUnitsPerTeam = 4`, sous le
+        /// vrai plafond serveur de 6) — il n'a JAMAIS connu ni affiché le budget en points
+        /// (`CombatPointBudget = 8`, voir `UnitTypeStats.DeploymentCost`). Un joueur qui privilégiait
+        /// des unités lourdes (2 CharLeopard + 1 Mortier + 1 Fantassin = 6+2+1 = 9 points, un choix
+        /// parfaitement raisonnable et sous la limite de 4 unités affichée) voyait donc TOUT son
+        /// déploiement jeté et remplacé par l'escouade fixe — vécu comme "mes unités se sont mises
+        /// toutes seules ailleurs" et "mes mortiers ont disparu", sans le moindre message d'erreur.
+        /// Rapporté par le joueur (2026-09-08) : "toutes les unités se mettent tout seules dans des
+        /// endroits bizarres après déploiement alors que le joueur avait choisi d'autres endroits".
+        /// Le repli fixe reste utilisé, mais seulement si RIEN du tout ne peut être conservé (aucune
+        /// soumission, ou soumission entièrement malformée) — jamais pour un simple dépassement de
+        /// budget sur une soumission par ailleurs légitime.</summary>
+        private static List<UnitPlacement> FilterRosterToBudget(UnitPlacement[] placements, out bool anyDropped)
         {
-            if (placements == null || placements.Length == 0) return false;
-            if (placements.Length > MaxDeployedCombatUnits + MaxDeployedBarricades) return false;
+            var kept = new List<UnitPlacement>();
+            anyDropped = false;
+            if (placements == null) return kept;
 
             int combatCount = 0, barricadeCount = 0, totalCost = 0;
             foreach (var p in placements)
             {
-                if (!Enum.IsDefined(typeof(UnitSpawnerUI.UnitType), p.unit_type)) return false;
-                if (float.IsNaN(p.x) || float.IsNaN(p.y) || float.IsNaN(p.z)) return false;
-                if (float.IsInfinity(p.x) || float.IsInfinity(p.y) || float.IsInfinity(p.z)) return false;
+                if (!Enum.IsDefined(typeof(UnitSpawnerUI.UnitType), p.unit_type)) { anyDropped = true; continue; }
+                if (float.IsNaN(p.x) || float.IsNaN(p.y) || float.IsNaN(p.z)) { anyDropped = true; continue; }
+                if (float.IsInfinity(p.x) || float.IsInfinity(p.y) || float.IsInfinity(p.z)) { anyDropped = true; continue; }
 
                 var type = (UnitSpawnerUI.UnitType)p.unit_type;
-                if (type == UnitSpawnerUI.UnitType.BarricadeRoutiere) barricadeCount++;
-                else combatCount++;
-                totalCost += UnitTypeStats.DeploymentCost(type);
+                bool isBarricade = type == UnitSpawnerUI.UnitType.BarricadeRoutiere;
+                int cost = UnitTypeStats.DeploymentCost(type);
+
+                bool fitsCount = isBarricade ? barricadeCount + 1 <= MaxDeployedBarricades : combatCount + 1 <= MaxDeployedCombatUnits;
+                bool fitsBudget = totalCost + cost <= CombatPointBudget;
+                if (!fitsCount || !fitsBudget) { anyDropped = true; continue; }
+
+                if (isBarricade) barricadeCount++; else combatCount++;
+                totalCost += cost;
+                kept.Add(p);
             }
-            return combatCount <= MaxDeployedCombatUnits && barricadeCount <= MaxDeployedBarricades
-                && totalCost <= CombatPointBudget;
+            return kept;
         }
 
         /// <summary>Ramène (x, z) dans la zone de déploiement légale du camp (cercle centré sur le
@@ -82,24 +112,27 @@ namespace Novgov.Server
 
         /// <summary>Type d'unité déduit des drapeaux de l'UnitAI. Version typée, pour pouvoir
         /// interroger UnitTypeStats (voir movementBudget dans BuildTacticalUnit).</summary>
-        private static UnitSpawnerUI.UnitType InferUnitTypeEnum(UnitAI u)
-        {
-            if (u.isMortar) return UnitSpawnerUI.UnitType.Mortier;
-            if (u.isCanonVehicle) return UnitSpawnerUI.UnitType.VehiculeCanon;
-            if (u.isTank) return UnitSpawnerUI.UnitType.CharLeopard;
-            return UnitSpawnerUI.UnitType.Fantassin;
-        }
+        private static UnitSpawnerUI.UnitType InferUnitTypeEnum(UnitAI u) => UnitTypeStats.InferType(u);
 
-        /// <summary>Spawn réellement les unités d'UN camp (placement manuel validé+recadré, ou repli
-        /// automatique) et renvoie la liste des unités effectivement posées, pour le broadcast
-        /// "deployment_result".</summary>
-        private List<DeployedUnit> ResolveDeployment(PlayerConnection conn, int team)
+        /// <summary>Spawn réellement les unités d'UN camp (placement manuel — filtré au budget mais
+        /// jamais remplacé tant qu'AU MOINS UN placement du joueur peut être conservé, voir
+        /// FilterRosterToBudget — ou repli automatique si rien n'est utilisable) et renvoie la liste
+        /// des unités effectivement posées, pour le broadcast "deployment_result".</summary>
+        private List<DeployedUnit> ResolveDeployment(PlayerConnection conn, int team, out bool rosterTrimmed)
         {
-            bool valid = conn.HasSubmittedDeployment && IsRosterValid(conn.PendingDeployment);
+            rosterTrimmed = false;
+            var kept = conn.HasSubmittedDeployment
+                ? FilterRosterToBudget(conn.PendingDeployment, out rosterTrimmed)
+                : new List<UnitPlacement>();
+            // "trimmed" ne veut dire quelque chose pour le joueur QUE si une partie de ce qu'il a
+            // choisi a effectivement survécu — si tout a été écarté (kept vide), c'est le repli fixe
+            // ci-dessous qui s'applique en totalité, pas un simple recadrage : le message affiché au
+            // joueur ("le reste a été posé tel quel") serait faux dans ce cas.
+            rosterTrimmed &= kept.Count > 0;
 
-            if (valid)
+            if (kept.Count > 0)
             {
-                foreach (var p in conn.PendingDeployment)
+                foreach (var p in kept)
                 {
                     Vector3 clamped = ClampToDeploymentZone(new Vector3(p.x, p.y, p.z), team);
                     UnitSpawnerUI.Instance.SpawnUnitAt((UnitSpawnerUI.UnitType)p.unit_type, clamped, team);
@@ -171,12 +204,16 @@ namespace Novgov.Server
             DateTime deploymentPhaseStartUtc = DateTime.UtcNow;
             Debug.Log($"[Timing] [{ms.MatchId}] RunDeploymentPhasePure démarré à {deploymentPhaseStartUtc:O} — attente MapReady (max {MapReadyMaxWaitSeconds}s) puis déploiement (max {DeploymentSeconds}s).");
 
-            // 2026-09-06 : sans ce signal de vie périodique, un vrai Deathmatch/Zone de Contrôle
+            // 2026-09-06 : sans un signal de vie périodique, un vrai Deathmatch/Zone de Contrôle
             // (premier test réel de ce chemin, jamais atteignable avant l'ajout du bouton client) se
-            // déconnectait dès que la génération de carte dépassait les 15s de ReceiveTimeout du
-            // client, pendant que cette boucle patientait en silence jusqu'à 60s sans rien envoyer.
-            const float ServerKeepaliveIntervalSeconds = 15f;
-            float keepaliveTimer = 0f;
+            // déconnectait dès que la génération de carte dépassait le ReceiveTimeout du client,
+            // pendant que cette boucle patientait en silence sans rien envoyer.
+            // 2026-09-07 : ce signal de vie, alors LOCAL à cette phase, a été remplacé par un
+            // mécanisme central au niveau de la connexion elle-même (PlayerConnection.PumpKeepalives,
+            // appelé par MatchSessionManager.Update) — précisément parce qu'un keepalive par phase
+            // oblige chaque nouvelle phase à y penser, et que trois d'entre elles ne l'avaient pas
+            // fait (file d'attente, génération de tuile avant match_found, Conquête). Il n'y a donc
+            // plus rien à envoyer ici : la connexion s'en charge toute seule.
 
             // 2026-09-06 : bug plus ancien retrouvé (racine du symptôme "des unités apparaissent sans
             // que j'aie pu les placer", déjà vu et partiellement corrigé le 2026-08-30 — voir
@@ -203,14 +240,6 @@ namespace Novgov.Server
 
                 if (p1ReadyAtUtc == null && p1.MapReady) p1ReadyAtUtc = DateTime.UtcNow;
                 if (p2ReadyAtUtc == null && p2.MapReady) p2ReadyAtUtc = DateTime.UtcNow;
-
-                keepaliveTimer += Time.deltaTime;
-                if (keepaliveTimer >= ServerKeepaliveIntervalSeconds)
-                {
-                    keepaliveTimer = 0f;
-                    if (!p1.IsDisconnected) p1.Send(new NetMessage { type = "heartbeat" });
-                    if (!p2.IsDisconnected) p2.Send(new NetMessage { type = "heartbeat" });
-                }
 
                 mapWait -= Time.deltaTime;
                 yield return null;
@@ -281,27 +310,34 @@ namespace Novgov.Server
             double deploymentElapsedSec = (DateTime.UtcNow - deploymentCountdownStartUtc).TotalSeconds;
             Debug.Log($"[Timing] [{ms.MatchId}] Compte à rebours de déploiement terminé après {deploymentElapsedSec:F1}s réelles (attendu {DeploymentSeconds}s).");
 
-            var team1Units = ResolveDeploymentPure(ms, p1, 1);
-            var team2Units = ResolveDeploymentPure(ms, p2, 2);
+            var team1Units = ResolveDeploymentPure(ms, p1, 1, out bool team1Trimmed);
+            var team2Units = ResolveDeploymentPure(ms, p2, 2, out bool team2Trimmed);
             Debug.Log($"[Trajectoire] [{ms.MatchId}] Déploiement résolu : équipe1={team1Units.Count} unité(s), équipe2={team2Units.Count} unité(s).");
 
             var team1Barricades = team1Units.Where(u => u.unit_type == (int)UnitSpawnerUI.UnitType.BarricadeRoutiere);
             var team2Barricades = team2Units.Where(u => u.unit_type == (int)UnitSpawnerUI.UnitType.BarricadeRoutiere);
-            if (!p1.IsDisconnected) p1.Send(new NetMessage { type = "deployment_result", deployed_units = team1Units.Concat(team2Barricades).ToArray() });
-            if (!p2.IsDisconnected) p2.Send(new NetMessage { type = "deployment_result", deployed_units = team2Units.Concat(team1Barricades).ToArray() });
+            // "roster_trimmed" : voir FilterRosterToBudget — au moins un placement soumis par CE
+            // joueur dépassait le budget et a été écarté individuellement, le reste est conservé.
+            if (!p1.IsDisconnected) p1.Send(new NetMessage { type = "deployment_result", deployed_units = team1Units.Concat(team2Barricades).ToArray(), reason = team1Trimmed ? "roster_trimmed" : null });
+            if (!p2.IsDisconnected) p2.Send(new NetMessage { type = "deployment_result", deployed_units = team2Units.Concat(team1Barricades).ToArray(), reason = team2Trimmed ? "roster_trimmed" : null });
         }
 
         /// <summary>Équivalent pur de ResolveDeployment — place directement dans ms.World (units ou
         /// barricades), sans jamais passer par UnitSpawnerUI.SpawnUnitAt (qui instancierait de vrais
         /// prefabs, exactement ce que ce chantier élimine pour ces deux modes).</summary>
-        private List<DeployedUnit> ResolveDeploymentPure(MatchState ms, PlayerConnection conn, int team)
+        private List<DeployedUnit> ResolveDeploymentPure(MatchState ms, PlayerConnection conn, int team, out bool rosterTrimmed)
         {
-            bool valid = conn.HasSubmittedDeployment && IsRosterValid(conn.PendingDeployment);
+            rosterTrimmed = false;
+            var kept = conn.HasSubmittedDeployment
+                ? FilterRosterToBudget(conn.PendingDeployment, out rosterTrimmed)
+                : new List<UnitPlacement>();
+            // Voir ResolveDeployment (chemin "vivant") pour le pourquoi de cette ligne.
+            rosterTrimmed &= kept.Count > 0;
             var placements = new List<UnitPlacement>();
 
-            if (valid)
+            if (kept.Count > 0)
             {
-                foreach (var p in conn.PendingDeployment)
+                foreach (var p in kept)
                 {
                     Vector3 clamped = ClampToDeploymentZone(new Vector3(p.x, p.y, p.z), team);
                     placements.Add(new UnitPlacement { unit_type = p.unit_type, x = clamped.x, y = clamped.y, z = clamped.z });

@@ -38,6 +38,10 @@ public static partial class TacticalCoreSelfTest
         // Logique CLIENT pure (sentinelles, etc.) — voir TacticalCoreSelfTest_Client.cs.
         RunClientLogicTests(ref passed, ref failed);
 
+        // Simulation diagnostique avec log tick par tick (retour joueur 2026-09-09, "le fantassin
+        // ne suit pas le chemin") — voir TacticalCoreSelfTest_InfantryPathSim.cs.
+        RunInfantryPathSimTests(ref passed, ref failed);
+
         Debug.Log(passed == 0 && failed == 0
             ? "[TacticalCoreSelfTest] Aucun test exécuté."
             : $"<color={(failed == 0 ? "green" : "red")}>[TacticalCoreSelfTest] {passed} réussi(s), {failed} échoué(s).</color>");

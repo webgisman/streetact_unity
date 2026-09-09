@@ -399,6 +399,16 @@ namespace Novgov.Network
 
         private void HandleServerDisconnected(string reason)
         {
+            // Fermeture ATTENDUE après un résultat de Conquête instantanée : ne rien signaler, et
+            // surtout ne pas écraser le panneau de résultat que le joueur est en train de lire.
+            if (expectingCloseAfterZoneResult)
+            {
+                expectingCloseAfterZoneResult = false;
+                IsActive = false;
+                IsDeploymentPhaseActive = false;
+                return;
+            }
+
             if (uiState == UiState.InMatch || uiState == UiState.Matchmaking || uiState == UiState.Deployment)
             {
                 statusMessage = DescribeDisconnectReason(reason);
@@ -434,13 +444,24 @@ namespace Novgov.Network
             }
         }
 
+        /// <summary>Vrai quand le serveur vient d'envoyer un résultat de Conquête INSTANTANÉE
+        /// (zone_captured / zone_attack_result) : il referme systématiquement la socket juste après
+        /// (voir MatchSessionManager_Conquest, `attacker.Close()` sur chacun de ces chemins). Cette
+        /// fermeture est donc NORMALE et attendue — sans ce drapeau, HandleServerDisconnected la
+        /// traitait comme une panne réseau, affichait "Connexion au serveur perdue" et renvoyait au
+        /// menu une frame après l'ouverture du panneau de résultat, que le joueur n'avait donc jamais
+        /// le temps de lire (2026-09-07).</summary>
+        private bool expectingCloseAfterZoneResult = false;
+
         private void OnZoneCaptured(NetMessage msg)
         {
+            expectingCloseAfterZoneResult = true;
             OnZoneResult?.Invoke($"Zone ({msg.zone_tile_x},{msg.zone_tile_y}) capturée sans résistance ! (+{msg.rating_delta} classement)");
         }
 
         private void OnZoneAttackResult(NetMessage msg)
         {
+            expectingCloseAfterZoneResult = true; // voir expectingCloseAfterZoneResult
             string message = msg.reason switch
             {
                 "already_owned" => "Cette Zone vous appartient déjà.",
@@ -705,18 +726,43 @@ namespace Novgov.Network
             // joueur aurait figé l'interface pendant ce laps de temps.
             Novgov.TacticalCore.TacticalGridBuilder.BuildFromScene();
 
+            // "roster_trimmed" (2026-09-08) : au moins UN des placements que J'AI moi-même soumis
+            // dépassait le budget serveur (nombre d'unités ou points, voir MatchSessionManager.
+            // FilterRosterToBudget) et a été écarté INDIVIDUELLEMENT — le reste de mon déploiement
+            // est bien celui que j'ai choisi, aux positions que j'ai choisies (plus de remplacement
+            // en bloc par une escouade fixe sans rapport, voir §19 de 08-known-issues-and-todo.md).
+            // Le dock ne connaît pas encore ce budget en points (seulement un nombre d'unités, voir
+            // OpenDeploymentDock) : ce message est le seul moyen pour l'instant de savoir qu'une
+            // partie du déploiement demandé n'a pas pu tenir.
+            if (msg.reason == "roster_trimmed")
+            {
+                statusMessage = "Une partie de votre déploiement dépassait le budget autorisé (unités trop lourdes) — le reste a été posé tel quel.";
+            }
+
             SetUiState(UiState.InMatch);
         }
 
         private void OnOpponentGhosted(NetMessage msg)
         {
-            // Depuis le rétablissement du substitut IA (voir UnitAI.isGhosted /
-            // MatchSessionManager.ApplyForPlayer), un camp absent n'est plus totalement passif : ce
-            // texte reflète maintenant ce qui se passe réellement, plutôt que de laisser croire à des
-            // mannequins immobiles.
-            ghostBannerText = msg.team_id == localTeamId
-                ? "Vous étiez absent — une IA de secours a joué vos unités ce tour-ci."
-                : "Adversaire absent — une IA de secours a joué ses unités ce tour-ci.";
+            // CORRIGÉ 2026-09-08 — ce texte affirmait "une IA de secours a joué vos/ses unités" dans
+            // TOUS les cas, alors que c'est FAUX pour Deathmatch/Zone de Contrôle. Il ne reflétait
+            // que le chemin "vivant" (`ApplyForPlayer`, Conquête/Entraînement), qui appelle
+            // réellement `TacticalAIPlanner.PlanifierTourIA()` pour un joueur ghosté. Le chemin PUR
+            // (`ApplyForPlayerPure`, Deathmatch/Zone de Contrôle — voir son propre commentaire :
+            // "plutôt que TacticalAIPlanner... ses unités TIENNENT LA POSITION") ne lance JAMAIS
+            // aucune IA — un camp ghosté y reste simplement immobile (mais riposte s'il est attaqué,
+            // comme toute unité). Un vrai joueur PvP voyait donc, à chaque tour manqué (le sien ou
+            // celui de l'adversaire), une bannière lui affirmant noir sur blanc qu'une IA venait de
+            // jouer à sa place — signalé par un joueur (2026-09-08) : "il y a toujours de l'IA dans
+            // le multijoueur alors qu'on a dit pas d'IA". `currentMode` distingue les deux moteurs
+            // sans nouveau champ réseau : "deathmatch"/"zone_control" -> chemin pur, jamais d'IA ;
+            // "conquest"/"practice_ai" -> chemin vivant, IA réelle.
+            bool realAiRan = currentMode == "conquest" || currentMode == "practice_ai";
+            string who = msg.team_id == localTeamId ? "Vous étiez" : "Adversaire";
+            string pronoun = msg.team_id == localTeamId ? "vos" : "ses";
+            ghostBannerText = realAiRan
+                ? $"{who} absent — une IA de secours a joué {pronoun} unités ce tour-ci."
+                : $"{who} absent — {pronoun} unités ont tenu leur position ce tour-ci (aucun ordre, mais ripostent si attaquées).";
             ghostBannerTimer = 4f;
             if (ghostBannerLabel != null)
             {
@@ -836,11 +882,78 @@ namespace Novgov.Network
             SetUiState(UiState.MatchOver);
         }
 
+        /// <summary>Joue le tour reçu du serveur, en garantissant que le verrou isPlayingSnapshots
+        /// est TOUJOURS relâché — voir le finally.</summary>
         private IEnumerator PlaySnapshotsCoroutine(NetMessage msg)
         {
             isPlayingSnapshots = true;
             currentTurnNumber = msg.turn_number + 1;
 
+            // REJEU SOUS GARDE (2026-09-07). Deux états doivent être rétablis quoi qu'il arrive,
+            // sinon le client est définitivement bloqué :
+            //   - isPlayingSnapshots : le verrou qui fait ignorer tout turn_result reçu pendant un
+            //     rejeu (voir HandleServerMessage). Bloqué à true, le client ignore DÉFINITIVEMENT
+            //     tous les tours suivants pendant que le serveur le fantômise à chaque tour ;
+            //   - phaseActuelle : TacticalPathManager.Update sort immédiatement tant qu'elle vaut
+            //     Execution, donc le joueur ne peut plus ni sélectionner une unité, ni poser un
+            //     point, ni atteindre FIN DE TOUR.
+            // Les deux sont rétablis en fin de PlaySnapshotsBody, donc sautés dès que celui-ci lève
+            // (un SpawnUnitAt qui renvoie null, une unité détruite en cours de rejeu, ou deux unités
+            // de même nom faisant lever ToDictionary).
+            //
+            // Un simple `try { yield return PlaySnapshotsBody(msg); } finally { ... }` NE SUFFIT PAS :
+            // Unity déroule lui-même l'itérateur imbriqué, donc une exception levée dans MoveNext()
+            // du corps ne repasse jamais par la machine à états de CETTE méthode — le finally n'est
+            // émis que dans son Dispose(), que Unity n'appelle pas sur une coroutine avortée. On
+            // pompe donc l'itérateur à la main, exactement comme MatchSessionManager.RunMatchGuarded
+            // le fait côté serveur et pour la même raison (yield interdit dans un try/catch).
+            IEnumerator inner = PlaySnapshotsBody(msg);
+            while (true)
+            {
+                bool moved = false;
+                bool crashed = false;
+                try
+                {
+                    moved = inner.MoveNext();
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogError($"[MultiplayerMatchController] Exception pendant le rejeu du tour — récupération pour ne pas figer la partie : {e}");
+                    crashed = true;
+                }
+
+                if (crashed)
+                {
+                    RecoverFromFailedReplay();
+                    yield break;
+                }
+                if (!moved) break;
+                yield return inner.Current;
+            }
+
+            isPlayingSnapshots = false;
+        }
+
+        /// <summary>Remet le client dans un état JOUABLE après un rejeu interrompu par une exception —
+        /// même effet que la fin normale de PlaySnapshotsBody. Sans ça, relâcher le seul verrou
+        /// isPlayingSnapshots ne suffisait pas : phaseActuelle restait à Execution et toute la saisie
+        /// tactique demeurait morte (voir TacticalPathManager.Update).</summary>
+        private void RecoverFromFailedReplay()
+        {
+            isPlayingSnapshots = false;
+            foreach (var unit in UnitAI.AllLivingUnits)
+            {
+                if (unit == null) continue;
+                unit.ClearTacticalPath();
+                unit.SetNetworkAnimState(false, 0f);
+            }
+            if (TacticalPathManager.Instance != null)
+                TacticalPathManager.Instance.phaseActuelle = TacticalPathManager.GamePhase.Planification;
+            statusMessage = "";
+        }
+
+        private IEnumerator PlaySnapshotsBody(NetMessage msg)
+        {
             var unitLookup = FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude)
                 .ToDictionary(u => u.gameObject.name, u => u);
             var previousPositions = new Dictionary<string, Vector3>();
@@ -930,7 +1043,6 @@ namespace Novgov.Network
                 TacticalPathManager.Instance.phaseActuelle = TacticalPathManager.GamePhase.Planification;
 
             statusMessage = "";
-            isPlayingSnapshots = false;
         }
 
         // =====================================================================

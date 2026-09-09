@@ -468,7 +468,7 @@ namespace Novgov.Server
             }
             Debug.Log($"[Timing] Conquête — compte à rebours de déploiement terminé après {(DateTime.UtcNow - conquestCountdownStartUtc).TotalSeconds:F1}s réelles (attendu {DeploymentSeconds}s), HasSubmittedDeployment={attacker.HasSubmittedDeployment}.");
 
-            var attackerUnits = ResolveDeployment(attacker, 1);
+            var attackerUnits = ResolveDeployment(attacker, 1, out bool attackerRosterTrimmed);
 
             int extraGarrisonInfantry = 0;
             if (!string.IsNullOrEmpty(defenderOwnerId))
@@ -511,7 +511,17 @@ namespace Novgov.Server
             // SA PROPRE escouade avant le premier tour — la garnison IA n'existera côté client qu'une
             // fois repérée en jeu (voir PlaySnapshotsCoroutine).
             if (!attacker.IsDisconnected)
-                attacker.Send(new NetMessage { type = "deployment_result", deployed_units = attackerUnits.ToArray() });
+                attacker.Send(new NetMessage
+                {
+                    type = "deployment_result",
+                    deployed_units = attackerUnits.ToArray(),
+                    // "roster_trimmed" : au moins un placement soumis dépassait le budget (nombre ou
+                    // points) et a été écarté INDIVIDUELLEMENT — le reste du déploiement choisi par
+                    // le joueur est conservé tel quel (voir FilterRosterToBudget). Le client affiche
+                    // un avertissement au lieu de laisser le joueur découvrir la différence sans
+                    // explication.
+                    reason = attackerRosterTrimmed ? "roster_trimmed" : null
+                });
         }
 
         /// <summary>Comme RunPlanningPhase, mais la garnison IA planifie immédiatement (pas

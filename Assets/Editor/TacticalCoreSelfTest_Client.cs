@@ -37,6 +37,16 @@ public static partial class TacticalCoreSelfTest
         // Entree/sortie de batiment au sol (2026-09-06, "l'infanterie ne rentre pas dans les
         // batiments") — voir TacticalCoreSelfTest_BuildingEntry.cs.
         RunBuildingEntryTests(ref passed, ref failed);
+
+        // Entree par une VRAIE position de porte, qui est toujours hors de l'empreinte (2026-09-07)
+        // — voir TacticalCoreSelfTest_DoorEntry.cs. Les tests d'entree ci-dessus visaient tous un
+        // point deja interieur, ce qui laissait passer le fait que l'entree ne se declenchait
+        // jamais en jeu.
+        RunDoorEntryTests(ref passed, ref failed);
+
+        // Resolve mute ses entrees EN PLACE (2026-09-07) — la propriete qui rendait possible le
+        // rejeu amorce sur son propre resultat. Voir TacticalCoreSelfTest_ResolveMutatesInPlace.cs.
+        RunResolveMutationTests(ref passed, ref failed);
     }
 
     /// <summary>LE test de non-regression du bug "jouabilite cassee" : tant que ceci echoue, le

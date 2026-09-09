@@ -94,15 +94,38 @@ déconnecté dès que ce timeout expire.
 
 ### `submit_deployment`
 Placement manuel choisi par le joueur pendant la phase de déploiement (voir
-`MatchSessionManager.RunDeploymentPhase`, jusqu'à 45s, en parallèle pour les deux joueurs — pas de
-tour par tour ici). `unit_type` = valeur brute de `UnitSpawnerUI.UnitType` (0=Fantassin,
-1=CharLeopard, 2=VehiculeCanon, 3=Mortier, 4=BarricadeRoutiere). Budget autorisé : jusqu'à 4 unités
-de combat (n'importe quel mélange) + jusqu'à 8 barricades — une soumission qui dépasse ce budget,
-ou contient un type hors de l'enum, est rejetée EN BLOC côté serveur (repli automatique pour tout
-ce camp, voir `deployment_result` ci-dessous) plutôt que partiellement acceptée. Chaque position est
-de toute façon recadrée dans la zone de déploiement légale du camp (cercle de 22m autour du même
-point d'ancrage que l'auto-déploiement) avant d'être utilisée — jamais rejetée pour une simple
-imprécision de tap, mais impossible de déployer au contact immédiat de l'adversaire.
+`MatchSessionManager.RunDeploymentPhasePure`, jusqu'à `DeploymentSeconds` = 300 s — 45 s à
+l'origine, relevé le 2026-09-06 sur demande explicite car trop court pour un vrai joueur qui
+découvre son dock — en parallèle pour les deux joueurs, pas de tour par tour ici). `unit_type` =
+valeur brute de `UnitSpawnerUI.UnitType` (0=Fantassin, 1=CharLeopard, 2=VehiculeCanon, 3=Mortier,
+4=BarricadeRoutiere).
+
+Budget autorisé, appliqué par `MatchSessionManager.FilterRosterToBudget` :
+- jusqu'à 6 unités de combat (`MaxDeployedCombatUnits`) + jusqu'à 8 barricades
+  (`MaxDeployedBarricades`), n'importe quel mélange ;
+- **et** un budget en points de 8 (`CombatPointBudget`), coût par unité donné par
+  `UnitTypeStats.DeploymentCost` : Fantassin 1, VehiculeCanon 2, Mortier 2, CharLeopard 3,
+  BarricadeRoutiere 0. Ajouté le 2026-09-06 : sans lui, la composition la plus lourde autorisée
+  (4 CharLeopard) était toujours strictement supérieure à toute composition mixte — aucune raison
+  tactique de jamais varier son déploiement.
+
+**Filtré placement par placement, JAMAIS rejeté en bloc** (corrigé le 2026-09-08 — voir §19.11 de
+`08-known-issues-and-todo.md`). Chaque placement, dans l'ordre où le client les a envoyés, est
+gardé s'il est individuellement valide (type défini dans l'énum, coordonnées finies) ET qu'il tient
+encore dans les plafonds ci-dessus une fois les précédents comptés ; sinon CE placement précis est
+écarté, les autres restent inchangés (même type, même position que soumis). Le dock de déploiement
+ne connaissant que le nombre d'unités (pas encore le budget en points, voir `05-client-integration.
+md`), un joueur qui privilégie des unités lourdes peut légitimement dépasser 8 points sans jamais
+avoir été prévenu par le client — l'ancien comportement (rejet de la soumission ENTIÈRE, repli sur
+une escouade fixe sans rapport avec ce que le joueur avait tapé) rendait ce cas totalement
+courant et se vivait comme "mes unités ont été téléportées ailleurs par une IA". Le repli fixe
+(`AutoDeployTeamFallback`) ne s'applique plus que si RIEN de la soumission n'a pu être conservé.
+
+**Aucune zone de déploiement n'est plus imposée** (`ClampToDeploymentZone` a été désactivée le
+2026-09-06, sur demande explicite, pour autoriser le placement manuel n'importe où sur la carte) —
+une position soumise est utilisée telle quelle, sans recadrage. Les constantes de zone
+(`Team1/2DeploymentZoneCenter`, `DeploymentZoneRadius` = 22 m) restent utilisées par le SEUL repli
+automatique (`AutoDeployTeamFallback`), pas par le placement manuel.
 ```json
 {
   "type": "submit_deployment",
@@ -138,33 +161,71 @@ inutile de la faire transiter.
 { "type": "match_found", "match_id": "uuid", "team_id": 1, "opponent_username": "xX_Sniper_Xx", "mode": "conquest", "zone_tile_x": 66701, "zone_tile_y": 44060, "city_data_json": "{\"version\":0.6,\"elements\":[...]}" }
 ```
 
+### `heartbeat` (serveur -> client)
+Signal de vie ENVOYÉ PAR LE SERVEUR à toute connexion authentifiée restée silencieuse plus de 8 s
+(`PlayerConnection.KeepaliveIntervalSeconds`), quelle que soit la phase : file d'attente, génération
+de tuile avant `match_found`, déploiement, Conquête, planification. Le client n'a rien à en faire —
+son `switch` l'ignore — c'est l'ARRIVÉE de la trame qui réarme le `ReceiveTimeout` de 25 s de sa
+socket (`GameServerClient.Connect`).
+
+**Pourquoi c'est une propriété de la CONNEXION et pas d'une phase** (2026-09-07) : il a d'abord
+existé un keepalive local à la seule phase de déploiement, si bien que trois autres fenêtres de
+silence ne l'avaient pas — notamment la file d'attente, où un joueur seul était TOUJOURS déconnecté
+au bout de 25 s, ce qui rendait Deathmatch et Zone de Contrôle injouables sans un second joueur
+immédiat. Voir §19.1 de `08-known-issues-and-todo.md`. Toute nouvelle phase est couverte d'office.
+```json
+{ "type": "heartbeat" }
+```
+
 ### `turn_timer`
-Diffusé chaque seconde pendant la phase de planification, pour afficher le décompte côté
-client.
+Diffusé chaque seconde pendant la phase de planification (plafond `PlanningSeconds` = 300 s depuis
+le 2026-09-07, aligné sur `DeploymentSeconds`). **Le client ne l'affiche plus** (demande explicite
+du joueur, 2026-09-06 : « enlève le temps dans tous les états ») — le champ reste envoyé et
+alimente `lastServerSecondsRemaining` pour d'autres usages internes.
 ```json
 { "type": "turn_timer", "seconds_remaining": 42 }
 ```
 
 ### `opponent_ghosted`
-Notifie qu'un joueur est passé en mode Ghost (déconnecté ou timeout) — voir
-[04-unity-headless-server.md](04-unity-headless-server.md).
+Notifie qu'un camp est passé en mode Ghost (déconnecté ou timeout) — voir
+[04-unity-headless-server.md](04-unity-headless-server.md). Envoyé à L'AUTRE camp uniquement (pas
+au camp ghosté lui-même), pour CHAQUE tour où il reste ghosté, pas une seule fois à l'entrée dans
+cet état.
+
+**Le comportement réel derrière ce message dépend du mode**, et le client (`OnOpponentGhosted`)
+choisit son texte en conséquence depuis le 2026-09-08 (bug trouvé suite à un signalement joueur —
+voir §19.12 de `08-known-issues-and-todo.md`, ce message affichait auparavant "une IA a joué vos
+unités" INCONDITIONNELLEMENT, y compris pour Deathmatch/Zone de Contrôle où c'est faux) :
+- `deathmatch`/`zone_control` (chemin pur, `ApplyForPlayerPure`) : le camp ghosté ne fait
+  strictement RIEN — ses unités tiennent leur position, aucune décision d'IA, elles ripostent
+  seulement si attaquées (comme n'importe quelle unité) ;
+- `conquest`/`practice_ai` (chemin vivant, `ApplyForPlayer`) : `TacticalAIPlanner.PlanifierTourIA()`
+  tourne réellement pour ce camp — recherche de cible, couverture, tir.
 ```json
 { "type": "opponent_ghosted", "team_id": 2, "reason": "timeout" }
 ```
 
 ### `deployment_result`
-Diffusé aux DEUX clients une fois la phase de déploiement résolue (soumission validée+recadrée, ou
-repli automatique par camp, voir `submit_deployment` ci-dessus) — les DEUX camps y figurent, y
-compris le sien propre : le client ne fait jamais confiance à ses propres positions candidates
-locales et respawn exactement cette liste (`MultiplayerMatchController.OnDeploymentResult`,
-`unit_id` réutilisé tel quel par `UnitSpawnerUI.SpawnUnitAt(..., forcedName: ...)` pour que
-`turn_result`/`PlaySnapshotsCoroutine` retrouve ensuite chaque unité par ce même nom).
+Diffusé aux DEUX clients une fois la phase de déploiement résolue (soumission filtrée au budget,
+ou repli automatique par camp si rien n'a pu en être conservé — voir `submit_deployment`
+ci-dessus) — les DEUX camps y figurent, y compris le sien propre : le client ne fait jamais
+confiance à ses propres positions candidates locales et respawn exactement cette liste
+(`MultiplayerMatchController.OnDeploymentResult`, `unit_id` réutilisé tel quel par
+`UnitSpawnerUI.SpawnUnitAt(..., forcedName: ...)` pour que `turn_result`/`PlaySnapshotsCoroutine`
+retrouve ensuite chaque unité par ce même nom).
+
+`reason` (2026-09-08) : `"roster_trimmed"` si AU MOINS UN placement soumis par CE joueur a été
+écarté individuellement (budget dépassé) alors que le reste de sa soumission a bien été conservé —
+absent/null sinon (soumission entièrement acceptée, ou entièrement remplacée par le repli
+automatique — dans ce dernier cas ce n'est pas un "trim" mais un remplacement total, voir §19.11).
+Le client affiche un avertissement quand ce champ vaut `"roster_trimmed"`.
 ```json
 {
   "type": "deployment_result",
   "deployed_units": [
     { "unit_id": "Fantassin_1_1", "unit_type": 0, "team_id": 1, "x": -23.4, "y": 0.0, "z": -24.1 }
-  ]
+  ],
+  "reason": null
 }
 ```
 

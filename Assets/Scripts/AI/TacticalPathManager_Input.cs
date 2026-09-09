@@ -97,6 +97,23 @@ public partial class TacticalPathManager
         return onRoof;
     }
 
+    /// <summary>Retire le dernier point posé par l'unité sélectionnée, son hologramme et son tracé.
+    /// Appelée par le clic DROIT (PC) et par le bouton "↶" de la barre tactique (tactile) — voir
+    /// TacticalPathManager_UI.BindTacticalUI : jusqu'au 2026-09-07 seul le clic droit y menait, donc
+    /// aucun joueur sur téléphone ne pouvait annuler un point mal placé.</summary>
+    public void AnnulerDernierPoint()
+    {
+        if (uniteSelectionnee == null) return;
+        UnitAI unitAI = uniteSelectionnee.GetComponent<UnitAI>();
+        if (unitAI == null || unitAI.tacticalPath.Count == 0) return;
+
+        unitAI.RemoveLastTacticalNode();
+        DessinerTousLesChemins();
+        if (Camera.main != null)
+            AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
+        Debug.Log($"[{unitAI.gameObject.name}] ↩️ Dernier checkpoint supprimé.");
+    }
+
     /// <summary>Traite un tap/clic unique par frame (voir Update()) : sélection d'unité tolérante
     /// à l'écran, clic droit pour annuler, puis toute la cascade porte/fenêtre/bâtiment/sol pour
     /// l'unité actuellement sélectionnée en phase de Planification.</summary>
@@ -142,14 +159,7 @@ public partial class TacticalPathManager
             }
             else if (uniteSelectionnee != null)
             {
-                UnitAI unitAI = uniteSelectionnee.GetComponent<UnitAI>();
-                if (unitAI != null && unitAI.tacticalPath.Count > 0)
-                {
-                    unitAI.RemoveLastTacticalNode();
-                    DessinerTousLesChemins();
-                    AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-                    Debug.Log($"[{unitAI.gameObject.name}] ↩️ Dernier checkpoint supprimé.");
-                }
+                AnnulerDernierPoint();
                 return;
             }
         }
@@ -280,7 +290,11 @@ public partial class TacticalPathManager
                     UnitAI unit = UnitAI.AllLivingUnits[i];
                     if (unit != null && unit.isPlayerControlled && !unit.isDead)
                     {
-                        Vector3 screenPoint = Camera.main.WorldToScreenPoint(unit.transform.position + Vector3.up * 0.5f);
+                        // SelectionAnchorWorldPos (pas transform.position) : pour un blindé, le
+                        // pivot d'import peut être décalé de plusieurs mètres du centre visuel réel
+                        // (voir son commentaire dans UnitAI.cs) — root cause confirmée du rapport
+                        // "difficile de sélectionner les unités en multijoueur" (2026-09-09).
+                        Vector3 screenPoint = Camera.main.WorldToScreenPoint(unit.SelectionAnchorWorldPos);
                         if (screenPoint.z > 0) // Devant la caméra
                         {
                             float dist = Vector2.Distance(pointerPosition, new Vector2(screenPoint.x, screenPoint.y));
@@ -311,7 +325,7 @@ public partial class TacticalPathManager
                     // meilleur candidat courant : comparer aussi la distance-écran DE l'unité
                     // touchée par le raycast, pas seulement celle du hit lui-même, avant de
                     // trancher.
-                    Vector3 raycastScreenPoint = Camera.main.WorldToScreenPoint(raycastUnit.transform.position + Vector3.up * 0.5f);
+                    Vector3 raycastScreenPoint = Camera.main.WorldToScreenPoint(raycastUnit.SelectionAnchorWorldPos);
                     float raycastScreenDist = raycastScreenPoint.z > 0
                         ? Vector2.Distance(pointerPosition, new Vector2(raycastScreenPoint.x, raycastScreenPoint.y))
                         : float.MaxValue;

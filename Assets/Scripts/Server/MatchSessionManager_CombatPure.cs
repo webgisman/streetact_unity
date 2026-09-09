@@ -11,6 +11,31 @@ namespace Novgov.Server
 {
     public partial class MatchSessionManager
     {
+        /// <summary>Copie PAR VALEUR de l'état d'une unité au DÉBUT d'un tour — le point de départ à
+        /// partir duquel le rejeu du tour est reconstruit (voir BuildSnapshotsFromEventsPure).
+        ///
+        /// Une struct, et pas une simple référence vers la TacticalUnit : celle-ci est une classe que
+        /// TacticalResolver.Resolve mute EN PLACE, donc toute référence conservée à travers la
+        /// résolution finit par décrire la FIN du tour, pas son début. Voir le commentaire détaillé au
+        /// site de capture, dans RunExecutionPhasePure.</summary>
+        private readonly struct UnitTurnStart
+        {
+            public readonly string Id;
+            public readonly int Team;
+            public readonly Vector2 Position;
+            public readonly int Health;
+            public readonly bool IsDead;
+
+            public UnitTurnStart(TacticalUnit u)
+            {
+                Id = u.id;
+                Team = u.team;
+                Position = u.position;
+                Health = u.health;
+                IsDead = u.isDead;
+            }
+        }
+
         /// <summary>Version en donnée pure de RunPlanningPhase — même timing exactement.</summary>
         private IEnumerator RunPlanningPhasePure(MatchState ms, int turnNumber)
         {
@@ -63,6 +88,16 @@ namespace Novgov.Server
 
             if (shouldGhost)
             {
+                // Journalisé explicitement (2026-09-08) : jusqu'ici totalement silencieux, donc
+                // impossible à distinguer après coup d'un vrai AFK/déconnexion — un joueur ayant bien
+                // soumis ses ordres mais ghosté quand même par un bug (ex. désynchronisation du
+                // numéro de tour, voir DrainMessages) ne laissait AUCUNE trace. Ce log est la seule
+                // preuve qu'aura une session future pour distinguer les deux sans deviner à l'aveugle
+                // (voir le rapport joueur "il y a toujours de l'IA" du 2026-09-08, qui a fini par
+                // trouver sa cause réelle ailleurs — voir OnOpponentGhosted côté client — mais SANS
+                // ce genre de preuve, faute d'accès à un vrai log de session en cours).
+                Debug.Log($"[Ghost] [{ms.MatchId}] Équipe {conn.TeamId} ({conn.UserId}) ghostée ce tour — IsDisconnected={conn.IsDisconnected}, HasSubmittedThisTurn={conn.HasSubmittedThisTurn}.");
+
                 foreach (var u in ms.World.units.Where(u => u.team == conn.TeamId)) ms.PendingOrderNodes.Remove(u.id);
 
                 if (!opponent.IsDisconnected)
@@ -136,6 +171,24 @@ namespace Novgov.Server
             }
 
             var unitsBeforeResolution = ms.World.units.Where(u => !u.isDead).ToList();
+
+            // ÉTAT DE DÉBUT DE TOUR, CAPTURÉ PAR VALEUR (2026-09-07).
+            //
+            // TacticalUnit est une CLASSE (TacticalTypes.cs) et TacticalResolver.Resolve la mute EN
+            // PLACE (unit.position, target.health, target.isDead). `unitsBeforeResolution` ne contient
+            // donc que des RÉFÉRENCES : une fois la résolution terminée, ces objets portent l'état de
+            // FIN de tour, et son nom ne veut plus rien dire. Or c'est exactement lui qui servait à
+            // amorcer le rejeu dans BuildSnapshotsFromEventsPure — le tour entier était donc rejoué
+            // à partir de son propre résultat, à chaque tour des deux modes PvP :
+            //   - le snapshot t=0 plaçait déjà chaque unité à sa position FINALE, puis le premier
+            //     événement Move la ramenait brutalement en arrière pour la faire re-marcher ;
+            //   - les PV étaient amorcés à leur valeur d'APRÈS combat, puis chaque événement Shot
+            //     retranchait ses dégâts une SECONDE fois (barres de vie fausses toute la partie) ;
+            //   - une unité tuée ce tour-ci était marquée morte dès la première image du rejeu, avant
+            //     même le tir qui la tue.
+            // Une copie par valeur, prise AVANT Resolve, est la seule chose qui immunise ce rejeu
+            // contre la mutation en place.
+            var turnStartStates = unitsBeforeResolution.Select(u => new UnitTurnStart(u)).ToList();
             var mortarStrikes = new List<Vector2>();
             var ordersTeam1 = new List<UnitOrders>();
             var ordersTeam2 = new List<UnitOrders>();
@@ -168,7 +221,7 @@ namespace Novgov.Server
             double resolveOnlyMs = (DateTime.UtcNow - executionStartUtc).TotalMilliseconds - preResolveMs;
             Debug.Log($"[Timing] [{ms.MatchId}] Tour {turnNumber} : préparation (ordres) {preResolveMs:F1}ms réelles, TacticalResolver.Resolve() SEUL {resolveOnlyMs:F1}ms réelles ({tacticalEvents.Count} événement(s) générés).");
 
-            var snapshots = BuildSnapshotsFromEventsPure(ms, tacticalEvents, unitsBeforeResolution);
+            var snapshots = BuildSnapshotsFromEventsPure(ms, tacticalEvents, turnStartStates);
 
             // Occupation de fenêtre PROPRE À CETTE PARTIE (voir MatchState.OccupiedWindows) — remplace
             // BuildingWindow.OccupyWindow/VacateWindow (composant de scène PARTAGÉ). Hauteur Y
@@ -268,7 +321,12 @@ namespace Novgov.Server
                             checkpoint.overwatchToSet = BuildOverwatchTriggerPure(ms.World, pos2D, previousPos, node.action);
                             // Même rattachement que GarnisonFenetre, et pour la même raison : sans lui
                             // la garnison de porte était elle aussi impossible à toucher.
-                            checkpoint.enterBuildingId = MatchGeometry.FindBuildingAt(ms.World, pos2D);
+                            // Tolérant à la position de porte : un point de porte est TOUJOURS hors de
+                            // l'empreinte (voir MatchGeometry.DoorAttachToleranceMeters) — avec un
+                            // PointInPolygon strict ce rattachement échouait à 100%.
+                            // attachBuildingId, PAS enterBuildingId : garder la porte ne doit pas faire
+                            // franchir le seuil (voir PathCheckpoint.attachBuildingId).
+                            checkpoint.attachBuildingId = MatchGeometry.FindBuildingAtOrNear(ms.World, pos2D, MatchGeometry.DoorAttachToleranceMeters);
                             break;
 
                         case TacticalPathManager.NodeAction.SeCacher:
@@ -310,7 +368,9 @@ namespace Novgov.Server
 
                         case TacticalPathManager.NodeAction.EntrerBatiment:
                             {
-                                int bIdx = MatchGeometry.FindBuildingAt(ms.World, pos2D);
+                                // Tolérant à la position de porte, sinon l'entrée ne se produisait
+                                // JAMAIS : voir MatchGeometry.FindBuildingAtOrNear.
+                                int bIdx = MatchGeometry.FindBuildingAtOrNear(ms.World, pos2D, MatchGeometry.DoorAttachToleranceMeters);
                                 if (bIdx >= 0) checkpoint.enterBuildingId = bIdx;
                                 break;
                             }
@@ -363,7 +423,11 @@ namespace Novgov.Server
         {
             if (action == TacticalPathManager.NodeAction.GuetterPorte)
             {
-                int bIdx = MatchGeometry.FindBuildingAt(world, finalPos);
+                // Tolérant, pour la même raison que le rattachement ci-dessus : finalPos EST un point
+                // de porte, donc toujours hors de l'empreinte. Avec le test strict, la porte n'était
+                // jamais trouvée et le déclencheur de guet en LIGNE DE PORTE (linePointA/linePointB,
+                // rapport §2.9) se rabattait systématiquement sur le cône générique — du code mort.
+                int bIdx = MatchGeometry.FindBuildingAtOrNear(world, finalPos, MatchGeometry.DoorAttachToleranceMeters);
                 TacticalBuilding building = bIdx >= 0 ? world.GetBuilding(bIdx) : null;
                 TacticalDoor door = building != null ? MatchGeometry.GetClosestDoor(building, finalPos) : null;
                 if (door != null)
@@ -384,7 +448,7 @@ namespace Novgov.Server
         /// (SetNetworkHealth/ApplyNetworkDeath/transform.position) : les dictionnaires locaux
         /// pos/health/dead/shooting SONT la seule source de vérité pour construire chaque Snapshot
         /// (voir CaptureTacticalSnapshotPure).</summary>
-        private List<Snapshot> BuildSnapshotsFromEventsPure(MatchState ms, List<TacticalEvent> events, List<TacticalUnit> unitsBeforeResolution)
+        private List<Snapshot> BuildSnapshotsFromEventsPure(MatchState ms, List<TacticalEvent> events, List<UnitTurnStart> turnStartStates)
         {
             var pos = new Dictionary<string, Vector2>();
             var rotation = new Dictionary<string, float>();
@@ -401,15 +465,17 @@ namespace Novgov.Server
             // exact du franchissement.
             var yByUnit = new Dictionary<string, float>();
 
-            foreach (var u in unitsBeforeResolution)
+            // Amorçage depuis la COPIE PAR VALEUR de début de tour, jamais depuis les TacticalUnit
+            // eux-mêmes : Resolve les a mutés en place entre-temps (voir UnitTurnStart).
+            foreach (var u in turnStartStates)
             {
-                pos[u.id] = u.position;
-                rotation[u.id] = 0f;
-                health[u.id] = u.health;
-                dead[u.id] = u.isDead;
-                shooting[u.id] = false;
-                teamOf[u.id] = u.team;
-                yByUnit[u.id] = ms.CurrentYById.TryGetValue(u.id, out float y0) ? y0 : 0f;
+                pos[u.Id] = u.Position;
+                rotation[u.Id] = 0f;
+                health[u.Id] = u.Health;
+                dead[u.Id] = u.IsDead;
+                shooting[u.Id] = false;
+                teamOf[u.Id] = u.Team;
+                yByUnit[u.Id] = ms.CurrentYById.TryGetValue(u.Id, out float y0) ? y0 : 0f;
             }
 
             var snapshots = new List<Snapshot> { CaptureTacticalSnapshotPure(ms, 0, pos, rotation, health, dead, shooting, teamOf, yByUnit) };

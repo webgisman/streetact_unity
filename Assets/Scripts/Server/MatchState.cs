@@ -159,6 +159,37 @@ namespace Novgov.Server
             return -1;
         }
 
+        /// <summary>Distance maximale, en mètres, à laquelle un point désignant une PORTE est encore
+        /// rattaché à son bâtiment par <see cref="FindBuildingAtOrNear"/>. Couvre les deux positions
+        /// de porte que le client peut envoyer : le seuil lui-même (CityGenerator place une porte à
+        /// <c>outwardNormal * 0.05f</c> de la façade, donc 5 cm DEHORS) et le seuil extérieur
+        /// (DoorInteraction.GetOutsidePosition = 1.2 m de plus, soit 1.25 m dehors).</summary>
+        public const float DoorAttachToleranceMeters = 2f;
+
+        /// <summary>Comme <see cref="FindBuildingAt"/>, mais rattache aussi un point situé JUSTE À
+        /// CÔTÉ d'un bâtiment (au plus <paramref name="maxDistance"/> de son contour) — au bâtiment
+        /// le plus proche en cas d'ambiguïté.
+        ///
+        /// POURQUOI (2026-09-07). Les actions de porte (ENTRER DANS LE BÂTIMENT / INFILTRATION,
+        /// GUETTER PAR LA PORTE) envoient forcément un point qui n'est PAS dans l'empreinte : une
+        /// porte est générée 5 cm en dehors de sa façade (CityGenerator.cs, <c>doorPos = ... +
+        /// outwardNormal * 0.05f</c>) et le « seuil extérieur » 1.25 m dehors. Le
+        /// <c>PointInPolygon</c> strict de FindBuildingAt renvoyait donc systématiquement -1 pour
+        /// ces points, avec deux conséquences invisibles mais graves :
+        ///   - <c>checkpoint.enterBuildingId</c> restait à -1 : l'unité n'entrait JAMAIS dans le
+        ///     bâtiment en multijoueur. Tout le mécanisme d'entrée/sortie du moteur (corrigé le
+        ///     2026-09-06, tests à l'appui) était correct mais tout simplement inatteignable, car
+        ///     rien ne lui fournissait jamais un identifiant de bâtiment valide ;
+        ///   - GUETTER PAR LA PORTE posait <c>isGarrisoned = true</c> (donc -75% de dégâts subis)
+        ///     SANS rattachement de bâtiment — exactement ce que le rattachement était censé
+        ///     empêcher : un soldat planté dans la rue, en couverture maximale, que l'adversaire ne
+        ///     pouvait pas comprendre ni contrer.
+        /// Le serveur reste seul juge : il ne fait pas confiance à un identifiant de bâtiment
+        /// envoyé par le client (le protocole n'en transporte aucun), il déduit lui-même le
+        /// bâtiment de la géométrie qu'il a lui-même figée pour ce match.</summary>
+        public static int FindBuildingAtOrNear(TacticalWorldState world, Vector2 pos, float maxDistance)
+            => Novgov.TacticalCore.GeometryMath.FindBuildingAtOrNear(world.buildings, pos, maxDistance);
+
         /// <summary>Équivalent pur de BuildingStructure.GetClosestWindow(requireFree) — le filtre de
         /// disponibilité est fourni par l'appelant (voir MatchState.OccupiedWindows), jamais lu depuis
         /// BuildingWindow.isOccupied (état partagé entre parties).</summary>
@@ -273,6 +304,25 @@ namespace Novgov.Server
                 default: return UnitAI.DefaultMaxMovementPerTurn; // Fantassin : 50m, la référence
             }
         }
+
+        /// <summary>Type d'unité déduit des drapeaux d'une UnitAI. Remontée ici (2026-09-07) depuis
+        /// MatchSessionManager_Deployment.InferUnitTypeEnum pour que le CLIENT puisse interroger le
+        /// même barème que le serveur : l'aperçu de trajectoire colore la portion hors budget
+        /// (TacticalPathManager_PathDrawing), et une valeur qui divergerait de celle du serveur
+        /// referait exactement le bug qu'elle est censée rendre visible.
+        /// L'ordre des tests est significatif : isTank est aussi vrai pour le véhicule canon et le
+        /// mortier (voir UnitAI.Awake), donc les cas spécifiques passent en premier.</summary>
+        public static UnitSpawnerUI.UnitType InferType(UnitAI u)
+        {
+            if (u == null) return UnitSpawnerUI.UnitType.Fantassin;
+            if (u.isMortar) return UnitSpawnerUI.UnitType.Mortier;
+            if (u.isCanonVehicle) return UnitSpawnerUI.UnitType.VehiculeCanon;
+            if (u.isTank) return UnitSpawnerUI.UnitType.CharLeopard;
+            return UnitSpawnerUI.UnitType.Fantassin;
+        }
+
+        /// <summary>Budget de déplacement d'une UnitAI — raccourci de MovementBudget(InferType(u)).</summary>
+        public static float MovementBudgetFor(UnitAI u) => MovementBudget(InferType(u));
 
         public static string TypeName(UnitSpawnerUI.UnitType type)
         {

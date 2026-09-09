@@ -269,6 +269,15 @@ namespace Novgov.TacticalCore
             public readonly List<Vector2> steps = new List<Vector2>();
             public readonly Dictionary<int, PathCheckpoint> checkpointAtStep = new Dictionary<int, PathCheckpoint>();
             public readonly Dictionary<int, VerticalTransition> transitionAtStep = new Dictionary<int, VerticalTransition>();
+            /// <summary>Pas INDIVISIBLES autres qu'un franchissement vertical : aujourd'hui le
+            /// franchissement de seuil d'une porte (voir ExpandOrder, entrée dans un bâtiment). Comme
+            /// pour une montée/descente de toit, s'arrêter AU MILIEU d'un tel pas est incohérent — la
+            /// position 2D franchirait à moitié la façade et se retrouverait DANS l'empreinte, sur une
+            /// cellule creusée non franchissable, pendant que le checkpoint porteur d'enterBuildingId
+            /// serait supprimé par la troncature (tout index >= la coupe). L'unité serait alors
+            /// géométriquement dedans et logiquement dehors : exactement l'état incohérent que
+            /// l'entrée par la porte vise à supprimer.</summary>
+            public readonly HashSet<int> atomicStep = new HashSet<int>();
         }
 
         /// <summary>Relie chaque paire de checkpoints consécutifs par le VRAI chemin de la grille
@@ -433,9 +442,40 @@ namespace Novgov.TacticalCore
                         List<Vector2> targetFootprint = state.buildings[targetInterior].footprint;
                         Vector2 approach = NearestGroundCellOutsideFootprint(state.grid, targetFootprint, checkpoint.position);
                         AppendLeg(state, expanded, ref cursor, approach, null);
-                        expanded.steps.Add(checkpoint.position);
-                        cursor = checkpoint.position;
-                        currentInterior = targetInterior;
+                        // 2026-09-07 : franchir le seuil doit poser l'unité DEDANS. Le point envoyé
+                        // par le client pour une entrée est celui de la PORTE, qui est toujours
+                        // légèrement en dehors de l'empreinte (CityGenerator place une porte à 5 cm
+                        // vers l'extérieur de sa façade, et le « seuil extérieur » à 1.25 m) : y
+                        // atterrir tel quel laissait l'unité marquée « à l'intérieur » (currentInterior)
+                        // tout en étant géométriquement DEHORS — un état incohérent qui fausse ensuite
+                        // le confinement du déplacement intérieur et l'exemption de mur de
+                        // LineOfSight.WallBelongsToOwnBuilding (l'unité tirait à travers sa propre
+                        // façade, ou n'était vue de personne, selon le côté).
+                        // Sentinelle volontairement IMPOSSIBLE plutôt que checkpoint.position (qui est
+                        // dehors) : NearestCellInsideFootprint renvoie son repli quand AUCUN centre de
+                        // cellule ne tombe dans l'empreinte (bâtiment plus petit qu'une cellule d'1 m).
+                        // Se replier alors sur le point de porte poserait l'unité DEHORS tout en la
+                        // marquant à l'intérieur — l'incohérence même que cette entrée corrige. Dans ce
+                        // cas dégénéré on n'entre tout simplement pas.
+                        Vector2 noInteriorSentinel = new Vector2(float.MaxValue, float.MaxValue);
+                        Vector2 entryPoint = GeometryMath.PointInPolygon(targetFootprint, checkpoint.position)
+                            ? checkpoint.position
+                            : NearestCellInsideFootprint(state.grid, targetFootprint, checkpoint.position, noInteriorSentinel);
+
+                        if (entryPoint.x == float.MaxValue)
+                        {
+                            // Empreinte trop petite pour contenir un point de grille : on s'arrête au
+                            // pied de la façade, sans rattachement. Mieux vaut un ordre qui n'aboutit
+                            // pas qu'une unité dans un état contradictoire pour le reste de la partie.
+                            cursor = approach;
+                        }
+                        else
+                        {
+                            expanded.atomicStep.Add(expanded.steps.Count); // franchissement indivisible (voir atomicStep)
+                            expanded.steps.Add(entryPoint);
+                            cursor = entryPoint;
+                            currentInterior = targetInterior;
+                        }
                     }
                     else
                     {
@@ -515,7 +555,7 @@ namespace Novgov.TacticalCore
                 //
                 // Un franchissement vertical est donc traité comme ATOMIQUE : hors de portée, on
                 // s'arrête AVANT lui (au dernier point déjà validé), jamais en son milieu.
-                bool legIsVerticalTransition = expanded.transitionAtStep.ContainsKey(i);
+                bool legIsVerticalTransition = expanded.transitionAtStep.ContainsKey(i) || expanded.atomicStep.Contains(i);
 
                 if (!legIsVerticalTransition)
                 {
@@ -681,6 +721,12 @@ namespace Novgov.TacticalCore
                 unit.isGarrisoned = true;
                 unit.windowNormal = null; // pas de restriction de cône pour une garnison de porte (rapport §2.9)
             }
+            // Rattachement sans entrée (GUETTER PAR LA PORTE) — voir PathCheckpoint.attachBuildingId.
+            if (checkpoint.attachBuildingId >= 0)
+            {
+                unit.currentBuildingId = checkpoint.attachBuildingId;
+            }
+
             if (checkpoint.enterBuildingId >= 0)
             {
                 unit.currentBuildingId = checkpoint.enterBuildingId;

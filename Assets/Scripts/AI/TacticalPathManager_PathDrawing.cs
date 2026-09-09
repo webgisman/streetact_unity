@@ -12,6 +12,8 @@ public partial class TacticalPathManager
     private UnityEngine.AI.NavMeshPath cachedNavPath;
     private static Gradient selectedGradient;
     private static Gradient normalGradient;
+    /// <summary>Dégradé « budget dépassé » réutilisé d'un redessin à l'autre — voir BuildBudgetGradient.</summary>
+    private static Gradient budgetGradient;
 
     // Fréquence et amplitude du "battement de cœur" des lignes de trajectoire.
     private const float HEARTBEAT_FREQUENCY = 5.24f; // ~1,2s par battement
@@ -112,7 +114,6 @@ public partial class TacticalPathManager
             LineRenderer lr = unitAI.tacticalLineRenderer;
             lr.startWidth = isSelected ? 0.42f : 0.22f;
             lr.endWidth = isSelected ? 0.20f : 0.10f;
-            lr.colorGradient = isSelected ? selectedGradient : normalGradient;
 
             // Recalculer le chemin uniquement s'il est marqué 'dirty'
             // HasTapTarget, jamais `!= Vector3.positiveInfinity` : ce test-là est toujours vrai (voir
@@ -217,8 +218,81 @@ public partial class TacticalPathManager
             {
                 lr.SetPosition(p, unitAI.cachedDrawPoints[p]);
             }
+
+            // BUDGET DE DÉPLACEMENT RENDU VISIBLE (2026-09-07).
+            // Le serveur tronque le chemin au budget de l'unité et SUPPRIME tout checkpoint au-delà
+            // de la coupe (TacticalResolver.TruncateToMovementBudget) : la posture finale — GUETTER,
+            // garnison, SE CACHER — est donc purement et simplement annulée si elle est hors de
+            // portée. Rien ne le disait au joueur : il traçait une longue ligne bleue, appuyait sur
+            // FIN DE TOUR, et son unité s'arrêtait au milieu sans embuscade et sans explication.
+            // La portion hors budget est maintenant tracée en rouge : elle se lit immédiatement
+            // comme "pas ce tour-ci".
+            // Un tir de mortier trace une ligne de visee a vol d'oiseau, pas un deplacement (et le
+            // serveur l'extrait des checkpoints avant toute troncature, voir BuildUnitOrdersPure) :
+            // pour ces ordres-la le trace ne represente pas une distance parcourue, donc pas de
+            // coloration de budget.
+            bool hasMortarShot = false;
+            for (int n = 0; n < unitAI.tacticalPath.Count; n++)
+            {
+                if (unitAI.tacticalPath[n].action == NodeAction.TirMortier) { hasMortarShot = true; break; }
+            }
+
+            lr.colorGradient = hasMortarShot
+                ? (isSelected ? selectedGradient : normalGradient)
+                : BuildBudgetGradient(unitAI.cachedDrawPoints, MovementBudgetOf(unitAI), isSelected);
         }
         isPathsDirty = false;
+    }
+
+    /// <summary>Budget de déplacement d'un tour, en mètres. Lit le barème AUTORITAIRE du serveur
+    /// plutôt que d'en recopier les valeurs : un aperçu calé sur une table divergente recréerait
+    /// exactement le bug qu'il est censé rendre visible.</summary>
+    private static float MovementBudgetOf(UnitAI unit) => Novgov.Server.UnitTypeStats.MovementBudgetFor(unit);
+
+    /// <summary>Dégradé qui bascule au rouge exactement là où le budget du tour est épuisé. Le
+    /// dégradé d'un LineRenderer se répartit sur la LONGUEUR de la ligne, donc la bascule est
+    /// placée à la fraction "distance du budget / longueur totale tracée".</summary>
+    private static Gradient BuildBudgetGradient(List<Vector3> points, float budgetMeters, bool isSelected)
+    {
+        // Distance AU SOL (XZ) uniquement, comme TruncateToMovementBudget côté serveur, qui mesure en
+        // Vector2 sur l'empreinte au sol. Compter la composante verticale gonflait le total d'autant
+        // que le bâtiment était haut (une escalade sur un toit de 9 m ajoutait ~9 m fictifs), donc la
+        // coupe rouge était dessinée PLUS LOIN que la vraie : l'aperçu promettait au joueur plus de
+        // chemin qu'il n'en aura — précisément l'erreur que cette coloration existe pour éviter.
+        float total = 0f;
+        for (int i = 1; i < points.Count; i++)
+        {
+            float dx = points[i].x - points[i - 1].x;
+            float dz = points[i].z - points[i - 1].z;
+            total += Mathf.Sqrt(dx * dx + dz * dz);
+        }
+
+        // Tout tient dans le budget : dégradé normal, aucune alerte à afficher.
+        if (total <= budgetMeters || total < 0.01f) return isSelected ? selectedGradient : normalGradient;
+
+        float cut = Mathf.Clamp01(budgetMeters / total);
+        Color reachable = isSelected ? new Color(0f, 0.95f, 1f) : new Color(0.2f, 0.7f, 1f);
+        Color unreachable = new Color(1f, 0.25f, 0.2f);
+        float alpha = isSelected ? 1.0f : 0.65f;
+
+        // Bascule NETTE (deux clés très rapprochées) plutôt qu'un fondu : c'est une limite précise,
+        // pas une zone d'incertitude.
+        // Instance RÉUTILISÉE (jamais un `new Gradient()` par unité et par redessin) : ce tracé est
+        // déjà un point chaud connu sur mobile — voir la note sur BuildFromScene plus haut — et la
+        // phase CreationPath le rappelle à chaque frame. LineRenderer.colorGradient copie les clés
+        // à l'affectation, donc réutiliser l'objet est sans effet de bord.
+        Gradient g = budgetGradient ?? (budgetGradient = new Gradient());
+        g.SetKeys(
+            new GradientColorKey[]
+            {
+                new GradientColorKey(reachable, 0f),
+                new GradientColorKey(reachable, Mathf.Max(0f, cut - 0.001f)),
+                new GradientColorKey(unreachable, Mathf.Min(1f, cut + 0.001f)),
+                new GradientColorKey(unreachable, 1f),
+            },
+            new GradientAlphaKey[] { new GradientAlphaKey(alpha, 0f), new GradientAlphaKey(alpha * 0.85f, 1f) }
+        );
+        return g;
     }
 
     /// <summary>Ajoute à <paramref name="drawPoints"/> le chemin RÉELLEMENT calculé par

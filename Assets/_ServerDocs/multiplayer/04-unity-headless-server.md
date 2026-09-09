@@ -108,12 +108,18 @@ qui ne touchent JAMAIS un GameObject de scène après l'instant de démarrage. L
    touche plus jamais la scène — deux parties sur deux tuiles différentes ne se marchent jamais
    dessus (voir `Novgov.Server.MatchGeometry`, qui remplace toutes les requêtes géométriques par
    des équivalents purs lisant `ms.World`).
-3. Déploiement (`RunDeploymentPhasePure`) : jusqu'à 45s, placement manuel en parallèle
-   (`submit_deployment`), recadré dans la zone légale, repli automatique par camp sinon — mais les
-   unités déployées sont directement des `Novgov.TacticalCore.TacticalUnit` (données pures, voir
-   `MatchState.cs`), **aucune vraie `UnitAI` n'est jamais instanciée** pour ces deux modes.
+3. Déploiement (`RunDeploymentPhasePure`) : jusqu'à `DeploymentSeconds` = 300 s (300 s de marge
+   depuis chaque joueur est PRÊT, pas depuis le début de la phase — voir `MapReadyMaxWaitSeconds`
+   plus bas), placement manuel en parallèle (`submit_deployment`), plus AUCUN recadrage de zone
+   (`ClampToDeploymentZone` désactivée le 2026-09-06, sur demande explicite), repli automatique par
+   camp sinon — mais les unités déployées sont directement des `Novgov.TacticalCore.TacticalUnit`
+   (données pures, voir `MatchState.cs`), **aucune vraie `UnitAI` n'est jamais instanciée** pour ces
+   deux modes. Voir [03-network-protocol.md](03-network-protocol.md) pour le budget exact
+   (6 unités de combat + 8 barricades + un budget en points).
 4. Boucle de tour (`RunPlanningPhasePure` puis `RunExecutionPhasePure`) :
-   - Planification : 60s, `turn_timer` chaque seconde, comme avant.
+   - Planification : `PlanningSeconds` = 300 s (60 s à l'origine, relevé le 2026-09-07 pour être
+     cohérent avec le déploiement — c'est la phase qui demande le plus de travail au joueur, et le
+     compte à rebours ne s'affiche plus, voir plus bas), `turn_timer` diffusé chaque seconde.
    - Un joueur absent/pas soumis : ses unités "tiennent la position" ce tour-ci (aucun ordre) —
      voir "Ghost" plus bas, différent de la Conquête.
    - Exécution : `TacticalResolver.Resolve(ms.World, ordersEquipe1, ordersEquipe2, mortarStrikes)`
@@ -121,6 +127,13 @@ qui ne touchent JAMAIS un GameObject de scène après l'instant de démarrage. L
      quelques dizaines de ms) tous les événements du tour. Le rejeu tick-par-tick envoyé au client
      (`turn_result`/`Snapshot[]`) est reconstruit à partir de ce journal d'événements — le serveur
      ne "joue" plus le tour en temps réel, il calcule le résultat puis raconte l'histoire.
+     **Amorcé depuis une copie PAR VALEUR de l'état de début de tour** (`UnitTurnStart`, ajouté le
+     2026-09-07) : `TacticalUnit` est une classe que `Resolve` mute EN PLACE, donc garder une
+     simple référence pour amorcer le rejeu — ce qui était fait avant cette date — finissait par
+     rejouer le tour à partir de son PROPRE résultat (position déjà finale au premier snapshot, PV
+     retranchés deux fois). Le chemin "vivant" (Conquête/entraînement, plus bas) n'était pas
+     concerné : il résout sur un `TacticalWorldState` distinct des vraies `UnitAI` dont il amorce
+     le rejeu.
    - `turn_result` envoyé aux deux clients (filtré par brouillard de guerre, voir
      `ComputeVisibleUnitIds`) ; persistance minimale du match via PostgREST.
 5. Fin de partie : un camp à 0 unité vivante (ou plafond de tours atteint) → `match_over` +
@@ -132,6 +145,26 @@ assumée** : le log détaillé par tour (`match_turn_orders`/`match_event_log`) 
 écrit — seules `matches`/`match_participants` le sont (RLS activée sur `match_turn_orders` depuis
 l'audit de sécurité du 2026-08-30, donc pas accessible directement par un client même si elle
 était un jour peuplée par erreur).
+
+## Signal de vie serveur → client (heartbeat), 2026-09-07
+
+Le client applique un `ReceiveTimeout` FINI de 25 s à sa socket (`GameServerClient.Connect`) — 25 s
+sans le moindre octet reçu et il se déconnecte avec "connexion perdue". Or le serveur pouvait
+rester longtemps sans rien envoyer à une connexion authentifiée : un joueur seul en file d'attente
+(avant même l'étape 1), l'attente d'une génération de tuile inédite avant `match_found`, la
+Conquête, l'entraînement contre l'IA... Un keepalive existait déjà mais était LOCAL à la phase de
+déploiement (`RunDeploymentPhasePure`), donc absent de toutes les autres phases — un joueur seul en
+file d'attente pour Deathmatch/Zone de Contrôle était donc **systématiquement déconnecté avant
+même de pouvoir être apparié**, rendant ces deux modes pratiquement injouables sans un second
+joueur immédiat.
+
+Le signal de vie est désormais une propriété de la **connexion**, pas d'une phase :
+`PlayerConnection.PumpKeepalives()`, appelé en toute première ligne de `MatchSessionManager.Update()`,
+envoie un `heartbeat` à toute connexion authentifiée restée silencieuse plus de
+`PlayerConnection.KeepaliveIntervalSeconds` = 8 s (tout envoi réel repousse d'autant le prochain).
+Le client n'a rien à en faire — son `switch` sur les messages entrants ignore ce type — c'est
+l'ARRIVÉE de la trame qui réarme le timeout de sa socket. Toute future phase ajoutée au serveur en
+bénéficie automatiquement, sans rien avoir à implémenter.
 
 ## Le système Ghost — deux implémentations différentes selon le mode
 

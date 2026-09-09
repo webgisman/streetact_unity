@@ -20,7 +20,8 @@ vérité (`Assets/Scripts/Network/MultiplayerMatchController.cs`) :
   qui a été fait, juste avec ces noms réels.
 - **Mise à jour du 2026-08-29 (session bugs post-test-2-téléphones)** : le déploiement automatique
   et symétrique décrit plus bas (`UnitSpawnerUI.AutoDeployBattlefield()`) a été **remplacé** par une
-  vraie phase de placement manuel (jusqu'à 45s, en parallèle pour les deux joueurs) — voir
+  vraie phase de placement manuel (jusqu'à 300s depuis 2026-09-06, 45s à l'origine, en
+  parallèle pour les deux joueurs) — voir
   `08-known-issues-and-todo.md` §10.2/§10.4 et `03-network-protocol.md` ("submit_deployment"/
   "deployment_result") pour le détail complet. `AutoDeployBattlefield()` reste utilisée en solo
   uniquement ; côté serveur, `AutoDeployTeamFallback()` (repli PAR CAMP) prend le relais si un
@@ -107,8 +108,9 @@ le multijoueur V1 utilise bien le dock de déploiement solo existant (`StartPlac
 `SpawnUnitAt`), pas un écran séparé — mais verrouillé sur le seul camp du joueur local
 (`OpenDockForMultiplayerDeployment(team)`) et limité à un budget de 4 unités de combat + 8
 barricades (`maxUnitsPerTeam` forcé à 4 pour la durée du match). Chaque joueur place manuellement
-sa propre escouade en parallèle de l'autre (fenêtre de 45s, voir `MatchSessionManager.
-RunDeploymentPhase`), le client envoie `submit_deployment`, et **ne spawn jamais ses propres
+sa propre escouade en parallèle de l'autre (fenêtre de 300s depuis 2026-09-06, voir
+`MatchSessionManager.RunDeploymentPhasePure`), le client envoie `submit_deployment`, et **ne
+spawn jamais ses propres
 unités à partir de son placement local** — il attend `deployment_result` (positions validées/
 recadrées par le serveur pour les DEUX camps) avant de réellement les instancier, exactement comme
 il le fait déjà pour `turn_result`. Voir `03-network-protocol.md` et
@@ -133,3 +135,23 @@ vrai draft de composition d'équipe.
 - L'esthétique (fog de guerre, animations, sons) reste identique — seule la source de vérité du
   *résultat* change entre solo (calculé localement) et multijoueur (calculé serveur, rejoué
   localement).
+
+## Mise à jour du 2026-09-07 — jouabilité de la saisie d'ordres
+
+Trois ajouts côté `TacticalPathManager_*`/`WaypointMarker.cs`, aucun nouveau message réseau :
+
+- **Bouton d'annulation tactile** (`undo-node-button`, `TacticalBottomBarScreen.uxml`) : jusqu'ici
+  retirer le dernier point posé n'était possible qu'au clic DROIT de la souris — rien sur la
+  plateforme cible (téléphone). Logique factorisée dans `TacticalPathManager.AnnulerDernierPoint()`,
+  partagée entre le bouton et le clic droit.
+- **Marqueurs holographiques rattachés à leur nœud** (`WaypointMarker.owner`/`nodeIndex`) : annuler
+  un point détruit maintenant son marqueur avec lui (`WaypointMarker.DestroyMarkersOf`) — avant,
+  seule la ligne bleue se raccourcissait, le marqueur restant visible jusqu'au tour suivant.
+- **Aperçu du budget de déplacement** (`TacticalPathManager_PathDrawing.BuildBudgetGradient`) : la
+  portion du tracé au-delà du budget de mouvement de l'unité (que le serveur tronque et dont il
+  supprime toute posture, `TacticalResolver.TruncateToMovementBudget`) est maintenant dessinée en
+  ROUGE plutôt que de rester invisible. Barème lu depuis `Novgov.Server.UnitTypeStats.
+  MovementBudgetFor` — une seule source, jamais dupliquée côté client.
+
+Aucun changement de protocole : ces trois ajouts sont purement côté présentation, sur des données
+déjà transmises (`tacticalPath`, le type d'unité).

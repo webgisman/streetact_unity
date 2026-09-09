@@ -788,7 +788,27 @@ public class UnitSpawnerUI : MonoBehaviour
             if (ai != null)
             {
                 ai.teamID = team;
+                // En multijoueur, "mon" camp n'est pas toujours l'équipe 1 (voir
+                // MultiplayerMatchController.LocalTeamId — le 2e joueur à rejoindre est l'équipe 2) :
+                // (team == 1) codé en dur marquait alors les unités du joueur équipe 2, posées sur SON
+                // PROPRE dock de déploiement (OpenDockForMultiplayerDeployment(localTeamId)), comme
+                // NON jouables dès leur pose. Sans conséquence pour le combat lui-même (le résultat
+                // serveur/snapshot est de toute façon recorrigé juste après, voir
+                // MultiplayerMatchController.OnDeploymentResult/PlaySnapshotsBody), mais faussait déjà
+                // isPlayerControlled pendant la PRÉVISUALISATION de placement. En solo, l'équipe 1
+                // reste toujours celle du joueur (pas de LocalTeamId), d'où le repli inchangé.
+                // LocalTeamId n'existe que côté CLIENT (voir le #if !UNITY_SERVER englobant tout
+                // MultiplayerMatchController sauf ses membres statiques) — le serveur, qui n'a de
+                // toute façon aucun tap/caméra à raisonner, garde le seul repli (team == 1).
+#if !UNITY_SERVER
+                bool isMultiplayerContext = Novgov.Network.MultiplayerMatchController.IsActive
+                    || Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive;
+                ai.isPlayerControlled = (isMultiplayerContext && Novgov.Network.MultiplayerMatchController.Instance != null)
+                    ? (team == Novgov.Network.MultiplayerMatchController.Instance.LocalTeamId)
+                    : (team == 1);
+#else
                 ai.isPlayerControlled = (team == 1);
+#endif
                 ai.teamAssignedBySpawner = true;
                 ai.sourceUnitType = type.ToString();
                 ai.isDead = false;
@@ -936,6 +956,26 @@ public class UnitSpawnerUI : MonoBehaviour
     }
 
     public int RemainingBarricadeStock(int team) => Mathf.Max(0, maxBarricadesPerTeam - CountBarricadesForTeam(team));
+
+    /// <summary>Somme des coûts en points (Novgov.Server.UnitTypeStats.DeploymentCost) des unités de
+    /// combat déjà posées pour ce camp — jamais les barricades, gratuites. Ajouté le 2026-09-08 pour
+    /// afficher le budget en points PENDANT le déploiement PvP (voir RefreshDeploymentDockUI) : le
+    /// dock ne plafonnait jusqu'ici que le NOMBRE d'unités (maxUnitsPerTeam), jamais leur coût — un
+    /// joueur pouvait construire une composition entièrement lourde (ex. 2 CharLeopard + 1 Mortier +
+    /// 1 Fantassin, sous la limite de 4 unités) que le serveur refusait ensuite en partie SANS que
+    /// le dock ait jamais montré la moindre limite de points. Voir
+    /// Novgov.Server.MatchSessionManager.FilterRosterToBudget côté serveur.</summary>
+    public int GetTeamDeploymentPointCost(int team)
+    {
+        int total = 0;
+        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
+        {
+            UnitAI u = UnitAI.AllLivingUnits[i];
+            if (u == null || u.isDead || u.teamID != team) continue;
+            total += Novgov.Server.UnitTypeStats.DeploymentCost(Novgov.Server.UnitTypeStats.InferType(u));
+        }
+        return total;
+    }
 
     /// <summary>
     /// Échantillonne plusieurs points de NavMesh autour de "desired" (le point visé lui-même, puis
@@ -1501,8 +1541,26 @@ public class UnitSpawnerUI : MonoBehaviour
         if (isPanelOpen)
         {
             int currentTeamCount = (selectedTeam == 1) ? playerUnits : enemyUnits;
-            effectifsLabel.text = $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}";
-            effectifsLabel.style.color = new StyleColor(currentTeamCount >= maxUnitsPerTeam ? NovgovTheme.Danger : NovgovTheme.Info);
+            if (mpDeployment)
+            {
+                // Budget en POINTS affiché en plus du nombre d'unités (2026-09-08) — voir
+                // GetTeamDeploymentPointCost : le serveur (Novgov.Server.MatchSessionManager.
+                // FilterRosterToBudget) plafonne aussi le coût total, pas seulement le nombre
+                // d'unités, et ne le disait jusqu'ici JAMAIS pendant le placement — un joueur qui
+                // privilégiait des unités lourdes (Char Leopard/Mortier/Véhicule Canon) découvrait
+                // le dépassement uniquement APRÈS confirmation, une partie de son déploiement déjà
+                // écartée sans avertissement préalable.
+                int points = GetTeamDeploymentPointCost(selectedTeam);
+                effectifsLabel.text = $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}   •   Points : {points} / {Novgov.Server.MatchSessionManager.CombatPointBudget}";
+                effectifsLabel.style.color = new StyleColor(
+                    (currentTeamCount >= maxUnitsPerTeam || points > Novgov.Server.MatchSessionManager.CombatPointBudget)
+                        ? NovgovTheme.Danger : NovgovTheme.Info);
+            }
+            else
+            {
+                effectifsLabel.text = $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}";
+                effectifsLabel.style.color = new StyleColor(currentTeamCount >= maxUnitsPerTeam ? NovgovTheme.Danger : NovgovTheme.Info);
+            }
 
             team1Button.text = $"Joueur ({playerUnits})";
             team2Button.text = $"IA ({enemyUnits})";

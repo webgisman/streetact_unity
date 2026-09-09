@@ -19,7 +19,38 @@ public partial class UnitAI
         if (agent == null) return;
 
         navMeshReady = true;
-        
+
+        // MULTIJOUEUR : NE JAMAIS réactiver l'agent ni recaler l'unité (2026-09-07).
+        //
+        // En réseau, le serveur est seul maître de la position : le client se contente d'écrire
+        // transform.position à chaque snapshot (MultiplayerMatchController.PlaySnapshotsBody), et
+        // désactive délibérément le NavMeshAgent de chaque unité qu'il fait apparaître — même raison
+        // que le `skipSafeSpawnAdjustment: true` du 2026-09-06 : une position déjà authentifiée par
+        // le serveur ne doit plus JAMAIS être recalculée localement.
+        // Or cette méthode défaisait les deux, systématiquement et sans que personne le voie :
+        //   - `AutoCheckNavMeshCoroutine` l'appelle 0.2s après CHAQUE apparition d'unité (UnitAI.cs),
+        //     et CityGenerator la rappelle sur TOUTES les unités après chaque bake de NavMesh ;
+        //   - elle réactivait l'agent (qui reprend alors la main sur le transform et se met à lutter
+        //     contre les positions envoyées par le serveur — d'où les unités qui "glissent" sans
+        //     animation de marche) ;
+        //   - puis elle appelait `agent.Warp()` vers le point de NavMesh le plus proche dans un rayon
+        //     de 50 MÈTRES, téléportant l'unité loin de l'endroit où le serveur (et donc l'autre
+        //     joueur) la voit.
+        // C'était une seconde cause, indépendante et jamais identifiée, du symptôme déjà signalé
+        // "unités affichées ailleurs qu'à leur position réelle".
+        // Le test porte sur "une partie EN RÉSEAU est en cours" (déploiement PvP ou match), jamais
+        // sur IsFlowActive : celui-ci est vrai pour TOUT écran multijoueur, écrans de login et de
+        // choix de mode compris, et plusieurs retours au menu de démarrage (ZoneMapController
+        // "RETOUR"/"OK", ce fichier-ci n'y peut rien) ne repassent jamais l'état à Hidden. Une partie
+        // SOLO lancée après un simple passage par le menu multijoueur aurait alors trouvé toutes ses
+        // unités avec un NavMeshAgent désactivé — donc parfaitement immobiles.
+        if (Novgov.Network.MultiplayerMatchController.IsActive
+            || Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive)
+        {
+            agent.enabled = false;
+            return;
+        }
+
         // Réactiver l'agent et le placer sur le NavMesh
         agent.enabled = true;
         

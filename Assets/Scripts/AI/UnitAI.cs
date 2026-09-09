@@ -152,6 +152,11 @@ public partial class UnitAI : MonoBehaviour
     private GameObject selectionRing;
     private AudioSource footstepAudioSource;
 
+    // Collider mis en cache pour SelectionAnchorWorldPos (voir plus bas) — posé une seule fois par
+    // Start(), jamais recréé ensuite (seulement activé/désactivé par SetVisualsVisibility), donc
+    // sûr à mettre en cache sans jamais devenir périmé.
+    private Collider selectionAnchorCollider;
+
     private Transform healthBarBg;
     private Transform healthBarFill;
     public LineRenderer tacticalLineRenderer;
@@ -160,6 +165,27 @@ public partial class UnitAI : MonoBehaviour
 
     // Registre global optimisé pour éliminer tous les FindObjectsByType coûteux
     public static readonly List<UnitAI> AllLivingUnits = new List<UnitAI>();
+
+    /// <summary>Point d'ancrage visuel réel de l'unité pour tout calcul écran (sélection tolérante
+    /// au tap — voir TacticalPathManager_Input.HandlePointerInput — tracé de chemin, etc.) —
+    /// PAS transform.position. Pour un blindé (Leopard2/VehiculeCanon/Mortier), le pivot d'import
+    /// peut être décalé de plusieurs mètres du centre visuel réel du modèle : c'est exactement
+    /// pourquoi Start() recentre déjà dynamiquement le BoxCollider sur bounds.center (voir plus bas)
+    /// et corrige le baseOffset du NavMeshAgent en conséquence. Utiliser transform.position pour la
+    /// sélection mesurait donc la distance-écran depuis ce pivot déporté, jamais depuis l'endroit où
+    /// le joueur voit et vise réellement le véhicule.
+    ///
+    /// Root cause confirmée par les logs [SelectDiag] du 2026-09-09 (partie multijoueur réelle,
+    /// diagnostic temporaire ajouté en session) : à chaque tap manqué, l'unité la plus proche
+    /// rejetée était systématiquement CharLeopard/VehiculeCanon, à 150-500+ PIXELS d'écran du point
+    /// tapé quel que soit l'endroit visé autour d'eux — jamais un Fantassin (pivot déjà quasi
+    /// confondu avec le centre visuel, donc jamais assez d'écart pour être remarqué). Un raycast
+    /// DIRECT pile sur le modèle continuait de fonctionner (son collider, lui, est déjà bien centré
+    /// sur bounds.center) — d'où "des fois ça marche" : uniquement quand le tap tombe pile sur le
+    /// blindé, jamais quand la tolérance de 60-75px est censée rattraper une petite imprécision.
+    public Vector3 SelectionAnchorWorldPos => selectionAnchorCollider != null
+        ? selectionAnchorCollider.bounds.center
+        : transform.position + Vector3.up * 0.5f;
 
     void OnEnable()
     {
@@ -356,7 +382,9 @@ public partial class UnitAI : MonoBehaviour
         
         // DÉSACTIVER l'agent immédiatement pour éviter les erreurs NavMesh
         agent.enabled = false;
-        
+
+        selectionAnchorCollider = GetComponent<Collider>();
+
         animator = GetComponentInChildren<Animator>();
         if (animator != null)
         {
@@ -1094,6 +1122,7 @@ public partial class UnitAI : MonoBehaviour
         currentNodeIndex = 0;
         isPathDirty = true;
         cachedDrawPoints.Clear();
+        WaypointMarker.DestroyMarkersOf(this, 0); // voir RemoveLastTacticalNode : plus de marqueur orphelin
         if (tacticalLineRenderer != null) tacticalLineRenderer.positionCount = 0;
         TacticalPathManager.SetPathsDirty();
     }
@@ -1151,6 +1180,11 @@ public partial class UnitAI : MonoBehaviour
             {
                 currentBuilding = null;
             }
+
+            // 2026-09-07 : détruire aussi l'hologramme du point annulé. Sans ça, la ligne bleue
+            // raccourcissait mais le marqueur restait au sol jusqu'au lancement du tour — le joueur
+            // croyait son checkpoint toujours posé et replanifiait autour d'un ordre qui n'existait plus.
+            WaypointMarker.DestroyMarkersOf(this, tacticalPath.Count);
 
             if (tacticalPath.Count == 0 && tacticalLineRenderer != null)
             {

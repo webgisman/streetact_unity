@@ -519,8 +519,13 @@ namespace Novgov.Server
                         // Rattachement au bâtiment gardé — voir BuildUnitOrdersPure : sans lui, l'unité
                         // en garnison tirait sans jamais pouvoir être touchée en retour.
                         {
-                            BuildingStructure doorBuilding = BuildingStructure.FindBuildingAt(new Vector3(pos2D.x, 0f, pos2D.y));
-                            if (doorBuilding != null && buildingIndex.TryGetValue(doorBuilding, out int doorBid)) checkpoint.enterBuildingId = doorBid;
+                            // Tolérant à la position de porte (toujours hors empreinte) — voir
+                            // MatchGeometry.FindBuildingAtOrNear : sans ça, ce rattachement échouait
+                            // systématiquement et la garnison de porte restait intouchable.
+                            BuildingStructure doorBuilding = BuildingStructure.FindBuildingAtOrNear(
+                                new Vector3(pos2D.x, 0f, pos2D.y), MatchGeometry.DoorAttachToleranceMeters);
+                            // attachBuildingId, PAS enterBuildingId — voir le jumeau pur.
+                            if (doorBuilding != null && buildingIndex.TryGetValue(doorBuilding, out int doorBid)) checkpoint.attachBuildingId = doorBid;
                         }
                         break;
 
@@ -552,7 +557,10 @@ namespace Novgov.Server
 
                     case TacticalPathManager.NodeAction.EntrerBatiment:
                         {
-                            BuildingStructure building = BuildingStructure.FindBuildingAt(new Vector3(pos2D.x, 0f, pos2D.y));
+                            // Tolérant à la position de porte, sinon l'entrée ne se produisait JAMAIS
+                            // (voir MatchGeometry.FindBuildingAtOrNear).
+                            BuildingStructure building = BuildingStructure.FindBuildingAtOrNear(
+                                new Vector3(pos2D.x, 0f, pos2D.y), MatchGeometry.DoorAttachToleranceMeters);
                             if (building != null && buildingIndex.TryGetValue(building, out int bid)) checkpoint.enterBuildingId = bid;
                             break;
                         }
@@ -738,6 +746,14 @@ namespace Novgov.Server
                 states[i] = new UnitState
                 {
                     unit_id = id,
+                    // 2026-09-07 : cette ligne avait été PERDUE lors du découpage de
+                    // MatchSessionManager.cs en 7 fichiers partial le 2026-09-06 (commit f458e65,
+                    // annoncé comme « aucun changement de comportement »). Sans elle, x valait 0 pour
+                    // TOUTES les unités de tous les snapshots du chemin « vivant » : en Conquête et en
+                    // Entraînement contre l'IA, le rejeu du tour ramenait donc chaque unité sur la
+                    // ligne x=0 de la carte, quelle que soit sa vraie position. L'équivalent pur
+                    // (CaptureTacticalSnapshotPure) l'avait conservée, d'où l'asymétrie.
+                    x = p.x,
                     // Hauteur DE CE PAS (voir yByUnit dans BuildSnapshotsFromEvents), et non plus
                     // unit.transform.position.y, qui n'est réactualisé qu'après la construction des
                     // snapshots et rejouait donc tout le tour à la hauteur du tour précédent.

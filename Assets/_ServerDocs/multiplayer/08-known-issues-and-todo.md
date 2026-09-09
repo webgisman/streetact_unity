@@ -12,12 +12,15 @@
 > des artefacts historiques, pas l'état actuel. Le reste du contenu (bugs trouvés/corrigés avant
 > le 2026-08-29, détail du build headless) reste fiable en tant qu'historique.
 
-Dernière mise à jour : 2026-08-29 (voir §9 pour le build Linux headless, désormais fonctionnel et
-déployé, et **§10 pour le premier vrai test à 2 téléphones** — fait, 4 bugs trouvés et corrigés en
-lisant le code, mais correctifs pas encore rebuild/redéployés ni retestés). Ce document liste
-**tout** ce qui a été fait, tout ce qui bloque, et tout ce qu'il reste à faire pour arriver à un
-test à 2 téléphones concluant. À lire avant de reprendre le travail sur ce projet, dans n'importe
-quelle session future.
+Dernière mise à jour : **2026-09-07/08, §19** (audit complet de jouabilité multijoueur : 19
+correctifs, dont la cause la plus probable du blocage "impossible de lancer/tester le multijoueur"
+— voir §19.1 — et une revue adversariale du travail de la même session qui a trouvé et corrigé 9
+défauts supplémentaires avant de le documenter). **Rien de §19 n'est encore rebuild ni redéployé
+sur le VPS, aucune partie à 2 joueurs n'a été rejouée depuis** — c'est le point de reprise. Les
+lignes qui suivent (§9/§10, 2026-08-29) restent l'historique du tout premier build/test réel ; ce
+document liste **tout** ce qui a été fait, tout ce qui bloque, et tout ce qu'il reste à faire. À
+lire en partant de la fin (numéro de section le plus élevé) en reprenant le travail sur ce projet,
+dans n'importe quelle session future.
 
 ---
 
@@ -1428,3 +1431,432 @@ sessions précédentes) : compile-check propre sur les 3 configurations (client 
 éditeur) + tests unitaires du hash déterministe, mais le flux réseau complet (match_found portant
 `city_data_json`, application côté client, absence de divergence visible) n'a pu être vérifié que par
 lecture de code, pas par une vraie partie à 2 joueurs.
+
+---
+
+## 19. Session du 2026-09-07/08 — audit complet de la jouabilité multijoueur (10 correctifs + 9 trouvés en revue + retour joueur §19.11)
+
+**Demande** : « comprends le jeu et corrige la jouabilité du mode multijoueur ». Cartographie
+complète des 8 sous-systèmes multijoueur (cycle de vie serveur, déploiement, moteur de résolution,
+chemins de combat pur/vivant, rejeu client + HUD, saisie des ordres, Conquête/IA, carte +
+progression), puis vérification une par une des anomalies relevées AVANT tout correctif — plusieurs
+se sont révélées fausses (voir « Signalé mais NON retenu » en fin de section).
+
+### 19.1 Le vrai blocage : une file d'attente silencieuse déconnectait tout le monde en 25 s
+
+**C'est très probablement la cause du « je n'arrive pas à lancer/tester le multijoueur » resté
+non résolu au §0 (2026-09-06).** Le client applique un `ReceiveTimeout` FINI de 25 s à sa socket
+(`GameServerClient.Connect`) : 25 s sans le moindre octet reçu et son thread de lecture lève, ce qui
+le déconnecte avec « connexion perdue ». Or le serveur passait de longues périodes à n'envoyer
+**strictement rien** :
+
+- un joueur seul dans `waitingDeathmatch`/`waitingZoneControl` n'était l'objet d'AUCUN envoi tant
+  qu'aucun adversaire ne se présentait — **Deathmatch et Zone de Contrôle étaient donc injouables
+  dès qu'un second joueur ne rejoignait pas la file dans les 25 secondes** ;
+- entre l'appariement et `match_found`, `RunMatch` récupère deux pseudos par HTTP puis peut générer
+  une tuile inédite (Overpass + bake NavMesh, jusqu'à ~60 s) sans rien émettre ;
+- la Conquête et l'entraînement contre l'IA n'avaient aucun signal de vie du tout.
+
+La phase de déploiement avait bien reçu son propre signal de vie (correctif du 2026-09-06) — mais
+LOCAL à cette phase. **C'est l'erreur de conception à ne pas reproduire** : un keepalive par phase
+oblige chaque nouvelle phase à y penser, et trois d'entre elles ne l'avaient pas fait.
+
+Le signal de vie est désormais une propriété de la CONNEXION, pas d'une phase :
+`PlayerConnection.PumpKeepalives()`, appelé en tête de `MatchSessionManager.Update()`, envoie un
+`heartbeat` à TOUTE connexion authentifiée restée silencieuse plus de 8 s
+(`KeepaliveIntervalSeconds`, ~1/3 du timeout client : deux trames consécutives peuvent se perdre).
+Tout envoi réel repousse d'autant le prochain signal. Le keepalive local au déploiement a été retiré.
+
+### 19.2 Le rejeu des deux modes PvP était amorcé sur son PROPRE résultat
+
+`TacticalUnit` est une **classe**, et `TacticalResolver.Resolve` la mute EN PLACE. Or
+`RunExecutionPhasePure` capturait `unitsBeforeResolution` (de simples RÉFÉRENCES) avant la
+résolution et s'en servait APRÈS pour amorcer `BuildSnapshotsFromEventsPure`. Après la résolution
+ces objets portaient l'état de FIN de tour : chaque tour de Deathmatch/Zone de Contrôle était donc
+rejoué à partir de son propre résultat.
+
+- le snapshot `t=0` plaçait déjà chaque unité à sa position FINALE, puis le premier événement `Move`
+  la ramenait brutalement en arrière pour la faire re-marcher ;
+- les PV étaient amorcés à leur valeur d'APRÈS combat, puis chaque événement `Shot` retranchait ses
+  dégâts une SECONDE fois — barres de vie fausses toute la partie ;
+- une unité tuée ce tour-ci était marquée morte dès la première image du rejeu, avant même le tir
+  qui la tue.
+
+Correctif : nouvelle struct `UnitTurnStart`, copie PAR VALEUR prise avant `Resolve`. Le chemin
+« vivant » (Conquête/entraînement) n'était PAS touché — il résout sur un `TacticalWorldState`
+distinct des vraies `UnitAI` dont il amorce le rejeu.
+
+### 19.3 Entrer dans un bâtiment ne fonctionnait jamais en multijoueur
+
+`CityGenerator` génère une porte à `outwardNormal * 0.05f` de sa façade — donc **5 cm en dehors** de
+l'empreinte (et `DoorInteraction.GetOutsidePosition` 1.2 m de plus). Le `PointInPolygon` STRICT de
+`MatchGeometry.FindBuildingAt` renvoyait donc systématiquement -1 pour un point de porte :
+
+- `checkpoint.enterBuildingId` restait à -1 : l'unité n'entrait JAMAIS. Tout le mécanisme
+  d'entrée/sortie corrigé le 2026-09-06 (tests à l'appui) était correct mais **inatteignable**, car
+  rien ne lui fournissait jamais un identifiant de bâtiment valide ;
+- GUETTER PAR LA PORTE posait `isGarrisoned = true` (-75 % de dégâts subis) SANS rattachement de
+  bâtiment — exactement ce que le rattachement était censé empêcher : un soldat planté dans la rue,
+  en couverture maximale, impossible à toucher en retour.
+
+Pourquoi les 5 tests d'entrée du 2026-09-06 ne l'ont pas vu : ils plaçaient tous leur `doorPoint`
+1 m À L'INTÉRIEUR de l'empreinte (`Vector2(31, 6)` pour un bâtiment de x=30 à x=42). Le moteur était
+testé sur une entrée qui ne se produit jamais telle quelle en jeu.
+
+Correctif en trois points : `MatchGeometry.FindBuildingAtOrNear` (+ son jumeau de scène
+`BuildingStructure.FindBuildingAtOrNear`) rattache un point au bâtiment le plus proche dans un rayon
+de `DoorAttachToleranceMeters = 2 m` ; `GeometryMath.SqrDistancePointToSegment`/
+`SqrDistanceToPolygonEdge` (arithmétique pure, aucune trigonométrie) le rendent possible ; et le
+franchissement du seuil pose maintenant l'unité DEDANS (`NearestCellInsideFootprint`) au lieu de la
+laisser sur le point de porte, géométriquement dehors tout en étant marquée « à l'intérieur ».
+
+### 19.4 Les autres correctifs
+
+- **`x` perdu dans le découpage du 2026-09-06** (`MatchSessionManager_CombatLive.CaptureTacticalSnapshot`) :
+  le commit f458e65, annoncé « aucun changement de comportement », avait supprimé `x = p.x`. En
+  Conquête et en Entraînement, le rejeu ramenait donc **toutes** les unités sur la ligne x=0. Ligne
+  restaurée. Un audit systématique (monolithe d'avant le découpage vs les 7 fichiers actuels) n'a
+  révélé aucune autre perte.
+- **`PlanningSeconds` 60 s -> 300 s** : le 2026-09-06, `DeploymentSeconds` et `MapReadyMaxWaitSeconds`
+  étaient passés à 300 s « même demande/même raison » que le retrait de l'affichage du compte à
+  rebours — mais pas la planification, de loin la phase qui demande le plus de travail au joueur. Un
+  joueur dépassant 60 s voyait, SANS avertissement possible (le minuteur n'est plus affiché, à sa
+  demande explicite) : ses unités ne recevoir aucun ordre, son adversaire notifié qu'il avait
+  « ghosté », et tous ses tracés effacés. **Le minuteur reste masqué** — c'est le plafond qui devient
+  généreux, pas l'affichage qui revient.
+- **Aucun moyen d'annuler un point sur un téléphone** : `RemoveLastTacticalNode` n'avait qu'UN seul
+  appelant, la branche `Mouse.current.rightButton` — donc rien sur la plateforme cible. Un checkpoint
+  mal placé était définitif pour le tour. Ajout d'un bouton « ↶ » (`undo-node-button`) dans la barre
+  tactique, visible dès que l'unité sélectionnée a au moins un point ; logique factorisée dans
+  `TacticalPathManager.AnnulerDernierPoint()`, partagée avec le clic droit.
+- **Marqueurs holographiques orphelins** : annuler un point raccourcissait la ligne bleue mais
+  laissait son marqueur au sol jusqu'au lancement du tour — le joueur croyait son checkpoint encore
+  posé. Les marqueurs portent maintenant `owner`/`nodeIndex` et sont détruits avec leur nœud.
+- **Soft-lock permanent du rejeu** : `PlaySnapshotsCoroutine` posait `isPlayingSnapshots = true` sans
+  `try/finally`. N'importe quelle exception (un `SpawnUnitAt` qui renvoie null, deux unités de même
+  nom faisant lever `ToDictionary`) laissait le verrou bloqué : le client ignorait DÉFINITIVEMENT
+  tous les tours suivants, figé sur « en attente de l'adversaire », pendant que le serveur le
+  fantômisait à chaque tour. Corps délégué à `PlaySnapshotsBody`, verrou relâché dans un `finally`.
+- **Fausse « connexion perdue » après une Conquête instantanée** : le serveur referme la socket juste
+  après `zone_captured`/`zone_attack_result` (`attacker.Close()`), fermeture NORMALE que le client
+  traitait comme une panne — il renvoyait au menu avec « Connexion au serveur perdue » une frame
+  après l'ouverture du panneau de résultat, que le joueur n'avait donc jamais le temps de lire.
+  Nouveau drapeau `expectingCloseAfterZoneResult`.
+- **Téléportation de 50 m après chaque apparition d'unité** : `AutoCheckNavMeshCoroutine` appelle
+  `OnNavMeshReady()` 0.2 s après chaque spawn (et `CityGenerator` la rappelle sur TOUTES les unités
+  après chaque bake), ce qui réactivait le `NavMeshAgent` — que le multijoueur désactive
+  délibérément — puis appelait `agent.Warp()` vers le point de NavMesh le plus proche **dans un rayon
+  de 50 mètres**. Seconde cause, indépendante et jamais identifiée, du symptôme déjà signalé
+  « unités affichées ailleurs qu'à leur position réelle » (§0), et cause des unités qui « glissent »
+  sans animation de marche (l'agent réactivé lutte contre les positions envoyées par le serveur).
+  `OnNavMeshReady` sort maintenant immédiatement, agent désactivé, si `IsFlowActive`.
+- **Budget de déplacement enfin visible** : le serveur tronque le chemin au budget de l'unité et
+  SUPPRIME tout checkpoint au-delà de la coupe (`TruncateToMovementBudget`) — la posture finale
+  (GUETTER, garnison, SE CACHER) était donc purement annulée si elle était hors de portée, sans que
+  rien ne le dise au joueur. La portion hors budget de la ligne bleue est maintenant tracée en rouge.
+  Le barème (42 char / 46 canon / 34 mortier / 50 fantassin) est désormais une SOURCE UNIQUE
+  (`UnitTypeStats.InferType`/`MovementBudgetFor`), lue par le serveur ET par l'aperçu client — une
+  table dupliquée qui divergerait recréerait exactement le bug qu'elle rend visible.
+
+### 19.5 Outillage : le compile-check ne compilait plus 12 fichiers
+
+Les trois `*.check.csproj` contiennent une liste EXPLICITE de fichiers générée par Unity. Elle était
+**périmée** : `SupabaseDatabaseClient.cs`, `Core/DeterministicHash.cs`, `Core/VectorSentinel.cs`, les
+6 `MatchSessionManager_*.cs` issus du découpage et 6 fichiers de tests n'étaient plus compilés du
+tout — le compile-check passait « au vert » sans les voir. Remplacée par des globs
+(`Tools/globify_check_csproj.py`), qui ne peuvent pas se périmer.
+
+Le harnais de tests hors-éditeur (shim `UnityEngine` + compilation de `Novgov.TacticalCore` avec le
+SDK .NET livré avec Unity) avait été reconstruit de zéro à trois sessions différentes parce qu'il
+vivait dans un dossier temporaire. Il est désormais **versionné** dans `Tools/TacticalCoreTests/`,
+hors de `Assets/` (donc invisible pour Unity). Une seule commande :
+
+```
+.\Tools\run-tests.ps1              # 74 tests + compile-check des 3 configurations
+.\Tools\run-tests.ps1 -TestsOnly   # tests seuls (~5 s)
+```
+
+`TacticalGridBuilder.cs` est exclu du harnais (seul pont vers la scène vivante, intestable hors
+Éditeur) ; sa compilation reste couverte par les 3 compile-checks.
+
+### 19.6 Revue adversariale des correctifs eux-mêmes — 9 défauts trouvés et corrigés
+
+Les correctifs ci-dessus ont ensuite été relus de façon adversariale (« que casse ce diff ? »), avec
+reproduction empirique. **Neuf défauts ont été trouvés dans le travail de cette session même**, tous
+corrigés :
+
+- **Le `try/finally` du rejeu ne rattrapait rien.** `try { yield return PlaySnapshotsBody(msg); }
+  finally { … }` est un piège : Unity déroule lui-même l'itérateur imbriqué, donc une exception dans
+  son `MoveNext()` ne repasse jamais par la machine à états de l'appelant — le `finally` n'est émis
+  que dans son `Dispose()`, que Unity n'appelle pas sur une coroutine avortée. Remplacé par un
+  pompage manuel de l'itérateur dans un `try/catch`, exactement comme
+  `MatchSessionManager.RunMatchGuarded` le fait déjà côté serveur et pour la même raison.
+- **Relâcher `isPlayingSnapshots` ne suffisait pas** : la fin de `PlaySnapshotsBody` remet aussi
+  `phaseActuelle` à `Planification`, et `TacticalPathManager.Update` sort immédiatement tant qu'elle
+  vaut `Execution`. Une exception laissait donc le joueur incapable de sélectionner une unité ou de
+  poser un point, verrou relâché ou non. Nouvelle méthode `RecoverFromFailedReplay()` qui rétablit
+  l'état JOUABLE complet.
+- **Le garde `IsFlowActive` de `OnNavMeshReady` cassait le mode SOLO.** `IsFlowActive` est vrai pour
+  TOUT écran multijoueur, menus de login/choix de mode compris, et plusieurs retours au menu de
+  démarrage ne repassent jamais l'état à `Hidden`. Une partie solo lancée après un simple passage par
+  le menu multijoueur trouvait toutes ses unités avec un agent désactivé, donc immobiles. Garde
+  resserré à `IsActive || IsDeploymentPhaseActive`.
+- **Le franchissement de seuil n'était pas atomique face à la troncature de budget** : si le budget
+  expirait au milieu du pas, la coupe était interpolée DANS l'empreinte pendant que le checkpoint
+  porteur du rattachement était supprimé — l'unité se retrouvait géométriquement dedans et
+  logiquement dehors, l'incohérence même que ce correctif visait à supprimer. Nouvel ensemble
+  `ExpandedOrder.atomicStep`, traité comme une transition verticale.
+- **Le repli de `NearestCellInsideFootprint` pouvait renvoyer un point HORS de l'empreinte** pour un
+  bâtiment plus petit qu'une cellule d'1 m. On n'entre plus du tout dans ce cas dégénéré.
+- **GUETTER PAR LA PORTE faisait désormais ENTRER l'unité** : rendre `enterBuildingId` résoluble l'a
+  aussi rendu visible à `ExpandOrder`, qui l'interprète comme « franchis le seuil ». Le rattachement
+  (pour la couverture et la ligne de vue) a donc été séparé de l'entrée : nouveau champ
+  `PathCheckpoint.attachBuildingId`.
+- **Les deux appels d'overwatch de porte utilisaient encore la recherche stricte**, deux lignes
+  au-dessus du site corrigé : le déclencheur de guet en LIGNE DE PORTE restait 100 % du code mort.
+- **Les marqueurs s'auto-détruisaient au bout de 60 s** alors que la planification en dure désormais
+  300 : un joueur qui réfléchit voyait ses hologrammes disparaître un à un. Auto-destruction retirée
+  (cycle de vie désormais explicite), et un marqueur devenu orphelin (unité tuée) se ramasse seul.
+- **La coloration de budget mesurait en 3D une contrainte serveur mesurée en 2D** : une escalade sur
+  un toit de 9 m gonflait le total d'autant, donc la coupe rouge était dessinée PLUS LOIN que la
+  vraie — l'aperçu promettait plus de chemin qu'il n'y en a. Mesure ramenée au sol (XZ).
+
+La revue a aussi confirmé qu'aucun défaut n'a été trouvé dans le keepalive (hors le point ci-dessous),
+dans `UnitTurnStart`, dans les primitives de `GeometryMath`, dans le mappage `checkpointAtStep`, ni
+dans `expectingCloseAfterZoneResult`. Un point mineur reste **non corrigé et assumé** : une connexion
+authentifiée qui n'envoie jamais `join_matchmaking` n'est plus jamais récoltée (le keepalive maintient
+la socket vivante des deux côtés) — fuite lente d'un socket par client bloqué, sans impact en usage
+normal.
+
+### 19.7 Tests ajoutés (64 -> 74)
+
+- `TacticalCoreSelfTest_DoorEntry.cs` (7 tests). La revue a montré que la première version ne
+  pinglait presque rien : la recherche tolérante vivait dans `Assets/Scripts/Server`, que le harnais
+  ne compile pas, donc revenir au test strict laissait tous les tests verts. Elle a donc été
+  **déplacée dans `GeometryMath.FindBuildingAtOrNear`** — c'est de la géométrie pure sur des données
+  pures, sa place est dans le moteur pur — et `MatchGeometry` s'y délègue. **Contrôle négatif
+  refait** : remettre la recherche stricte fait bien échouer 3 tests (rattachement d'une vraie porte,
+  du seuil extérieur, et déterminisme à égalité exacte), plus celui du franchissement.
+- `TacticalCoreSelfTest_ResolveMutatesInPlace.cs` (3 tests). Le troisième test était tautologique
+  (il copiait des `Vector2`/`int` locaux et vérifiait qu'ils n'avaient pas changé, ce que la
+  sémantique de valeur de C# rend impossible à faire échouer). Remplacé par une démonstration de la
+  DIVERGENCE réelle : le même tour amorcé depuis une copie par valeur montre le départ, amorcé
+  depuis les références montre déjà l'arrivée, et les deux diffèrent bel et bien.
+
+### 19.8 Signalé mais NON retenu après vérification
+
+Consigné pour qu'une session future ne les re-« corrige » pas :
+
+- **« Une action ATTENDRE 30 SECONDES fait exploser la durée du rejeu / atteint le plafond de
+  3200 ticks »** : FAUX. Les snapshots ne sont émis que pour les ticks PORTANT UN ÉVÉNEMENT
+  (`events.Select(e => e.tick).Distinct()`), donc une attente silencieuse ne coûte aucun snapshot.
+  L'effet réel est inverse et mineur : le client rejoue chaque snapshot à 250 ms fixes en ignorant
+  l'horodatage `t`, donc une attente est visuellement compressée, pas étirée.
+- **« Le compte à rebours de planification est caché au joueur »** : c'est un CHOIX EXPLICITE du
+  joueur (2026-09-06, « enlève le temps dans tous les états, ne stresse pas le joueur »). Ne pas
+  réafficher de minuteur — c'est le plafond qui a été rendu généreux (§19.4).
+
+### 19.9 Reste à faire — priorisé
+
+Rien de ce qui suit n'a été touché. Par ordre de gravité pour le joueur :
+
+1. **Conquête sans issue après la première capture** : `ZoneManager.ExpandNorth/South/East/West`
+   n'ont aucun appelant et rien n'avance `CurrentTileX/Y` après une capture, donc les 4 boutons
+   d'attaque se bloquent définitivement ; en prime, une partie PvP sur une vraie tuile déplace
+   `CurrentTileX/Y` vers la tuile de l'adversaire.
+2. **Aucun retour visuel de combat pendant le rejeu** : `SetNetworkHealth` court-circuite
+   `TakeDamage` (donc impacts/sang/étincelles) et `ShootAt` est désactivé en réseau (donc traçantes,
+   flash, son, ping radar). Les unités meurent sans que rien ne soit visible.
+3. **La destruction de bâtiment n'est jamais transmise** : `WallDestroyed` n'a aucun consommateur —
+   le bâtiment reste debout sur les deux écrans alors que le serveur le sait détruit.
+4. **Grille tactique MUTABLE partagée entre parties concurrentes sur la même tuile** : détruire un
+   bâtiment dans une partie ouvre le mur dans les autres.
+5. **`mortarStrikes` n'est validé par rien** : ni type d'unité, ni portée. Un client modifié fait
+   pleuvoir 150 dégâts n'importe où avec n'importe quelle unité.
+6. **Postures à sens unique** : `isGuarding`/`isCamouflaged`/`isGarrisoned` ne sont jamais remis à
+   false — un GUETTER au tour 1 vaut -50 % de dégâts subis pour toute la partie, même en courant à
+   découvert (comportement « fidèle à l'original » mais très déséquilibré à deux joueurs).
+7. **`ClampToDeploymentZone` est devenu la fonction identité** (désactivée le 2026-09-06 sur demande) :
+   plus aucune borne de coordonnées, un client modifié peut déployer au contact ou hors carte.
+8. **Économie entièrement en PlayerPrefs locaux** : réinstaller remet à zéro, et un compte a un
+   portefeuille différent par téléphone.
+9. **`practice_ai` est inatteignable depuis le client** (aucun bouton) alors que tout le mode existe
+   côté serveur.
+
+### 19.10 Non vérifié en conditions réelles
+
+Comme les sessions précédentes : 74 tests verts, compile-check propre sur les 3 configurations
+(client Android / serveur dédié / éditeur), **mais aucun build Unity réel produit ni déployé, et
+aucune partie à 2 joueurs jouée** dans cette session. Les correctifs §19.1 (keepalive) et §19.2
+(amorçage du rejeu) sont ceux qui changent le plus le comportement observable et méritent d'être
+confirmés en premier par un vrai test à 2 clients.
+
+### 19.11 Retour joueur (2026-09-08) — le déploiement remplaçait silencieusement les mortiers/positions choisis
+
+**Rapporté par le joueur** : « il y a toujours de l'IA dans le multijoueur alors qu'on a dit pas
+d'IA, aussi au début c'est le joueur qui doit acter le commencement du jeu pas automatiquement, et
+pourquoi tu as enlevé le droit de déployer les mortiers, et toutes les unités se mettent toutes
+seules dans des endroits bizarres après déploiement alors que le joueur avait choisi d'autres
+endroits ». Quatre plaintes, une seule cause racine confirmée pour trois d'entre elles.
+
+**Cause racine confirmée et corrigée** : `IsRosterValid` (introduit le 2026-09-06 avec le budget
+en points, voir §19.4 de l'époque — `CombatPointBudget = 8`, coût 1/2/2/3 selon Fantassin/
+VehiculeCanon/Mortier/CharLeopard) était TOUT OU RIEN — au moindre dépassement, `ResolveDeployment(
+Pure)` jetait la soumission ENTIÈRE et la remplaçait par `AutoDeployTeamFallback(Pure)`, une
+escouade FIXE (2 Fantassin + 1 CharLeopard + 1 Mortier) à des positions FIXES ancrées sur un coin
+de la carte — sans le moindre rapport avec ce que le joueur avait réellement tapé, et sans le
+moindre message d'erreur. Or le dock de déploiement (`OpenDeploymentDock`, `maxUnitsPerTeam = 4`)
+n'a JAMAIS connu ni affiché ce budget en points — seulement un nombre d'unités. Une composition
+tout à fait raisonnable et sous la limite affichée (ex. 2 CharLeopard + 1 Mortier + 1 Fantassin =
+6+2+1 = 9 points, pour une limite de 4 unités mais 8 points) déclenchait donc le remplacement
+intégral. Explique directement :
+- **« pourquoi as-tu enlevé le droit de déployer les mortiers »** : pas littéralement enlevé — mais
+  toute composition qui EN CONTENAIT dépassait facilement les 8 points, faisant remplacer tout le
+  déploiement (mortier inclus) par l'escouade de repli (qui n'en a qu'UN, fixe) ;
+- **« les unités se mettent toutes seules dans des endroits bizarres »** : les positions de repli
+  sont fixes, ancrées sur (-25,-25)/(25,25), jamais celles tapées par le joueur ;
+- probablement **« le joueur doit acter le commencement, pas automatiquement »** : le joueur clique
+  bien CONFIRMER (vérifié — `SubmitLocalDeployment` n'a aucun déclenchement automatique/minuté),
+  mais le résultat affiché ne correspond à rien de ce qu'il vient de faire, ce qui se vit comme
+  « le jeu a décidé tout seul ».
+
+**Correctif** : `FilterRosterToBudget` remplace `IsRosterValid` — garde EXACTEMENT les placements
+du joueur (même type, même position) qui tiennent dans le budget, dans l'ordre de soumission, et
+n'écarte QU'un placement individuel invalide ou qui ferait dépasser une limite — jamais la
+soumission entière. Le repli fixe ne s'applique plus que si RIEN du tout n'a pu être conservé
+(aucune soumission, ou entièrement malformée). Un nouveau champ `deployment_result.reason =
+"roster_trimmed"` prévient le client quand un écart partiel a eu lieu (`MultiplayerMatchController.
+OnDeploymentResult` affiche un message). Prévention en plus, côté client : le dock affiche
+maintenant "Effectifs : X / 4 • Points : Y / 8" pendant le placement PvP (`UnitSpawnerUI.
+GetTeamDeploymentPointCost`), pour que le joueur voie la limite AVANT de confirmer, pas après.
+
+**« il y a toujours de l'IA dans le multijoueur »** — PAS résolu, cause non identifiée avec
+certitude. Vérifié dans le code actuel (2026-09-08) :
+- Deathmatch/Zone de Contrôle (chemin pur) n'invoquent JAMAIS `TacticalAIPlanner` — un adversaire
+  absent "tient la position" sans aucune décision d'IA (`ApplyForPlayerPure`) ;
+- l'offre "jouer contre l'IA en attendant" (bouton + minuteur dans la file d'attente) a déjà été
+  retirée le 2026-09-06 (voir commentaire `MultiplayerMatchController.cs` ligne ~135) — plus aucun
+  bouton, plus aucune mention "IA" dans `WaitingScreen.uxml` ;
+- `opponent_username` dans `match_found` est toujours le VRAI pseudo de l'adversaire humain pour
+  Deathmatch/Zone de Contrôle, jamais un nom générique "IA".
+- La Conquête (et l'Entraînement) restent, PAR CONCEPTION, un joueur seul contre une garnison IA —
+  ce n'est pas un bug si c'est le mode testé.
+
+Deux explications restent possibles et n'ont pas pu être départagées sans plus d'information : (a)
+le joueur testait la Conquête/l'Entraînement en pensant à du PvP réel, ou (b) le client testé est
+un APK antérieur au 2026-09-06 (aucun nouveau build Android n'a été produit ni distribué depuis
+cette session-ci ni, à confirmer, depuis le 2026-09-06). À reprendre avec confirmation du mode
+testé ET d'un build fraîchement installé avant de chercher plus loin.
+
+74 tests toujours verts, compile-check propre sur les 3 configurations. **Toujours aucun build ni
+déploiement réel cette session.**
+
+### 19.12 Trouvé : la bannière "IA de secours" mentait pour Deathmatch/Zone de Contrôle
+
+**Confirmé par le joueur** : le mode testé était bien Deathmatch/Zone de Contrôle (pas la
+Conquête). Root cause trouvée — pas une hypothèse cette fois, une chaîne de caractères
+littéralement fausse affichée au joueur.
+
+`MultiplayerMatchController.OnOpponentGhosted` affichait, INCONDITIONNELLEMENT et quel que soit le
+mode : *"Vous étiez absent — une IA de secours a joué vos unités ce tour-ci."* (ou la version
+adversaire). Ce texte décrit fidèlement le chemin "vivant" (`ApplyForPlayer`, Conquête/
+Entraînement, qui appelle réellement `TacticalAIPlanner.PlanifierTourIA()`) — mais **pas du tout**
+le chemin pur (`ApplyForPlayerPure`, Deathmatch/Zone de Contrôle), dont le commentaire dit
+noir sur blanc depuis le 2026-08-30 : "plutôt que TacticalAIPlanner... ses unités TIENNENT LA
+POSITION" — aucune IA n'y tourne jamais. Un vrai match PvP affichait donc, à CHAQUE tour manqué
+par l'un ou l'autre camp (soi ou l'adversaire), une bannière affirmant explicitement qu'une IA
+venait de jouer — alors qu'il ne s'était rien passé de plus qu'une unité immobile. Explique le
+signalement mot pour mot : « il y a toujours de l'IA dans le multijoueur alors qu'on a dit pas
+d'IA ».
+
+**Corrigé** : le texte distingue maintenant les deux moteurs via `currentMode` (déjà connu du
+client depuis `match_found.mode`, aucun nouveau champ réseau) — "deathmatch"/"zone_control" ->
+"vos/ses unités ont tenu leur position" (vrai), "conquest"/"practice_ai" -> le texte IA d'origine
+(toujours vrai pour ces deux-là).
+
+**Diagnostic ajouté pour la prochaine fois** : `ApplyForPlayerPure` était totalement silencieuse —
+aucun moyen de distinguer après coup un vrai AFK/déconnexion d'un joueur ghosté À TORT par un bug
+(ex. désynchronisation du numéro de tour). Un `Debug.Log("[Ghost] ...")` explicite trace désormais
+chaque ghosting avec `IsDisconnected`/`HasSubmittedThisTurn`, consultable dans les logs du
+conteneur `game-server` sur le VPS.
+
+**Ce qui reste possible et n'est PAS exclu par ce correctif** : si le joueur a été ghosté alors
+qu'il pensait avoir soumis ses ordres à temps (plutôt que de simplement ne pas avoir eu le temps),
+il pourrait y avoir un vrai bug de désynchronisation de `turn_number` (voir la liste "reste à faire"
+du workflow initial — jamais confirmé ni corrigé cette session). Le nouveau log `[Ghost]` permettra
+de vérifier ça la prochaine fois avec une vraie preuve plutôt qu'une hypothèse.
+
+### 19.13 Déploiement réel du 2026-09-08 — serveur en production, APK en cours
+
+Suite à la confirmation du joueur (mode testé = Deathmatch/Zone de Contrôle, build+déploiement
+demandés), toutes les corrections de §19.1 à §19.12 ont été construites et déployées en RÉEL :
+
+- **Build serveur Linux** (`ServerBuildScript.BuildLinuxServer`, batch mode) : succès, 119 Mo.
+  Fraîcheur vérifiée PAR RÉFLEXION .NET (pas seulement l'horodatage du fichier, sujet au piège Bee
+  documenté dans `project_novgov_vps_live` — chargement effectif de l'assembly et recherche des
+  types/méthodes réels) : `PlayerConnection.PumpKeepalives`, `MatchSessionManager+UnitTurnStart`,
+  `GeometryMath.FindBuildingAtOrNear` tous confirmés PRÉSENTS dans le DLL buildé.
+- **Déploiement VPS** (`novgov.com`, `/opt/novgov/`) : sauvegarde de l'image en cours
+  (`docker commit` -> `novgov-game-server:backup_20260908_204728`) AVANT toute modification,
+  copie du nouveau build (`scp`, ~14s), MD5 du DLL identique entre local et VPS après copie,
+  `docker compose build game-server-1` (succès), `docker compose up -d game-server-1`. Vérifié
+  après coup : conteneur `Up` stable (40s+, pas de crash-loop), zéro `exception`/`error`/`crash`/
+  `fatal` dans les logs (hors les avertissements shader habituels et sans conséquence), génération
+  de ville propre ("87 éléments OSM -> 236 bâtiments"), port 7777 en écoute IPv4 ET IPv6, connexion
+  TCP RÉELLEMENT établie depuis l'extérieur du VPS (`novgov.com:7777`, pas juste `localhost`).
+- **Build Android** (`AndroidTestBuildScript.BuildDebugApk`, batch mode, même session Unity
+  que le build serveur ci-dessus — donc EXACTEMENT le même arbre source, aucune modification entre
+  les deux) : succès, `build/Android/Novgov-Test.apk` (135 Mo), zéro `error CS` dans le log complet
+  (`android_build_20260908.log`). Pas installé sur un appareil par cette session (aucun accès
+  matériel) — fichier local, à transférer sur le téléphone de test pour la suite.
+
+**Toujours pas de vraie partie à 2 joueurs rejouée** — c'est la prochaine étape une fois l'APK
+installé : réinstaller `build/Android/Novgov-Test.apk` sur le(s) téléphone(s) de test et refaire un
+Deathmatch/Zone de Contrôle à 2 comptes pour confirmer que les 4 signalements initiaux
+(§19.11/§19.12) sont bien résolus en conditions réelles, pas seulement en lecture de code et en
+déploiement serveur. Le serveur, lui, est déjà en production et prêt à recevoir ce test.
+
+### 19.14 Correctif 2026-09-09 — sélection tactile/souris difficile en multijoueur, root cause confirmée par logs réels
+
+Retour joueur : "en multijoueur deathmatch c'est difficile de sélectionner les unités, des fois ça
+fonctionne bien, des fois pas". Un diagnostic temporaire (`[SelectDiag]`) avait été ajouté en
+session précédente dans `TacticalPathManager_Input.HandlePointerInput` sans conclusion. Cette
+session a retrouvé une vraie partie jouée localement le soir même dans
+`E:\NOVGOV\My project\Logs\Editor.log` (l'Éditeur venait d'être fermé) et y a lu les 28 lignes
+`[SelectDiag]` qu'elle contenait — root cause confirmée SANS avoir besoin de rejouer.
+
+**Root cause** : la boucle de sélection tolérante (rayon 60-75px à l'écran, ajoutée le 2026-09-05/06
+pour rattraper un tap légèrement imprécis) mesurait la distance à l'écran depuis
+`unit.transform.position + Vector3.up * 0.5f`. Pour un blindé (CharLeopard/VehiculeCanon/Mortier),
+c'est le PIVOT D'IMPORT du modèle, pas son centre visuel réel — `UnitAI.Start()` le savait déjà et
+recentre pour cette raison le `BoxCollider` sur `bounds.center` (vrai centre du maillage) et corrige
+le `baseOffset` du `NavMeshAgent` en conséquence, mais la sélection, elle, continuait de lire le
+pivot brut. Preuve dans les logs : à chaque tap manqué, l'unité écartée était systématiquement
+`CharLeopard_2_2`/`VehiculeCanon_2_3`, à 150-500+ PIXELS d'écran du point tapé — jamais un
+Fantassin (pivot déjà quasi confondu avec son centre visuel). Un tap DIRECT pile sur le modèle
+continuait de fonctionner (son collider, lui, était déjà bien recentré) : d'où "des fois ça marche"
+— uniquement quand le tap tombe pile sur le blindé, jamais quand la tolérance est censée rattraper
+une petite imprécision, ce qui est précisément le cas d'usage qu'elle existe pour couvrir.
+
+**Corrigé** : nouvelle propriété `UnitAI.SelectionAnchorWorldPos` (centre du même collider déjà
+recentré par `Start()`, repli sur l'ancien calcul si pas encore de collider) utilisée partout où
+`TacticalPathManager_Input` calculait une distance-écran à une unité (boucle tolérante + arbitrage
+raycast-vs-tolérance). Diagnostic `[SelectDiag]` retiré (cause confirmée, voir consigne du
+commentaire qui l'avait introduit).
+
+**Bug latent trouvé au passage, corrigé aussi** : `UnitSpawnerUI.SpawnUnitAt` codait en dur
+`isPlayerControlled = (team == 1)` — faux dès qu'un joueur multijoueur est l'ÉQUIPE 2 (le 2e joueur
+à rejoindre, voir `MultiplayerMatchController.LocalTeamId`) : ses propres unités, posées sur SON
+PROPRE dock de déploiement, se marquaient comme injouables dès leur pose. Sans conséquence sur le
+combat réel (déjà recorrigé juste après par la boucle de `OnDeploymentResult`/`PlaySnapshotsBody`
+qui réaffecte `isPlayerControlled` d'après `localTeamId`), mais faux pendant la PRÉVISUALISATION du
+placement. Corrigé pour comparer à `MultiplayerMatchController.Instance.LocalTeamId` quand un match
+multijoueur (déploiement ou combat) est actif ; repli inchangé (`team == 1`) en solo et côté serveur
+(`LocalTeamId` n'existe que côté client, toute la classe sauf ses membres statiques étant sous
+`#if !UNITY_SERVER`).
+
+Vérifié : `Tools\run-tests.ps1` complet (76 tests TacticalCore + compile-check client/serveur/
+éditeur) entièrement vert après le correctif. Pas de nouvelle partie à 2 joueurs rejouée cette
+session (pas d'accès à un second appareil/émulateur depuis cet environnement) — root cause établie
+par preuve de log réelle plutôt que par re-test, mais une confirmation en jeu réel reste la
+prochaine étape recommandée.

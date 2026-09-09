@@ -41,6 +41,14 @@
                             <ui:Button name="view3d-button" class="btn-glass btn-icon-only" style="display: none; height: 48px; width: 48px; margin-right: 10px;">
                                 <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/magnifier.png');" />
                             </ui:Button>
+                            <!-- Annuler le dernier point posé. Ajouté le 2026-09-07 : cette action
+                                 n'existait QUE via le clic droit de la souris (voir
+                                 TacticalPathManager_Input.HandlePointerInput) — donc pas du tout sur
+                                 la plateforme cible, un téléphone. Un joueur mobile qui posait un
+                                 checkpoint au mauvais endroit n'avait aucun moyen de le retirer. -->
+                            <ui:Button name="undo-node-button" class="btn-glass btn-icon-only" style="display: none; height: 48px; width: 48px; margin-right: 10px;">
+                                <ui:Label text="↶" style="font-size: 26px; -unity-text-align: middle-center;" />
+                            </ui:Button>
                             <ui:Button name="end-turn-button" class="btn-primary btn-with-icon" style="height: 52px; min-width: 168px; padding: 0 18px; justify-content: center;">
                                 <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/play.png'); -unity-background-image-tint-color: var(--color-accent-text); margin-right: 8px;" />
                                 <ui:Label text="FIN DE TOUR" style="font-size: 20px;" />

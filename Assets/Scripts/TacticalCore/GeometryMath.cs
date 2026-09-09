@@ -39,6 +39,71 @@ namespace Novgov.TacticalCore
             return dx * dx + dy * dy;
         }
 
+        /// <summary>Distance au carré d'un point au SEGMENT [a,b] (pas à la droite infinie).
+        /// N'utilise que +,-,*,/ — aucune racine, aucune trigonométrie : déterministe partout,
+        /// conformément à la règle de ce fichier.</summary>
+        public static float SqrDistancePointToSegment(Vector2 p, Vector2 a, Vector2 b)
+        {
+            Vector2 ab = new Vector2(b.x - a.x, b.y - a.y);
+            float abLenSq = ab.x * ab.x + ab.y * ab.y;
+            if (abLenSq < 1e-12f) return SqrDistance(p, a); // segment dégénéré
+
+            float t = ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / abLenSq;
+            t = t < 0f ? 0f : (t > 1f ? 1f : t); // projection bornée AU segment
+            float cx = a.x + ab.x * t, cy = a.y + ab.y * t;
+            float dx = p.x - cx, dy = p.y - cy;
+            return dx * dx + dy * dy;
+        }
+
+        /// <summary>Distance au carré d'un point au CONTOUR d'un polygone (0 s'il est pile dessus).
+        /// Ne dit RIEN de l'intérieur/extérieur — combiner avec PointInPolygon si besoin.</summary>
+        public static float SqrDistanceToPolygonEdge(System.Collections.Generic.List<Vector2> polygon, Vector2 pt)
+        {
+            if (polygon == null || polygon.Count < 2) return float.MaxValue;
+            float best = float.MaxValue;
+            for (int i = 0, j = polygon.Count - 1; i < polygon.Count; j = i++)
+            {
+                float d = SqrDistancePointToSegment(pt, polygon[j], polygon[i]);
+                if (d < best) best = d;
+            }
+            return best;
+        }
+
+        /// <summary>Bâtiment contenant <paramref name="pt"/>, ou à défaut le plus proche dont le
+        /// contour passe à moins de <paramref name="maxDistance"/> — sinon -1. Renvoie l'identifiant
+        /// (<c>TacticalBuilding.id</c>), pas l'index.
+        ///
+        /// POURQUOI LA TOLÉRANCE (2026-09-07). Les actions de porte (ENTRER DANS LE BÂTIMENT,
+        /// GUETTER PAR LA PORTE) désignent forcément un point qui n'est PAS dans l'empreinte : une
+        /// porte est générée 5 cm en DEHORS de sa façade (CityGenerator), et le « seuil extérieur »
+        /// 1.25 m dehors. Un test d'appartenance strict renvoyait donc « aucun bâtiment » pour
+        /// 100 % des points de porte — l'unité n'entrait jamais, et la garnison de porte accordait
+        /// -75 % de dégâts subis sans rattacher l'unité à quoi que ce soit.
+        ///
+        /// Déterministe : balayage par index croissant, comparaison stricte, donc à égalité exacte
+        /// de distance c'est toujours le plus petit index qui gagne.</summary>
+        public static int FindBuildingAtOrNear(System.Collections.Generic.List<TacticalBuilding> buildings, Vector2 pt, float maxDistance)
+        {
+            if (buildings == null) return -1;
+
+            for (int i = 0; i < buildings.Count; i++)
+            {
+                var b = buildings[i];
+                if (b.footprint != null && b.footprint.Count >= 3 && PointInPolygon(b.footprint, pt)) return b.id;
+            }
+
+            float bestSqr = maxDistance * maxDistance;
+            int best = -1;
+            for (int i = 0; i < buildings.Count; i++)
+            {
+                var b = buildings[i];
+                if (b.footprint == null || b.footprint.Count < 3) continue;
+                float d = SqrDistanceToPolygonEdge(b.footprint, pt);
+                if (d < bestSqr) { bestSqr = d; best = b.id; }
+            }
+            return best;
+        }
+
         /// <summary>Test de cône SANS trigonométrie : un point est "dans le cône" si le produit
         /// scalaire entre la direction normalisée vers ce point et la direction de visée dépasse
         /// cosHalfAngle (= cos(angle/2), précalculé une fois côté données, jamais recalculé ici).</summary>

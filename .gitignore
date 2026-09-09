@@ -66,6 +66,16 @@ ExportedObj/
 *.opendb
 *.VC.db
 
+# Tools/TacticalCoreTests/Harness.csproj est un projet .NET écrit à la main (le harnais de tests
+# hors-Editeur, voir Tools/run-tests.ps1) et non un fichier généré par Unity/Visual Studio — sans
+# cette exception, le "*.csproj" générique ci-dessus l'ignorait silencieusement, ce qui aurait rendu
+# le harnais non fonctionnel après un clone frais (exactement ce que sa mise sous contrôle de
+# version visait à éviter, voir le commentaire en tête de run-tests.ps1). bin/obj restent ignorés :
+# ce sont de vraies sorties de build .NET, jamais à committer.
+!Tools/TacticalCoreTests/Harness.csproj
+Tools/TacticalCoreTests/bin/
+Tools/TacticalCoreTests/obj/
+
 # Unity3D generated meta files
 *.pidb.meta
 *.pdb.meta

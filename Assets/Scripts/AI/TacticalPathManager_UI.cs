@@ -20,6 +20,10 @@ public partial class TacticalPathManager
     private VisualElement bottomBarRoot, contextMenuRoot, planGroupEl, execGroupEl, squadBarEl, topActionsRowEl;
     private VisualElement buttonContainerEl;
     private Button view3dButtonEl, cancelBtnEl, confirmBtnEl;
+    /// <summary>Bouton "annuler le dernier point" (2026-09-07). Voir son commentaire dans
+    /// TacticalBottomBarScreen.uxml : l'annulation n'existait qu'au clic droit, donc nulle part sur
+    /// un téléphone.</summary>
+    private Button undoNodeButtonEl;
     // Conservé pour pouvoir masquer "Passer" en multijoueur (voir RefreshTacticalUI) : il n'y abrège
     // rien, c'est le serveur qui décide de la fin du tour.
     private Button skipButtonEl;
@@ -67,6 +71,14 @@ public partial class TacticalPathManager
             Button endTurnBtn = bottomBarRoot.Q<Button>("end-turn-button");
             if (endTurnBtn == null) { Debug.LogError("[TacticalPathManager] Bouton 'end-turn-button' introuvable dans le UXML instancié."); return; }
             endTurnBtn.clicked += LancerExecutionTour;
+
+            // Pas de `return` si absent, contrairement aux éléments essentiels ci-dessus : ce bouton
+            // est un confort d'annulation, et un UXML périmé ne doit pas faire échouer le câblage de
+            // la cloche de notification, de "Passer", de la bascule 2D/3D et du menu contextuel qui
+            // le suivent — l'annulation resterait alors disponible au clic droit.
+            undoNodeButtonEl = bottomBarRoot.Q<Button>("undo-node-button");
+            if (undoNodeButtonEl == null) Debug.LogWarning("[TacticalPathManager] Bouton 'undo-node-button' absent du UXML — annulation d'un point indisponible au toucher.");
+            else undoNodeButtonEl.clicked += AnnulerDernierPoint;
 
             Button notifBellBtn = bottomBarRoot.Q<Button>("notif-bell-button");
             notifBellBadgeEl = bottomBarRoot.Q<Label>("notif-bell-badge");
@@ -220,6 +232,15 @@ public partial class TacticalPathManager
 
         bool showContext = isPlanification && uniteSelectionnee != null && !hideBottomBar;
         view3dButtonEl.style.display = (is2DMode && showContext) ? DisplayStyle.Flex : DisplayStyle.None;
+
+        // Annuler le dernier point : proposé dès que l'unité sélectionnée a au moins un point posé.
+        // Sans ce bouton, l'annulation n'était accessible qu'au clic DROIT — inexistant sur mobile.
+        if (undoNodeButtonEl != null)
+        {
+            UnitAI selectedForUndo = uniteSelectionnee != null ? uniteSelectionnee.GetComponent<UnitAI>() : null;
+            bool canUndo = showContext && selectedForUndo != null && selectedForUndo.tacticalPath.Count > 0;
+            undoNodeButtonEl.style.display = canUndo ? DisplayStyle.Flex : DisplayStyle.None;
+        }
 
         // Le ContextMenu ne montre plus qu'une seule chose : le sous-menu d'ordre ouvert au tap
         // d'un endroit valide de la carte (bâtiment/porte/fenêtre/checkpoint/barricade, construit

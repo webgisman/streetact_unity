@@ -135,6 +135,10 @@ public partial class TacticalPathManager
                 GameObject marker = new GameObject("WaypointMarker");
                 marker.transform.position = positionClicTemporaire;
                 WaypointMarker wm = marker.AddComponent<WaypointMarker>();
+                // Rattachement au nœud qui vient d'être ajouté — permet d'annuler le point ET son
+                // hologramme ensemble (voir UnitAI.RemoveLastTacticalNode).
+                wm.owner = unitAI;
+                wm.nodeIndex = unitAI.tacticalPath.Count - 1;
                 if ((NodeAction)actionIndex == NodeAction.TirMortier)
                 {
                     wm.isArtilleryTarget = true;
@@ -188,7 +192,9 @@ public partial class TacticalPathManager
 
                 GameObject marker = new GameObject("WaypointMarker");
                 marker.transform.position = insidePos;
-                marker.AddComponent<WaypointMarker>();
+                var wmInside = marker.AddComponent<WaypointMarker>();
+                wmInside.owner = unitAI;
+                wmInside.nodeIndex = unitAI.tacticalPath.Count - 1;
             }
             else
             {
@@ -215,7 +221,9 @@ public partial class TacticalPathManager
 
             GameObject marker = new GameObject("WaypointMarker");
             marker.transform.position = roofPos;
-            marker.AddComponent<WaypointMarker>();
+            var wmRoof = marker.AddComponent<WaypointMarker>();
+            wmRoof.owner = unitAI;
+            wmRoof.nodeIndex = unitAI.tacticalPath.Count - 1;
         }
         else if (choice == 3) // Porte la plus proche
         {
@@ -225,7 +233,9 @@ public partial class TacticalPathManager
 
             GameObject marker = new GameObject("WaypointMarker");
             marker.transform.position = doorPos;
-            marker.AddComponent<WaypointMarker>();
+            var wmDoor = marker.AddComponent<WaypointMarker>();
+            wmDoor.owner = unitAI;
+            wmDoor.nodeIndex = unitAI.tacticalPath.Count - 1;
         }
 
         isBuildingSelected = false;

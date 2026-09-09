@@ -23,7 +23,19 @@ namespace Novgov.Server
     /// </summary>
     public partial class MatchSessionManager : MonoBehaviour
     {
-        private const float PlanningSeconds = 60f;
+        // 2026-09-07 : 60s -> 300s (5 min). Même demande et même raison que DeploymentSeconds/
+        // MapReadyMaxWaitSeconds ci-dessous, simplement pas appliquée à CETTE phase-ci le 2026-09-06 —
+        // alors que c'est de loin celle qui demande le plus de travail au joueur (sélectionner
+        // plusieurs unités, tracer des chemins à plusieurs points, ouvrir un menu contextuel par
+        // point) et que le compte à rebours n'est plus affiché nulle part depuis cette même demande
+        // ("enlève le temps dans tous les états, ne stresse pas le joueur", voir
+        // MultiplayerMatchController.RefreshHudDynamicFields). Un joueur qui dépassait 60s voyait donc,
+        // SANS le moindre avertissement possible : ses unités ne recevoir aucun ordre du tour (repli
+        // "tenir la position", voir ApplyForPlayerPure), son adversaire être notifié qu'il avait
+        // "ghosté", et tous ses tracés effacés en fin de rejeu (ClearTacticalPath). Le plafond reste
+        // indispensable en dernier recours contre un adversaire réellement absent — mais, comme pour
+        // le déploiement, il ne doit plus jamais se déclencher en usage normal.
+        private const float PlanningSeconds = 300f;
         // 2026-09-06 : 45s -> 300s (5 min) sur demande explicite — trop court pour un vrai joueur qui
         // découvre son dock de placement, ça se terminait par un repli automatique (voir
         // AutoDeployTeamFallbackPure) ressenti comme une action "automatique" imposée sans prévenir.
@@ -187,6 +199,13 @@ namespace Novgov.Server
 
         private void Update()
         {
+            // Signal de vie serveur -> client pour TOUTE connexion authentifiée, quelle que soit la
+            // phase où elle se trouve (file d'attente, génération de carte, déploiement, conquête,
+            // planification...). Voir PlayerConnection.PumpKeepalives pour le détail : sans ça, un
+            // joueur seul en file d'attente était systématiquement déconnecté au bout de 25s, ce qui
+            // rendait Deathmatch/Zone de Contrôle injouables sans un second joueur immédiat.
+            PlayerConnection.PumpKeepalives();
+
             while (GameServerBootstrap.AuthenticatedConnections.TryDequeue(out PlayerConnection conn))
             {
                 pendingMode.Add(conn);

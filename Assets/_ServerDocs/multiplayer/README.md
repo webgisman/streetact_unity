@@ -5,14 +5,40 @@ transformer Novgov (un jeu solo Joueur vs IA, **toujours disponible tel quel** �
 est un mode additionnel, pas un remplacement) en un jeu **multijoueur PvP asynchrone à tour par
 tour**, hébergé sur un VPS Hetzner via Docker.
 
-**État (2026-09-02) : déployé et vérifié en direct sur `novgov.com`** — stack Docker complète
-live (Postgres/GoTrue/PostgREST/serveur de jeu/Nginx), build headless Linux du serveur de jeu
-fonctionnel, 4 modes (`deathmatch`/`zone_control`/`conquest`/`practice_ai`). Voir
-[08-known-issues-and-todo.md](08-known-issues-and-todo.md) — section **17** est la plus récente
-(premiers vrais tests sur émulateurs Android, pas seulement simulation TCP) ; section 9 pour le
-récit du tout premier déploiement. Reste toujours à faire : un vrai test à 2 téléphones/tablettes
-physiques (§17 a testé sur émulateur, jamais sur matériel réel) et confirmer visuellement la
-rotation portrait/paysage (corrigée au niveau du manifeste, jamais vue tourner en direct).
+**État (2026-09-08 soir) : audit complet de jouabilité §19 REBUILD ET REDÉPLOYÉ SUR LE VPS,
+confirmé en direct.** Serveur Linux reconstruit (fraîcheur vérifiée par réflexion .NET, pas
+seulement l'horodatage), sauvegarde de l'ancienne image prise avant toute modification
+(`novgov-game-server:backup_20260908_204728`), copié sur `novgov.com`, conteneur reconstruit et
+redémarré, vérifié stable (aucune exception/crash-loop) et joignable en TCP depuis l'extérieur.
+APK Android reconstruit avec succès (`build/Android/Novgov-Test.apk`, même arbre source que le
+serveur) mais **pas encore installé sur un appareil physique** — c'est la prochaine étape. Voir
+[08-known-issues-and-todo.md](08-known-issues-and-todo.md) section **19** (§19.1 à §19.13) pour le
+détail complet : cartographie des 8 sous-systèmes multijoueur, 19 correctifs de jouabilité +
+revue adversariale, puis un retour joueur réel (§19.11/§19.12) qui a trouvé deux bugs
+supplémentaires — dont un très concret : la bannière affichait littéralement "une IA de secours a
+joué vos unités" dans Deathmatch/Zone de Contrôle alors qu'AUCUNE IA n'y tourne jamais.
+
+**Cause la plus probable de "je n'arrive pas à lancer/tester le multijoueur" (signalé le
+2026-09-06)** : §19.1 — un joueur seul en file d'attente Deathmatch/Zone de Contrôle était
+systématiquement déconnecté après 25 s de silence serveur. Corrigé (keepalive au niveau de la
+connexion) et maintenant EN PRODUCTION — reste à confirmer par un vrai test à 2 joueurs une fois
+l'APK installé.
+
+## Outillage — lancer les tests sans ouvrir l'Éditeur
+
+Le moteur pur (`Assets/Scripts/TacticalCore/`) a un harnais de tests versionné hors de `Assets/`
+(donc invisible pour Unity), qui compile et exécute ses 74 tests avec le SDK .NET livré avec
+Unity — pas besoin d'installation séparée, ni d'ouvrir l'Éditeur :
+
+```
+.\Tools\run-tests.ps1              # tests + compile-check des 3 configurations (client/serveur/éditeur)
+.\Tools\run-tests.ps1 -TestsOnly   # tests seuls (~5 s)
+```
+
+À lancer avant tout commit qui touche `Assets/Scripts/TacticalCore/`, `Server/`, `Network/` ou
+`AI/`. Voir `Assets/_ServerDocs/multiplayer/08-known-issues-and-todo.md` §19.5 pour pourquoi ce
+harnais existe et pourquoi il est désormais versionné (il avait été reconstruit de zéro à trois
+sessions différentes après avoir vécu dans un dossier temporaire).
 
 **Ne PAS build/importer ce dossier dans le jeu.** Il contient uniquement de la doc et des
 fichiers de config serveur (yml, sql, conf) — Unity les ignore au build.
@@ -37,7 +63,7 @@ fichiers de config serveur (yml, sql, conf) — Unity les ignore au build.
 9. [06-security-checklist.md](06-security-checklist.md) — UFW/Docker, secrets, RLS.
 10. [07-test-plan-2-phones.md](07-test-plan-2-phones.md) — plan de test final avec 2 téléphones.
 11. [08-known-issues-and-todo.md](08-known-issues-and-todo.md) — **à lire en premier en reprenant
-    ce chantier, en partant de la fin** (section 17 = la plus récente) : état exact de ce qui est
+    ce chantier, en partant de la fin** (section 19 = la plus récente) : état exact de ce qui est
     fait/pas fait, et tout le travail restant jusqu'au test sur matériel physique.
 
 ## Identifiants

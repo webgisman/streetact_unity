@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>NovgovTacticalCoreTests</AssemblyName>
+    <RootNamespace>NovgovHarness</RootNamespace>
+    <LangVersion>9.0</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0169;CS0414;CS0649;CS0067;CS0162;CS0219;CS8632</NoWarn>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Le shim et le point d'entree du harnais -->
+    <Compile Include="UnityShim.cs" />
+    <Compile Include="Program.cs" />
+
+    <!-- Le moteur deterministe reel, tel quel, sans copie.
+         TacticalGridBuilder.cs est EXCLU : c'est le seul pont vers la scene Unity vivante
+         (BuildingStructure/RoadBarrier/DestructibleEnvironment, des MonoBehaviour), donc
+         intestable hors Editeur — aucun test ne le touche. Sa compilation est couverte
+         separement par les 3 *.check.csproj du projet. -->
+    <Compile Include="$(NovgovRoot)\Assets\Scripts\TacticalCore\*.cs"
+             Exclude="$(NovgovRoot)\Assets\Scripts\TacticalCore\TacticalGridBuilder.cs" />
+    <Compile Include="$(NovgovRoot)\Assets\Scripts\Core\DeterministicHash.cs" />
+    <Compile Include="$(NovgovRoot)\Assets\Scripts\Core\VectorSentinel.cs" />
+
+    <!-- Les auto-tests reels, tels quels -->
+    <Compile Include="$(NovgovRoot)\Assets\Editor\TacticalCoreSelfTest*.cs" />
+  </ItemGroup>
+</Project>

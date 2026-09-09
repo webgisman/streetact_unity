@@ -49,11 +49,75 @@ namespace Novgov.Server
 
         public bool IsDisconnected => disconnected;
 
+        // ---------------------------------------------------------------------------------------
+        // SIGNAL DE VIE SERVEUR -> CLIENT, CENTRALISÉ (2026-09-07)
+        //
+        // POURQUOI CE MÉCANISME EXISTE, ET POURQUOI IL EST ICI ET PAS DANS UNE PHASE.
+        // Le client applique un ReceiveTimeout FINI de 25s à sa socket (GameServerClient.Connect) :
+        // 25 secondes sans le moindre octet reçu et son thread de lecture lève, ce qui le déconnecte
+        // avec "connexion perdue". Or le serveur passait de longues périodes à n'envoyer STRICTEMENT
+        // RIEN :
+        //   - un joueur seul dans waitingDeathmatch/waitingZoneControl (MatchSessionManager.Update)
+        //     n'était l'objet d'aucun envoi tant qu'aucun adversaire ne se présentait — un joueur qui
+        //     attendait plus de 25s était donc TOUJOURS éjecté avant de pouvoir être apparié. C'est
+        //     la raison pour laquelle Deathmatch/Zone de Contrôle étaient injouables en pratique dès
+        //     qu'un second joueur ne rejoignait pas la file dans les 25 secondes ;
+        //   - entre l'appariement et match_found, RunMatch récupère deux pseudos par HTTP puis peut
+        //     générer une tuile inédite (Overpass + bake NavMesh, jusqu'à ~60s) sans rien émettre ;
+        //   - la Conquête et l'entraînement contre l'IA n'avaient aucun signal de vie du tout.
+        // La phase de déploiement, elle, avait bien reçu son propre signal de vie (correctif du
+        // 2026-09-06) — mais LOCAL à cette phase. C'est exactement l'erreur de conception à ne pas
+        // reproduire : chaque nouvelle phase devait penser à réimplémenter son keepalive, et trois
+        // d'entre elles ne l'avaient pas fait.
+        //
+        // Le signal de vie est donc désormais une propriété de la CONNEXION, pas d'une phase :
+        // toute connexion authentifiée vivante reçoit un "heartbeat" dès qu'elle est restée
+        // silencieuse trop longtemps, quel que soit ce que le serveur est en train de faire — y
+        // compris dans une phase qui n'existe pas encore. Un heartbeat serveur->client n'a besoin
+        // d'aucun traitement côté client (son switch l'ignore, voir
+        // MultiplayerMatchController.HandleServerMessage) : c'est l'ARRIVÉE de la trame qui réarme
+        // le timeout de la socket, pas son contenu.
+        private static readonly ConcurrentDictionary<PlayerConnection, byte> LiveConnections =
+            new ConcurrentDictionary<PlayerConnection, byte>();
+
+        /// <summary>Intervalle entre deux signaux de vie. Volontairement à ~1/3 du ReceiveTimeout
+        /// client (25s) : deux trames consécutives peuvent se perdre sans que le joueur saute.
+        /// L'ancien intervalle local à la phase de déploiement était de 15s, soit moins de deux
+        /// fois la marge — un seul hoquet réseau suffisait à rejouer la déconnexion qu'il corrigeait.</summary>
+        public const double KeepaliveIntervalSeconds = 8.0;
+
+        private DateTime lastSentUtc = DateTime.UtcNow;
+
+        /// <summary>Envoie un signal de vie à TOUTE connexion authentifiée restée silencieuse plus
+        /// de <see cref="KeepaliveIntervalSeconds"/>, et oublie les connexions mortes. Appelé une
+        /// fois par frame par MatchSessionManager.Update, depuis le thread principal Unity.</summary>
+        public static void PumpKeepalives()
+        {
+            DateTime now = DateTime.UtcNow;
+            foreach (var entry in LiveConnections)
+            {
+                PlayerConnection conn = entry.Key;
+                if (conn.disconnected)
+                {
+                    LiveConnections.TryRemove(conn, out _);
+                    continue;
+                }
+                if ((now - conn.lastSentUtc).TotalSeconds >= KeepaliveIntervalSeconds)
+                {
+                    // Send met lastSentUtc à jour — y compris quand un vrai message vient d'être
+                    // envoyé par ailleurs, ce qui évite d'ajouter un heartbeat inutile juste après
+                    // un turn_timer.
+                    conn.Send(new NetMessage { type = "heartbeat" });
+                }
+            }
+        }
+
         public PlayerConnection(TcpClient client, NetworkStream stream, string userId)
         {
             TcpClient = client;
             Stream = stream;
             UserId = userId;
+            LiveConnections.TryAdd(this, 0);
         }
 
         public void StartReceiving()
@@ -89,6 +153,8 @@ namespace Novgov.Server
                 try
                 {
                     NetFraming.WriteMessage(Stream, msg);
+                    // Tout envoi réel repousse d'autant le prochain signal de vie (voir PumpKeepalives).
+                    lastSentUtc = DateTime.UtcNow;
                 }
                 catch (Exception ex)
                 {
@@ -101,6 +167,7 @@ namespace Novgov.Server
         public void Close()
         {
             disconnected = true;
+            LiveConnections.TryRemove(this, out _);
             try { Stream?.Close(); } catch { }
             try { TcpClient?.Close(); } catch { }
         }

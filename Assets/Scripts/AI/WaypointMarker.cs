@@ -7,6 +7,47 @@ using UnityEngine;
 public class WaypointMarker : MonoBehaviour
 {
     public bool isArtilleryTarget = false;
+
+    // ------------------------------------------------------------------------------------------
+    // RATTACHEMENT À L'UNITÉ ET AU NŒUD (2026-09-07)
+    // Un marqueur était jusqu'ici un GameObject anonyme, sans aucun lien de retour vers l'unité ni
+    // vers le point de trajet qu'il illustre : il n'était détruit qu'EN MASSE au lancement du tour
+    // (TacticalPathManager_Execution). Annuler un checkpoint raccourcissait donc bien la ligne bleue
+    // mais laissait son hologramme en place jusqu'à la fin du tour — le joueur croyait son point
+    // toujours posé et replanifiait autour d'un ordre fantôme.
+    /// <summary>Unité dont ce marqueur illustre un point de trajet (null = marqueur libre).</summary>
+    public UnitAI owner;
+    /// <summary>Index, dans owner.tacticalPath, du nœud illustré au moment de la création.</summary>
+    public int nodeIndex = -1;
+
+    /// <summary>Tous les marqueurs vivants — même idiome que BuildingStructure.AllBuildings, pour
+    /// retrouver ceux d'une unité sans balayer la scène entière.</summary>
+    public static readonly System.Collections.Generic.List<WaypointMarker> AllMarkers = new System.Collections.Generic.List<WaypointMarker>();
+
+    /// <summary>Détruit les marqueurs de <paramref name="unit"/> dont le nœud n'existe plus (index
+    /// supérieur ou égal à <paramref name="fromNodeIndex"/>). Passer 0 les enlève tous.</summary>
+    public static void DestroyMarkersOf(UnitAI unit, int fromNodeIndex)
+    {
+        if (unit == null) return;
+        for (int i = AllMarkers.Count - 1; i >= 0; i--)
+        {
+            WaypointMarker m = AllMarkers[i];
+            if (m == null) { AllMarkers.RemoveAt(i); continue; }
+            if (m.owner == unit && m.nodeIndex >= fromNodeIndex) Destroy(m.gameObject);
+        }
+    }
+
+    void OnEnable()
+    {
+        if (!AllMarkers.Contains(this)) AllMarkers.Add(this);
+        if (owner != null) hadOwner = true;
+    }
+    void OnDisable() { AllMarkers.Remove(this); }
+
+    /// <summary>Ce marqueur a-t-il été rattaché à une unité à un moment ? Distingue « orphelin »
+    /// (unité détruite) de « volontairement libre » — voir Update.</summary>
+    private bool hadOwner = false;
+
     private float timeAlive = 0f;
     private Material holoMat;
     private Color baseColor = new Color(0f, 0.8f, 1f, 0.6f);
@@ -35,12 +76,29 @@ public class WaypointMarker : MonoBehaviour
         audioSource.clip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
         audioSource.Play();
         
-        // Persister pendant la phase de planification (détruit au début de l'exécution ou après 60s)
-        Destroy(gameObject, 60f);
+        // Plus d'auto-destruction temporisée (2026-09-07). Elle valait 60 s, alors que la phase de
+        // planification en dure désormais 300 (PlanningSeconds, relevé le même jour) et que le
+        // compte à rebours n'est plus affiché : un joueur qui réfléchit voyait ses marqueurs
+        // disparaître un par un alors que les nœuds correspondants existaient toujours — l'exact
+        // inverse du marqueur fantôme que le rattachement owner/nodeIndex vient de supprimer.
+        // Le cycle de vie est maintenant entièrement explicite : détruit avec son nœud
+        // (UnitAI.RemoveLastTacticalNode/ClearTacticalPath) ou au lancement du tour
+        // (TacticalPathManager_Execution).
     }
 
     void Update()
     {
+        // Marqueur ORPHELIN : son unité a été détruite (mort en cours de tour). DestroyMarkersOf ne
+        // peut plus l'atteindre — il est indexé par une référence que Unity rapporte désormais comme
+        // null — et il n'y a plus d'auto-destruction temporisée pour le ramasser. On se retire donc
+        // nous-mêmes. `owner != null` à la création est ce qui distingue un vrai orphelin d'un
+        // marqueur volontairement libre (owner jamais renseigné).
+        if (hadOwner && owner == null)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
         timeAlive += Time.deltaTime;
 
         // Effet de rotation continue

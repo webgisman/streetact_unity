@@ -233,6 +233,15 @@ namespace Novgov.TacticalCore
         public bool setGarrisonWindow; // GarnisonFenetre -> isGarrisoned = true + windowNormal défini
         public Vector2? windowNormalToSet;
         public bool setGarrisonDoor;   // GuetterPorte -> isGarrisoned = true, PAS de windowNormal (pas de cône, rapport §2.9)
+        /// <summary>Rattache l'unité à un bâtiment SANS l'y faire entrer (2026-09-07). Distinct de
+        /// <see cref="enterBuildingId"/>, que ExpandOrder interprète comme "franchis le seuil et
+        /// déplace-toi à l'intérieur". GUETTER PAR LA PORTE a besoin du rattachement — sinon la
+        /// garnison tire sans jamais pouvoir être touchée en retour, l'exemption de mur de
+        /// LineOfSight comparant le mur au currentBuildingId de la cible — mais surtout PAS de
+        /// l'entrée : le joueur poste son soldat DANS L'EMBRASURE, à l'endroit exact qu'il a
+        /// désigné, pas deux mètres plus loin dans la pièce.</summary>
+        public int attachBuildingId = -1;
+
         public int enterBuildingId = -1;  // EntrerBatiment -> currentBuildingId
         public bool exitBuilding;         // SortirBatiment -> currentBuildingId = -1 ET LeaveGarrison (rapport §2.8)
         public float? setPositionY;       // Escalade (monte sur le toit)

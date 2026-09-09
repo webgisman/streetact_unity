@@ -132,9 +132,34 @@ public class BuildingStructure : MonoBehaviour
         return null;
     }
 
+    /// <summary>Comme <see cref="FindBuildingAt"/>, mais rattache aussi un point situé JUSTE À CÔTÉ
+    /// d'un bâtiment (au plus <paramref name="maxDistance"/> mètres de son contour), au plus proche
+    /// en cas d'ambiguïté. Jumeau exact, côté scène vivante, de
+    /// <c>Novgov.Server.MatchGeometry.FindBuildingAtOrNear</c> — voir cette méthode pour le pourquoi
+    /// détaillé : un point de PORTE est toujours hors de l'empreinte (une porte est générée 5 cm en
+    /// dehors de sa façade), donc un test d'appartenance strict échouait à 100% pour les actions
+    /// ENTRER DANS LE BÂTIMENT et GUETTER PAR LA PORTE.</summary>
+    public static BuildingStructure FindBuildingAtOrNear(Vector3 worldPos, float maxDistance)
+    {
+        BuildingStructure exact = FindBuildingAt(worldPos);
+        if (exact != null) return exact;
+
+        Vector2 pt2D = new Vector2(worldPos.x, worldPos.z);
+        float bestSqr = maxDistance * maxDistance;
+        BuildingStructure best = null;
+        for (int i = 0; i < AllBuildings.Count; i++)
+        {
+            BuildingStructure b = AllBuildings[i];
+            if (b == null || b.polygonFootprint == null || b.polygonFootprint.Count < 3) continue;
+            float d = Novgov.TacticalCore.GeometryMath.SqrDistanceToPolygonEdge(b.polygonFootprint, pt2D);
+            if (d < bestSqr) { bestSqr = d; best = b; }
+        }
+        return best;
+    }
+
     void OnEnable()
     {
-        if (!isRegistered) 
+        if (!isRegistered)
         {
             AllBuildings.Add(this);
             isRegistered = true;
