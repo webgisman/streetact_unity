@@ -122,6 +122,14 @@ namespace Novgov.Network
         public bool dead;
         public bool shooting;
 
+        // Retour visuel de combat (2026-09-11) : identifiant de la cible visée CE tick, présent
+        // seulement quand "shooting" est vrai — permet au client de rejouer un vrai traceur/flash
+        // vers la bonne unité (et un effet d'impact SUR elle) au lieu de piloter uniquement
+        // l'Animator sans le moindre effet visible. Absent (chaîne vide) pour un tir de mortier — la
+        // résolution y associe un faux tireur "mortar" sans unité réelle, voir MatchSessionManager_
+        // CombatPure.ApplyAreaDamage.
+        public string shoot_target_id;
+
         // Brouillard de guerre réseau (2026-08-30) : une unité ADVERSE n'apparaît plus jamais dans
         // "turn_result" tant qu'elle n'est pas repérée (voir MatchSessionManager.
         // ComputeVisibleUnitIds) — la première fois qu'elle l'est, elle n'existe pas encore côté

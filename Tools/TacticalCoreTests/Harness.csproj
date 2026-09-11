@@ -30,5 +30,11 @@
 
     <!-- Les auto-tests reels, tels quels -->
     <Compile Include="$(NovgovRoot)\Assets\Editor\TacticalCoreSelfTest*.cs" />
+
+    <!-- Simulation de partie complete (2026-09-12) : vit ICI (dans Tools/TacticalCoreTests/,
+         contrairement a ses "voisins" TacticalCoreSelfTest*.cs ci-dessus, qui vivent tous dans
+         Assets/Editor/) : demandee explicitement comme fichier de test au sein de ce dossier. Le
+         glob juste au-dessus ne la couvre donc pas, elle doit etre listee explicitement ici. -->
+    <Compile Include="TacticalCoreSelfTest_FullMatchSim.cs" />
   </ItemGroup>
 </Project>

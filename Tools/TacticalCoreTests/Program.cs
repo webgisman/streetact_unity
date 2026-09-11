@@ -11,6 +11,20 @@ namespace NovgovHarness
             try
             {
                 TacticalCoreSelfTest.RunAll();
+
+                // 2026-09-12 : simulation de partie Deathmatch complete (voir
+                // TacticalCoreSelfTest_FullMatchSim.cs, dans ce meme dossier). Ce fichier de test ne
+                // peut pas etre relie a RunAll() ci-dessus (qui vit dans Assets/Editor/
+                // TacticalCoreSelfTest.cs, hors du perimetre autorise pour cette session) : il est
+                // donc invoque directement depuis ce point d'entree. Les deux alimentent le meme
+                // compteur d'erreurs (UnityEngine.Debug.Errors, voir UnityShim.cs) via le meme
+                // helper Run(...ref passed, ref failed), donc le code de sortie ci-dessous couvre
+                // deja les deux sans rien dupliquer.
+                int fullMatchPassed = 0, fullMatchFailed = 0;
+                TacticalCoreSelfTest.RunFullMatchSimTests(ref fullMatchPassed, ref fullMatchFailed);
+                Console.WriteLine(fullMatchFailed == 0
+                    ? $"[TacticalCoreSelfTest.FullMatchSim] {fullMatchPassed} reussi(s), {fullMatchFailed} echoue(s)."
+                    : $"[TacticalCoreSelfTest.FullMatchSim] {fullMatchPassed} reussi(s), {fullMatchFailed} ECHOUE(S).");
             }
             catch (Exception e)
             {

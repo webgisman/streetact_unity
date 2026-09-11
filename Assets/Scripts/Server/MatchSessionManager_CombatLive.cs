@@ -643,6 +643,7 @@ namespace Novgov.Server
             var health = new Dictionary<string, int>();
             var dead = new Dictionary<string, bool>();
             var shooting = new Dictionary<string, bool>();
+            var shootTarget = new Dictionary<string, string>();
 
             // Hauteur suivie PAS À PAS, exactement comme dans BuildSnapshotsFromEventsPure. Ce moteur
             // "vivant" (Conquête et Entraînement contre l'IA) lisait la hauteur depuis
@@ -660,10 +661,11 @@ namespace Novgov.Server
                 health[id] = u.health;
                 dead[id] = u.isDead;
                 shooting[id] = false;
+                shootTarget[id] = null;
                 yByUnit[id] = u.transform.position.y;
             }
 
-            var snapshots = new List<Snapshot> { CaptureTacticalSnapshot(0, pos, rotation, health, dead, shooting, unitsBeforeResolution, yByUnit) };
+            var snapshots = new List<Snapshot> { CaptureTacticalSnapshot(0, pos, rotation, health, dead, shooting, shootTarget, unitsBeforeResolution, yByUnit) };
 
             var ticks = events.Select(e => e.tick).Distinct().OrderBy(t => t).ToList();
             foreach (int tick in ticks)
@@ -686,7 +688,11 @@ namespace Novgov.Server
                         case TacticalEvent.Kind.Shot:
                         case TacticalEvent.Kind.OverwatchTriggered:
                             if (e.targetUnitId != null && health.ContainsKey(e.targetUnitId)) health[e.targetUnitId] -= e.damage;
-                            if (shooting.ContainsKey(e.unitId)) shooting[e.unitId] = true;
+                            if (shooting.ContainsKey(e.unitId))
+                            {
+                                shooting[e.unitId] = true;
+                                shootTarget[e.unitId] = e.targetUnitId;
+                            }
                             break;
                         case TacticalEvent.Kind.Death:
                             if (dead.ContainsKey(e.unitId)) dead[e.unitId] = true;
@@ -709,7 +715,7 @@ namespace Novgov.Server
                     if (dead[id] && !unit.isDead) unit.ApplyNetworkDeath();
                 }
 
-                snapshots.Add(CaptureTacticalSnapshot(tick * TickDurationMs, pos, rotation, health, dead, shooting, unitsBeforeResolution, yByUnit));
+                snapshots.Add(CaptureTacticalSnapshot(tick * TickDurationMs, pos, rotation, health, dead, shooting, shootTarget, unitsBeforeResolution, yByUnit));
                 foreach (var id in shooting.Keys.ToList()) shooting[id] = false; // le "flash" de tir ne dure qu'un instant visuel
             }
 
@@ -735,8 +741,8 @@ namespace Novgov.Server
         }
 
         private Snapshot CaptureTacticalSnapshot(int t, Dictionary<string, Vector2> pos, Dictionary<string, float> rotation,
-            Dictionary<string, int> health, Dictionary<string, bool> dead, Dictionary<string, bool> shooting, List<UnitAI> units,
-            Dictionary<string, float> yByUnit)
+            Dictionary<string, int> health, Dictionary<string, bool> dead, Dictionary<string, bool> shooting, Dictionary<string, string> shootTarget,
+            List<UnitAI> units, Dictionary<string, float> yByUnit)
         {
             var states = new UnitState[units.Count];
             for (int i = 0; i < units.Count; i++)
@@ -763,6 +769,7 @@ namespace Novgov.Server
                     health = health[id],
                     dead = dead[id],
                     shooting = shooting[id],
+                    shoot_target_id = shootTarget.TryGetValue(id, out string tgt) ? tgt : null,
                     unit_type = InferUnitType(units[i]),
                     team_id = units[i].teamID
                 };

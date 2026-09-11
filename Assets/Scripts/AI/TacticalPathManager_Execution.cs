@@ -31,9 +31,43 @@ public partial class TacticalPathManager
         return count;
     }
 
+    // 2026-09-12 (retour joueur : "je ne peux plus rien sélectionner après avoir donné un ordre à
+    // une seule unité") : le log Editor.log d'une vraie session de test a confirmé un vrai clic UI
+    // Toolkit sur FIN DE TOUR (pas un bug de sélection) juste après un seul ordre — le tour entier
+    // partait avec une seule unité sur plusieurs ayant reçu un ordre, sans qu'aucun avertissement ne
+    // le signale avant qu'il ne soit trop tard. Fenêtre de confirmation "retapez pour confirmer",
+    // même mécanisme que ShowInvalidTapFeedback (aucun nouvel écran/dialogue) : un premier tap sur
+    // FIN DE TOUR alors qu'il reste au moins une unité SANS AUCUN ORDRE affiche un avertissement et
+    // n'arme rien d'autre ; un second tap dans les 3s qui suivent est traité comme une confirmation
+    // explicite et termine bien le tour.
+    private float pendingEndTurnConfirmUntil = -1f;
+
+    /// <summary>Vrai si au moins une unité VIVANTE de MON camp (isPlayerControlled — jamais celles de
+    /// l'adversaire, hors de mon contrôle) n'a encore aucun point de trajectoire ce tour-ci.</summary>
+    private static bool AnyPlayerUnitWithoutOrders()
+    {
+        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
+        {
+            UnitAI u = UnitAI.AllLivingUnits[i];
+            if (u != null && !u.isDead && u.isPlayerControlled && (u.tacticalPath == null || u.tacticalPath.Count == 0))
+                return true;
+        }
+        return false;
+    }
+
     public void LancerExecutionTour()
     {
         if (phaseActuelle == GamePhase.Execution) return;
+
+        if (Time.time > pendingEndTurnConfirmUntil && AnyPlayerUnitWithoutOrders())
+        {
+            pendingEndTurnConfirmUntil = Time.time + 3f;
+#if !UNITY_SERVER
+            ShowInvalidTapFeedback("Des unités n'ont reçu aucun ordre — retapez FIN DE TOUR pour confirmer", 3f);
+#endif
+            return;
+        }
+        pendingEndTurnConfirmUntil = -1f;
 
         team1CountAtTurnStart = CountLivingByTeam(1);
         team2CountAtTurnStart = CountLivingByTeam(2);

@@ -969,9 +969,27 @@ namespace Novgov.Network
                 // tick, toute unité adverse déjà apparue mais qui n'y figure plus.
                 var visibleThisTick = new HashSet<string>();
 
+                // Glissement fluide (2026-09-11) : la position/rotation de ce tick ne sont plus posées
+                // instantanément puis figées jusqu'au prochain (250 ms plus tard, voir TickDurationMs)
+                // — ça se voyait comme une saccade, un "téléport" d'1 m toutes les 250 ms au lieu d'un
+                // mouvement continu. On mémorise ici le départ/arrivée de chaque unité pour ce tick et
+                // on interpole frame par frame pendant l'attente, après la boucle ci-dessous.
+                var lerpFromPos = new Dictionary<UnitAI, Vector3>();
+                var lerpFromRot = new Dictionary<UnitAI, Quaternion>();
+                var lerpToPos = new Dictionary<UnitAI, Vector3>();
+                var lerpToRot = new Dictionary<UnitAI, Quaternion>();
+
+                // Retour visuel de combat (2026-09-11) : tirs à rejouer une fois toutes les unités de
+                // ce tick connues (résolution de shoot_target_id différée après la boucle ci-dessous,
+                // qui peut encore faire apparaître la cible si c'est sa première apparition côté
+                // client) — mais AVANT la boucle d'interpolation, tant que les transforms sont encore
+                // à leur position PRÉCÉDENTE (celle du tick d'avant), l'instant exact où le tir part.
+                var shotsThisTick = new List<(UnitAI shooter, string targetId)>();
+
                 foreach (UnitState state in snap.units)
                 {
                     visibleThisTick.Add(state.unit_id);
+                    bool justSpawned = false;
 
                     if (!unitLookup.TryGetValue(state.unit_id, out UnitAI unit) || unit == null)
                     {
@@ -992,21 +1010,42 @@ namespace Novgov.Network
                         unit.isPlayerControlled = (unit.teamID == localTeamId);
                         var newAgent = unit.GetComponent<NavMeshAgent>();
                         if (newAgent != null) newAgent.enabled = false;
+                        justSpawned = true;
                     }
 
                     unit.SetVisualsVisibility(true);
 
                     Vector3 newPos = new Vector3(state.x, state.y, state.z);
+                    Quaternion newRot = Quaternion.Euler(0f, state.ry, 0f);
                     float moveSpeed = previousPositions.TryGetValue(state.unit_id, out Vector3 prevPos)
                         ? Vector3.Distance(prevPos, newPos) / intervalSec
                         : 0f;
                     previousPositions[state.unit_id] = newPos;
 
-                    unit.transform.position = newPos;
-                    unit.transform.rotation = Quaternion.Euler(0f, state.ry, 0f);
+                    // Une unité qui vient d'apparaître (SpawnUnitAt) est déjà à newPos : rien à interpoler.
+                    lerpFromPos[unit] = justSpawned ? newPos : unit.transform.position;
+                    lerpFromRot[unit] = justSpawned ? newRot : unit.transform.rotation;
+                    lerpToPos[unit] = newPos;
+                    lerpToRot[unit] = newRot;
+
                     unit.SetNetworkHealth(state.health);
                     unit.SetNetworkAnimState(state.shooting, moveSpeed);
                     if (state.dead) unit.ApplyNetworkDeath();
+
+                    if (state.shooting && !string.IsNullOrEmpty(state.shoot_target_id))
+                        shotsThisTick.Add((unit, state.shoot_target_id));
+                }
+
+                // Effets cosmétiques du tir (voir UnitAI.PlayNetworkShotEffects/PlayNetworkHitReaction) :
+                // exécuté ICI, transforms encore à leur position d'AVANT ce tick — c'est précisément
+                // l'instant où le coup part côté serveur (voir TacticalResolver, Kind.Shot).
+                foreach (var (shooter, targetId) in shotsThisTick)
+                {
+                    if (shooter == null) continue;
+                    if (!unitLookup.TryGetValue(targetId, out UnitAI target) || target == null) continue;
+                    shooter.PlayNetworkShotEffects(target.transform.position);
+                    Vector3 hitDir = (target.transform.position - shooter.transform.position).normalized;
+                    target.PlayNetworkHitReaction(hitDir);
                 }
 
                 // Toute unité ENNEMIE déjà apparue mais absente de CE tick n'est plus repérée à cet
@@ -1030,7 +1069,27 @@ namespace Novgov.Network
 
                 zoneProgressTeam1 = snap.zone_progress_team1;
                 zoneProgressTeam2 = snap.zone_progress_team2;
-                yield return new WaitForSeconds(intervalSec);
+
+                float elapsed = 0f;
+                while (elapsed < intervalSec)
+                {
+                    elapsed += Time.deltaTime;
+                    float t = Mathf.Clamp01(elapsed / intervalSec);
+                    foreach (var kv in lerpToPos)
+                    {
+                        UnitAI u = kv.Key;
+                        if (u == null) continue;
+                        u.transform.position = Vector3.Lerp(lerpFromPos[u], kv.Value, t);
+                        u.transform.rotation = Quaternion.Slerp(lerpFromRot[u], lerpToRot[u], t);
+                    }
+                    yield return null;
+                }
+                // Rattrape tout retard d'arrondi de Time.deltaTime : la position finale du tick doit être
+                // EXACTEMENT celle du serveur avant que le tick suivant ne reprenne depuis ce point.
+                foreach (var kv in lerpToPos)
+                {
+                    if (kv.Key != null) kv.Key.transform.position = kv.Value;
+                }
             }
 
             foreach (var unit in UnitAI.AllLivingUnits)

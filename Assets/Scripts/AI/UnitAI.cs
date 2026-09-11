@@ -183,9 +183,27 @@ public partial class UnitAI : MonoBehaviour
     /// DIRECT pile sur le modèle continuait de fonctionner (son collider, lui, est déjà bien centré
     /// sur bounds.center) — d'où "des fois ça marche" : uniquement quand le tap tombe pile sur le
     /// blindé, jamais quand la tolérance de 60-75px est censée rattraper une petite imprécision.
-    public Vector3 SelectionAnchorWorldPos => selectionAnchorCollider != null
-        ? selectionAnchorCollider.bounds.center
-        : transform.position + Vector3.up * 0.5f;
+    ///
+    /// HAUTEUR ramenée au sol (correctif 2026-09-12, retour joueur : "les fantassins ne se
+    /// sélectionnent pas" — vrai log de test : la même unité CharLeopard "volait" 6 taps de suite
+    /// visant un Fantassin juste à côté). bounds.center seul (X/Z ET Y) suffisait pour le décalage
+    /// HORIZONTAL corrigé le 2026-09-09, mais un char fait ~1,8-2m de haut : son bounds.center Y est
+    /// à mi-hauteur de la carrosserie, pas au sol. En vue Commandement (oblique, 75°), projeter ce
+    /// point surélevé à l'écran (WorldToScreenPoint) le décale visiblement de sa position RÉELLE au
+    /// sol — assez pour chevaucher la zone de tap d'un Fantassin voisin posé juste à côté, à hauteur
+    /// de sol, lui. transform.position.y reste la référence de contact-sol pour TOUT type d'unité
+    /// (voir agent.baseOffset ci-dessous, calculé exactement pour que ce soit vrai même pour un
+    /// blindé) — seul X/Z vient de bounds.center, qui reste nécessaire pour l'unité dont le pivot
+    /// d'import est aussi décalé horizontalement.
+    public Vector3 SelectionAnchorWorldPos
+    {
+        get
+        {
+            if (selectionAnchorCollider == null) return transform.position + Vector3.up * 0.5f;
+            Vector3 center = selectionAnchorCollider.bounds.center;
+            return new Vector3(center.x, transform.position.y, center.z);
+        }
+    }
 
     void OnEnable()
     {

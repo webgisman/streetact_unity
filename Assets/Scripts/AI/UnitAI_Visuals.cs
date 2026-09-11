@@ -232,6 +232,101 @@ public partial class UnitAI
         Destroy(casing, 2f);
     }
 
+    // ==========================================
+    // REJEU RÉSEAU (2026-09-11) : mêmes effets que ShootAt/TakeDamage, mais COSMÉTIQUE UNIQUEMENT.
+    // ==========================================
+    // Avant ce correctif, le rejeu multijoueur (MultiplayerMatchController.PlaySnapshotsBody)
+    // n'appelait ni ShootAt ni TakeDamage — seulement SetNetworkHealth/SetNetworkAnimState, qui ne
+    // pilotent que la barre de vie et le booléen "IsShooting" de l'Animator. Un combat entier se
+    // déroulait donc sans le moindre flash, traceur, son de tir, impact ou animation de hit : les
+    // unités mouraient en silence. Ces deux méthodes REPRODUISENT les effets de ShootAt/TakeDamage
+    // à l'identique, sans jamais recalculer ni réappliquer de dégâts (déjà appliqués côté serveur
+    // autoritaire, voir TacticalResolver puis SetNetworkHealth) — rejouer ShootAt/TakeDamage tels
+    // quels aurait doublé les dégâts. Le mortier est délibérément exclu (voir MatchSessionManager_
+    // CombatPure.ApplyAreaDamage : l'événement Shot associé porte un faux unitId "mortar" et un tick
+    // toujours à 0, aucune unité tireuse réelle ni instant réel à rejouer fidèlement pour l'instant).
+
+    /// <summary>Rejoue les effets cosmétiques d'un tir direct (infanterie/char/véhicule-canon)
+    /// pendant la lecture d'un snapshot réseau. Ne touche jamais aux PV ni n'appelle TakeDamage.</summary>
+    public void PlayNetworkShotEffects(Vector3 targetPos)
+    {
+        if (isMortar) return; // voir note ci-dessus : pas de rejeu fidèle possible pour l'instant
+
+        if (combatAudioSource != null && combatAudioSource.clip != null)
+        {
+            combatAudioSource.pitch = Random.Range(0.9f, 1.1f);
+            combatAudioSource.Stop();
+            if (combatAudioSource.clip.name.Contains("assault_rifle_gunshot"))
+                combatAudioSource.time = 0.05f;
+            combatAudioSource.Play();
+        }
+
+        Vector3 startPos;
+        if (isTank && cannonBone != null)
+            startPos = cannonBone.position;
+        else if (equippedWeapon != null)
+            startPos = equippedWeapon.transform.position + transform.forward * 0.6f + Vector3.up * 0.05f;
+        else
+            startPos = transform.position + Vector3.up * 1.2f;
+
+        Vector3 endPos = targetPos + Vector3.up * 1.2f;
+
+        if (isTank)
+        {
+            if (muzzleFlashPrefab != null && cannonBone != null)
+            {
+                GameObject mf = Instantiate(muzzleFlashPrefab, startPos, cannonBone.rotation);
+                mf.transform.localScale = Vector3.one * 5f;
+                Destroy(mf, 1.0f);
+            }
+        }
+        else if (muzzleFlashPrefab != null && equippedWeapon != null)
+        {
+            GameObject mf = Instantiate(muzzleFlashPrefab, startPos, equippedWeapon.transform.rotation);
+            mf.transform.SetParent(equippedWeapon.transform);
+            Destroy(mf, 0.1f);
+        }
+
+        SpawnTracer(startPos, endPos, isTank);
+        SpawnMuzzleSmoke(startPos);
+        if (!isTank)
+        {
+            Vector3 casingEjectDir = (transform.right * 0.6f + Vector3.up * 0.9f + -transform.forward * 0.15f).normalized;
+            SpawnCasing(startPos, casingEjectDir);
+        }
+    }
+
+    /// <summary>Rejoue les effets cosmétiques d'un impact reçu (sang/étincelles + animation de hit)
+    /// pendant la lecture d'un snapshot réseau. Ne touche jamais aux PV ni ne déclenche Die() — voir
+    /// SetNetworkHealth/ApplyNetworkDeath, déjà appelés séparément par le rejeu pour cet effet.</summary>
+    public void PlayNetworkHitReaction(Vector3 hitDirection)
+    {
+        if (hitDirection == default) hitDirection = -transform.forward;
+
+        if (isTank)
+        {
+            SpawnSparksEffect(transform.position + Vector3.up * 1.5f, hitDirection);
+        }
+        else
+        {
+            SpawnBloodEffect(transform.position + Vector3.up * 1.2f, hitDirection);
+        }
+
+        if (bulletImpactPrefab != null)
+        {
+            GameObject impact = Instantiate(bulletImpactPrefab, transform.position + Vector3.up * 1.2f, Quaternion.LookRotation(-hitDirection));
+            Destroy(impact, 2f);
+        }
+
+        // Comme TakeDamage : pas de déclencheur "Hit" si ce tir est le coup de grâce (ApplyNetworkDeath,
+        // appelé séparément par le rejeu, a déjà sa propre séquence de mort — pas la peine de la cumuler).
+        if (!isDead && animator != null && !isTank && Time.time - lastHitAnimTime > 1.2f)
+        {
+            lastHitAnimTime = Time.time;
+            animator.SetTrigger("Hit");
+        }
+    }
+
     /// <summary>
     /// Fumée noire persistante lors de la destruction d'un char.
     /// </summary>

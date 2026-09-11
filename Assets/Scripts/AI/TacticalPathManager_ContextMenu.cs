@@ -291,12 +291,16 @@ public partial class TacticalPathManager
 
     /// <summary>Toast temporaire (voir invalid-tap-toast dans TacticalBottomBarScreen.uxml) pour
     /// signaler un tap sur un endroit non atteignable par l'unité sélectionnée — au lieu d'ignorer
-    /// le tap en silence comme avant. L'unité reste sélectionnée, le joueur retape ailleurs.</summary>
-    private void ShowInvalidTapFeedback()
+    /// le tap en silence comme avant. L'unité reste sélectionnée, le joueur retape ailleurs.
+    /// Paramètres ajoutés (2026-09-12) pour réutiliser le même toast avec un autre message/une autre
+    /// durée — voir ConfirmerFinDeTourSiOrdresManquants dans TacticalPathManager_Execution.cs — sans
+    /// dupliquer tout l'élément UI pour un second avertissement.</summary>
+    private void ShowInvalidTapFeedback(string message = "IMPOSSIBLE D'ALLER ICI", float duration = 1.8f)
     {
         if (!tacticalUiBound) return;
+        invalidTapToastEl.text = message;
         invalidTapToastEl.style.display = DisplayStyle.Flex;
-        invalidTapToastTimer = 1.8f;
+        invalidTapToastTimer = duration;
     }
 
     private void ShowBuildingMenu()

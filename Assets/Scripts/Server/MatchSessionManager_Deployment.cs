@@ -36,6 +36,12 @@ namespace Novgov.Server
         // GetTeamDeploymentPointCost) au lieu de le laisser invisible jusqu'au rejet côté serveur.
         public const int MaxDeployedCombatUnits = 6;
         public const int MaxDeployedBarricades = 8;
+        // 2026-09-12 (demande explicite) : sans plafond dédié, un camp pouvait aligner jusqu'à 4
+        // Mortiers (limité seulement par CombatPointBudget=8, coût 2 chacun) — même règle appliquée
+        // côté client (voir UnitSpawnerUI.MaxMortarsPerTeam) pour un message immédiat, mais l'AUTORITÉ
+        // reste ici : un client modifié qui soumettrait `submit_deployment` directement sans jamais
+        // passer par le dock doit être bloqué pareil.
+        public const int MaxMortarsPerTeam = 2;
         // Budget en points (voir UnitTypeStats.DeploymentCost) : plafonne la PUISSANCE
         // totale déployée, pas seulement le nombre d'unités — sans ça, déployer le nombre max
         // d'unités les plus lourdes (CharLeopard) était toujours strictement supérieur à toute
@@ -74,7 +80,7 @@ namespace Novgov.Server
             anyDropped = false;
             if (placements == null) return kept;
 
-            int combatCount = 0, barricadeCount = 0, totalCost = 0;
+            int combatCount = 0, barricadeCount = 0, mortarCount = 0, totalCost = 0;
             foreach (var p in placements)
             {
                 if (!Enum.IsDefined(typeof(UnitSpawnerUI.UnitType), p.unit_type)) { anyDropped = true; continue; }
@@ -83,13 +89,16 @@ namespace Novgov.Server
 
                 var type = (UnitSpawnerUI.UnitType)p.unit_type;
                 bool isBarricade = type == UnitSpawnerUI.UnitType.BarricadeRoutiere;
+                bool isMortar = type == UnitSpawnerUI.UnitType.Mortier;
                 int cost = UnitTypeStats.DeploymentCost(type);
 
                 bool fitsCount = isBarricade ? barricadeCount + 1 <= MaxDeployedBarricades : combatCount + 1 <= MaxDeployedCombatUnits;
+                bool fitsMortarCap = !isMortar || mortarCount + 1 <= MaxMortarsPerTeam;
                 bool fitsBudget = totalCost + cost <= CombatPointBudget;
-                if (!fitsCount || !fitsBudget) { anyDropped = true; continue; }
+                if (!fitsCount || !fitsMortarCap || !fitsBudget) { anyDropped = true; continue; }
 
                 if (isBarricade) barricadeCount++; else combatCount++;
+                if (isMortar) mortarCount++;
                 totalCost += cost;
                 kept.Add(p);
             }

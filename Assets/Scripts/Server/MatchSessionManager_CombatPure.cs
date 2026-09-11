@@ -455,6 +455,7 @@ namespace Novgov.Server
             var health = new Dictionary<string, int>();
             var dead = new Dictionary<string, bool>();
             var shooting = new Dictionary<string, bool>();
+            var shootTarget = new Dictionary<string, string>();
             var teamOf = new Dictionary<string, int>();
 
             // Hauteur suivie PAS À PAS pendant le rejeu. Elle était lue dans ms.CurrentYById, qui
@@ -474,11 +475,12 @@ namespace Novgov.Server
                 health[u.Id] = u.Health;
                 dead[u.Id] = u.IsDead;
                 shooting[u.Id] = false;
+                shootTarget[u.Id] = null;
                 teamOf[u.Id] = u.Team;
                 yByUnit[u.Id] = ms.CurrentYById.TryGetValue(u.Id, out float y0) ? y0 : 0f;
             }
 
-            var snapshots = new List<Snapshot> { CaptureTacticalSnapshotPure(ms, 0, pos, rotation, health, dead, shooting, teamOf, yByUnit) };
+            var snapshots = new List<Snapshot> { CaptureTacticalSnapshotPure(ms, 0, pos, rotation, health, dead, shooting, shootTarget, teamOf, yByUnit) };
 
             var ticks = events.Select(e => e.tick).Distinct().OrderBy(t => t).ToList();
             foreach (int tick in ticks)
@@ -498,7 +500,11 @@ namespace Novgov.Server
                         case TacticalEvent.Kind.Shot:
                         case TacticalEvent.Kind.OverwatchTriggered:
                             if (e.targetUnitId != null && health.ContainsKey(e.targetUnitId)) health[e.targetUnitId] -= e.damage;
-                            if (shooting.ContainsKey(e.unitId)) shooting[e.unitId] = true;
+                            if (shooting.ContainsKey(e.unitId))
+                            {
+                                shooting[e.unitId] = true;
+                                shootTarget[e.unitId] = e.targetUnitId;
+                            }
                             break;
                         case TacticalEvent.Kind.Death:
                             if (dead.ContainsKey(e.unitId)) dead[e.unitId] = true;
@@ -509,7 +515,7 @@ namespace Novgov.Server
                     }
                 }
 
-                snapshots.Add(CaptureTacticalSnapshotPure(ms, tick * TickDurationMs, pos, rotation, health, dead, shooting, teamOf, yByUnit));
+                snapshots.Add(CaptureTacticalSnapshotPure(ms, tick * TickDurationMs, pos, rotation, health, dead, shooting, shootTarget, teamOf, yByUnit));
                 foreach (var id in shooting.Keys.ToList()) shooting[id] = false;
             }
 
@@ -553,8 +559,8 @@ namespace Novgov.Server
         /// de tour (voir BuildSnapshotsFromEventsPure), sinon 20m de marche de n'importe qui valaient
         /// une capture complète.</summary>
         private Snapshot CaptureTacticalSnapshotPure(MatchState ms, int t, Dictionary<string, Vector2> pos, Dictionary<string, float> rotation,
-            Dictionary<string, int> health, Dictionary<string, bool> dead, Dictionary<string, bool> shooting, Dictionary<string, int> teamOf,
-            Dictionary<string, float> yByUnit)
+            Dictionary<string, int> health, Dictionary<string, bool> dead, Dictionary<string, bool> shooting, Dictionary<string, string> shootTarget,
+            Dictionary<string, int> teamOf, Dictionary<string, float> yByUnit)
         {
             var states = new UnitState[pos.Count];
             int i = 0;
@@ -570,6 +576,7 @@ namespace Novgov.Server
                     health = health[id],
                     dead = dead[id],
                     shooting = shooting[id],
+                    shoot_target_id = shootTarget.TryGetValue(id, out string tgt) ? tgt : null,
                     unit_type = ms.UnitTypeById.TryGetValue(id, out int ut) ? ut : (int)UnitSpawnerUI.UnitType.Fantassin,
                     team_id = teamOf[id]
                 };

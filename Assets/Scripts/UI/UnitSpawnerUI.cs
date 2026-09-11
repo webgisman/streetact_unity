@@ -25,6 +25,14 @@ public class UnitSpawnerUI : MonoBehaviour
     [Header("Stock Barricades")]
     public int maxBarricadesPerTeam = 8;
 
+    // 2026-09-12 (demande explicite) : le Mortier n'avait jusqu'ici aucun plafond dédié — un camp
+    // pouvait en déployer jusqu'à 4 (limité seulement par CombatPointBudget=8, coût 2 chacun, voir
+    // Novgov.Server.UnitTypeStats.DeploymentCost), écrasant toute composition mixte en multijoueur.
+    // Même plafond appliqué côté client (message immédiat) ET côté serveur (voir
+    // MatchSessionManager_Deployment.FilterRosterToBudget) — un client modifié ne doit pas pouvoir
+    // contourner la limite en sautant le dock.
+    public const int MaxMortarsPerTeam = 2;
+
     // État du Drag & Drop / Placement
     public static bool IsPlacingUnit = false;
     // Marqué à Time.frameCount à chaque frame où HandlePlacementPreview traite une entrée —
@@ -472,7 +480,7 @@ public class UnitSpawnerUI : MonoBehaviour
 
                 if (deployed >= owned)
                 {
-                    ShowMessage($"Vous ne possédez pas d'unité {type} supplémentaire dans votre caserne !", 3.0f);
+                    ShowMessage($"Vous ne possédez pas d'unité {FriendlyUnitName(type)} supplémentaire dans votre caserne !", 3.0f);
                     return;
                 }
             }
@@ -480,6 +488,11 @@ public class UnitSpawnerUI : MonoBehaviour
         if (type == UnitType.BarricadeRoutiere && RemainingBarricadeStock(selectedTeam) <= 0)
         {
             ShowMessage($"Stock de barricades épuisé ({maxBarricadesPerTeam} max par camp) !", 3.0f);
+            return;
+        }
+        if (type == UnitType.Mortier && CountMortarsForTeam(selectedTeam) >= MaxMortarsPerTeam)
+        {
+            ShowMessage($"Limite de {MaxMortarsPerTeam} mortiers atteinte pour ce camp !", 3.0f);
             return;
         }
 
@@ -506,11 +519,22 @@ public class UnitSpawnerUI : MonoBehaviour
         }
         else
         {
-            string unitName = (type == UnitType.CharLeopard) ? "Char Leopard 2" : (type == UnitType.VehiculeCanon ? "Véhicule Canon" : (type == UnitType.Mortier ? "Mortier" : "Fantassin"));
-            ShowMessage($"Touchez une rue pour déployer : {unitName}", 4.0f);
+            ShowMessage($"Touchez une rue pour déployer : {FriendlyUnitName(type)}", 4.0f);
         }
         AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateHoverSound(), Camera.main.transform.position);
     }
+
+    /// <summary>Nom lisible d'un type d'unité pour les messages joueur — jamais le nom brut de
+    /// l'enum (ex: "VehiculeCanon"), qui a fuité une fois dans un message d'avertissement
+    /// (2026-09-12) avant d'être factorisé ici avec l'unique autre endroit qui en avait déjà besoin.</summary>
+    private static string FriendlyUnitName(UnitType type) => type switch
+    {
+        UnitType.CharLeopard => "Char Leopard 2",
+        UnitType.VehiculeCanon => "Véhicule Canon",
+        UnitType.Mortier => "Mortier",
+        UnitType.BarricadeRoutiere => "Barricade Routière",
+        _ => "Fantassin",
+    };
 
     public void CancelPlacement()
     {
@@ -891,7 +915,7 @@ public class UnitSpawnerUI : MonoBehaviour
             AudioClip confirmClip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
             if (confirmClip != null) AudioSource.PlayClipAtPoint(confirmClip, Camera.main.transform.position, 0.8f);
 #endif
-            ShowMessage($"{newUnitObj.name} déployé avec succès !", 2.0f);
+            ShowMessage($"{FriendlyUnitName(type)} déployé avec succès !", 2.0f);
             return ai;
         }
         return null;
@@ -956,6 +980,18 @@ public class UnitSpawnerUI : MonoBehaviour
     }
 
     public int RemainingBarricadeStock(int team) => Mathf.Max(0, maxBarricadesPerTeam - CountBarricadesForTeam(team));
+
+    /// <summary>Nombre de Mortiers vivants déjà déployés pour ce camp (voir MaxMortarsPerTeam).</summary>
+    public int CountMortarsForTeam(int team)
+    {
+        int count = 0;
+        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
+        {
+            UnitAI u = UnitAI.AllLivingUnits[i];
+            if (u != null && !u.isDead && u.teamID == team && u.isMortar) count++;
+        }
+        return count;
+    }
 
     /// <summary>Somme des coûts en points (Novgov.Server.UnitTypeStats.DeploymentCost) des unités de
     /// combat déjà posées pour ce camp — jamais les barricades, gratuites. Ajouté le 2026-09-08 pour
