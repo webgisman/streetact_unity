@@ -1,5 +1,31 @@
 # Rapport de session — 2026-09-11/12
 
+## ⚡⚡⚡ MISE À JOUR 2026-09-12 (nuit) — lire en premier
+
+Des correctifs supplémentaires (rédigés directement dans l'arborescence de travail, documentés dans
+`Assets/_ServerDocs/multiplayer/08-known-issues-and-todo.md` §19.15) ont été trouvés NON commités :
+confusion couleur/rôle d'équipe (joueur 2 voyait ses propres unités en rouge — c'est CE qu'était le
+"role" du dernier retour), dérive de sélection de l'infanterie après un tour (root motion Mixamo
+sortant le corps 3D de son collider), écran de fin de partie coupant brutalement le rejeu final, et
+un exploit de posture (garder les bonus de couverture en bougeant). Les quatre sont réels et bien
+diagnostiqués.
+
+**Un vrai bug trouvé avant de committer** : `IsLocalPlayerTeam` (nouvelle méthode, `UnitSpawnerUI.cs`)
+avait été déclarée À L'INTÉRIEUR du bloc `#if !UNITY_SERVER` alors qu'appelée depuis du code compilé
+sans garde — cassait ENTIÈREMENT la compilation de la cible Serveur Dédié
+(`Assembly-CSharp-Server.check.csproj`). Corrigé (méthode sortie du bloc, même convention que
+`IsPointerOverOnGUI` juste en dessous). Sans cette vérification, ce correctif aurait empêché tout
+futur build serveur de compiler. Vérifié : 80 tests moteur pur + 3 tests de simulation complète + les
+3 compile-checks (Client/Serveur/Éditeur) tous verts après correction. Commit `8b5a0b6`, poussé sur
+`origin/master`.
+
+**Redéployé et vérifié une nouvelle fois** : serveur Linux (cache Bee vidé, rebuild propre — DLL
+managé daté après le commit du correctif), conteneur `novgov-game-server-1-1` stable, port 7777
+joignable de l'extérieur, sauvegarde prise avant. APK Android également rebuild frais (même
+correctif, nécessaire pour la cohérence client/serveur).
+
+---
+
 ## ⚡⚡ MISE À JOUR 2026-09-12 (soir) — lire en premier, remplace l'état "après-midi" ci-dessous
 
 Ton retour suivant : « toujours dans le mode multijoueur deathmatch, les unité rentre dans les
