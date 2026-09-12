@@ -1,5 +1,93 @@
 # Rapport de session — 2026-09-11/12
 
+## ⚡⚡ MISE À JOUR 2026-09-12 (soir) — lire en premier, remplace l'état "après-midi" ci-dessous
+
+Ton retour suivant : « toujours dans le mode multijoueur deathmatch, les unité rentre dans les
+polygones et il ya toujours des soucis de selection et de fin de tour et de positionnement et de
+role ». Voici ce qui a été trouvé et fait, dans l'ordre.
+
+### H. "Les unités rentrent dans les polygones" — VRAI BUG TROUVÉ ET CORRIGÉ (le plus concret des 5 points)
+
+Root cause trouvée en lisant `TacticalResolver.ExpandOrder` (le calcul de trajet, partagé
+client/serveur) : le correctif du 2026-09-06 (« un char peut foncer dans un bâtiment ») ne
+redirigeait une destination tombant dans l'empreinte d'un bâtiment vers l'extérieur QUE pour
+`unit.isTank`. Toute autre unité (fantassin sans ordre d'entrée explicite, véhicule canon, mortier)
+tombant sur la même situation — une destination ordinaire qui recouvre géométriquement un bâtiment
+que le joueur n'a jamais demandé à visiter — subissait exactement le même bug que les chars avant
+correction : `Pathfinding.FindPath` échoue (la cellule d'arrivée est creusée non-franchissable),
+et son repli en ligne droite (jamais vérifié pour les non-chars) traverse le mur tout droit.
+
+**Pourquoi ça n'avait jamais été détecté avant** : les deux tests existants qui manipulent un
+bâtiment (`TestResolveMovementAvoidsBuilding`, `TestInfantryLongPathAroundBuildingLogged`) visent
+toujours une destination DERRIÈRE le bâtiment (donc hors de son empreinte) — jamais une destination
+qui tombe DANS l'empreinte sans ordre d'entrée. C'était l'angle mort exact.
+
+**Corrigé** : la redirection s'applique maintenant à TOUTE unité (plus seulement `isTank`), tant
+qu'elle n'est pas en train d'entrer/rester dans le bâtiment visé explicitement. 4 nouveaux tests
+automatisés (`Assets/Editor/TacticalCoreSelfTest_BuildingIntrusion.cs`) : fantassin redirigé,
+véhicule (non-char) redirigé, char toujours redirigé (non-régression du correctif du 09-06), et une
+entrée EXPLICITE (menu "Entrer") continue de bien fonctionner. Les 80 tests du moteur pur passent
+(76 avant + ces 4), plus les 3 tests de simulation de partie complète, plus les 3 compile-checks —
+tout vert. Commit `68ec437`.
+
+**Ce bug explique très probablement aussi une bonne partie du point "positionnement"** : une unité
+à moitié encastrée dans une façade de bâtiment (comme le décrivait ton retour) donne exactement
+l'impression d'un problème de positionnement — et une unité visuellement à l'intérieur d'un mur
+peut aussi expliquer une partie des soucis de sélection rapportés (le raycast/la sélection tactile
+peut se comporter bizarrement sur une unité dont le collider est en partie noyé dans la géométrie
+du bâtiment). Pas une certitude absolue (aucun repro direct de TA partie), mais c'est la même classe
+de bug exacte que celle décrite, et la correction est vérifiée par test, pas une supposition.
+
+### Sur "sélection" et "fin de tour" spécifiquement — réaudité, rien de NOUVEAU trouvé au-delà de H
+
+J'ai relu tout le code de sélection (`TacticalPathManager_Selection.cs`, `_Input.cs`) et du garde-fou
+de fin de tour (`_Execution.cs`, `AnyPlayerUnitWithoutOrders`/`pendingEndTurnConfirmUntil`) avec un
+œil neuf, en supposant que les corrections d'hier (bug tank/fantassin, garde-fou double-tap) étaient
+peut-être incomplètes plutôt que résolues. Résultat honnête : je n'ai pas trouvé de second défaut de
+code distinct — juste confirmé que le garde-fou de fin de tour est un comportement VOULU (double-tap
+de confirmation si au moins une unité vivante n'a encore aucun point de trajectoire ce tour-ci,
+ajouté exprès le 2026-09-12 suite à un retour précédent), pas un bug. Mon hypothèse la plus probable
+reste que le bug H ci-dessus (unités visuellement dans les murs) explique une bonne partie de ce qui
+a été perçu comme des soucis de sélection/positionnement persistants — mais je n'ai aucune preuve
+directe de TA session pour trancher avec certitude entre "c'était le même bug" et "il y a encore
+autre chose que je n'ai pas reproduit". Si le problème persiste concrètement après ce déploiement,
+la prochaine étape la plus utile serait un `Editor.log` ou une capture d'écran du moment précis où
+ça arrive — je peux alors écrire un test qui reproduit exactement ce cas, comme convenu.
+
+### Sur "rôle" — pas de piste solide trouvée, sens précis pas clair
+
+J'ai vérifié l'assignation d'équipe/allégeance (`isPlayerControlled`, posé à partir de `teamID` à
+chaque déploiement et à chaque apparition d'unité ennemie via le brouillard de guerre) : rien
+d'anormal trouvé dans le code. Je n'ai pas de piste concrète pour ce point précis — "rôle" pourrait
+vouloir dire plusieurs choses (allégeance d'équipe, type d'unité/rôle de combat, menu d'actions
+proposé selon le type) et je n'ai trouvé aucun bug de code correspondant à aucune de ces lectures.
+Si tu peux préciser ce que tu as vu exactement (quelle unité, quel effet observé), je peux creuser
+plus efficacement que par relecture de code à l'aveugle.
+
+### Piège d'outillage trouvé (encore) en redéployant — le vrai stale-build gotcha, une variante plus sournoise
+
+En vérifiant la fraîcheur du build serveur (mtime du DLL managé vs heure du commit du correctif —
+la méthode déjà documentée), le TOUT PREMIER build a produit un DLL antérieur au commit : cache Bee
+périmé (`Library/Bee`/`Library/PlayerDataCache` supprimés puis rebuild propre — a corrigé le
+problème). Mais une seconde surprise, plus subtile, est apparue en enchaînant le build Android juste
+après : le processus `Unity.exe` du build serveur avait déjà rendu la main (exit code 0 signalé) AVANT
+d'avoir réellement terminé tout son travail en arrière-plan (compilation Bee asynchrone) — le build
+Android suivant a donc échoué immédiatement (verrou de projet déjà pris par l'instance encore
+active), et il a fallu explicitement ATTENDRE la disparition de tout processus `Unity.exe` (pas
+seulement le retour du processus lanceur) avant de considérer un build comme réellement terminé.
+Documenté ici pour la prochaine fois : ne jamais enchaîner deux builds batch-mode dos à dos sans
+vérifier `tasklist`/`Get-Process Unity` d'abord.
+
+### Redéploiement — FAIT et vérifié
+
+Serveur Linux rebuild (propre, cache vidé) et redéployé sur novgov.com : conteneur
+`novgov-game-server-1-1` stable (`Up`, pas de crash-loop), logs propres (`236 bâtiments créés`, zéro
+échec), port `7777` confirmé joignable de l'extérieur. Sauvegarde de sécurité prise avant
+(`novgov-game-server:backup_<horodatage>` via `docker commit`). APK Android également rebuild frais
+(même correctif, nécessaire pour la préversion client du trajet) — voir le commit `68ec437`.
+
+---
+
 ## ⚡ MISE À JOUR 2026-09-12 (après-midi) — lire en premier
 
 Suite à ton retour ("gestion des unités catastrophique, il faut changer le mode de diagnostic, revois
