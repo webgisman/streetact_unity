@@ -1048,6 +1048,24 @@ namespace Novgov.Network
                     target.PlayNetworkHitReaction(hitDir);
                 }
 
+                // Destruction de bâtiment (2026-09-12) : jusqu'ici WallDestroyed n'avait AUCUN
+                // consommateur réseau (voir §19.9.3 de 08-known-issues-and-todo.md) — le bâtiment
+                // restait visuellement intact chez les deux joueurs alors que le serveur le savait
+                // détruit. buildingId est un INDEX dans BuildingStructure.AllBuildings (voir
+                // TacticalGridBuilder) — ApplyNetworkDestruction (jamais TakeDamage/DestroyEnvironment)
+                // ne retire JAMAIS ce bâtiment de cette liste, pour que cet index reste valide pour
+                // tout le reste de la partie (voir son commentaire dans DestructibleEnvironment.cs).
+                if (snap.destroyed_building_ids != null)
+                {
+                    foreach (int buildingId in snap.destroyed_building_ids)
+                    {
+                        if (buildingId < 0 || buildingId >= BuildingStructure.AllBuildings.Count) continue;
+                        BuildingStructure bs = BuildingStructure.AllBuildings[buildingId];
+                        DestructibleEnvironment env = bs != null ? bs.GetComponent<DestructibleEnvironment>() : null;
+                        env?.ApplyNetworkDestruction();
+                    }
+                }
+
                 // Toute unité ENNEMIE déjà apparue mais absente de CE tick n'est plus repérée à cet
                 // instant précis — masquée, jamais détruite (elle peut réapparaître dès qu'elle
                 // redevient visible). Mes propres unités sont toujours incluses dans snap.units (voir

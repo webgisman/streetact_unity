@@ -111,6 +111,15 @@ namespace Novgov.Network
         // Mode "zone_control" uniquement — 0 à 100, absent (0/0) en mode deathmatch.
         public float zone_progress_team1;
         public float zone_progress_team2;
+
+        // Bâtiments détruits PENDANT CE TICK précis (2026-09-12) : index dans BuildingStructure.
+        // AllBuildings, voir TacticalGridBuilder ("template.id") — jamais retiré de cette liste côté
+        // client pendant un rejeu réseau (voir DestructibleEnvironment.ApplyNetworkDestruction),
+        // pour que cet index reste valide pour tout le reste de la partie. Avant ce champ,
+        // TacticalEvent.Kind.WallDestroyed n'avait AUCUN consommateur réseau — le bâtiment restait
+        // visuellement intact chez les deux joueurs alors que le serveur le savait détruit (voir
+        // §19.9.3 de 08-known-issues-and-todo.md). Null/vide la plupart des ticks.
+        public int[] destroyed_building_ids;
     }
 
     [Serializable]

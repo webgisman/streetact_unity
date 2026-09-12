@@ -665,7 +665,7 @@ namespace Novgov.Server
                 yByUnit[id] = u.transform.position.y;
             }
 
-            var snapshots = new List<Snapshot> { CaptureTacticalSnapshot(0, pos, rotation, health, dead, shooting, shootTarget, unitsBeforeResolution, yByUnit) };
+            var snapshots = new List<Snapshot> { CaptureTacticalSnapshot(0, pos, rotation, health, dead, shooting, shootTarget, unitsBeforeResolution, yByUnit, null) };
 
             var ticks = events.Select(e => e.tick).Distinct().OrderBy(t => t).ToList();
             foreach (int tick in ticks)
@@ -715,7 +715,15 @@ namespace Novgov.Server
                     if (dead[id] && !unit.isDead) unit.ApplyNetworkDeath();
                 }
 
-                snapshots.Add(CaptureTacticalSnapshot(tick * TickDurationMs, pos, rotation, health, dead, shooting, shootTarget, unitsBeforeResolution, yByUnit));
+                // Bâtiments détruits à CE tick précis (voir NetMessage.Snapshot.destroyed_building_ids
+                // et son équivalent dans BuildSnapshotsFromEventsPure, même logique). Le VRAI
+                // DestructibleEnvironment server-side est déjà correctement mis à jour plus bas (voir
+                // "Répercute les dégâts de zone sur les VRAIS composants DestructibleEnvironment") —
+                // ceci ne fait qu'informer le CLIENT, qui n'a par ailleurs aucun accès à cet état.
+                int[] destroyedThisTick = events.Where(e => e.kind == TacticalEvent.Kind.WallDestroyed && e.tick == tick)
+                    .Select(e => e.buildingId).Distinct().ToArray();
+
+                snapshots.Add(CaptureTacticalSnapshot(tick * TickDurationMs, pos, rotation, health, dead, shooting, shootTarget, unitsBeforeResolution, yByUnit, destroyedThisTick));
                 foreach (var id in shooting.Keys.ToList()) shooting[id] = false; // le "flash" de tir ne dure qu'un instant visuel
             }
 
@@ -742,7 +750,7 @@ namespace Novgov.Server
 
         private Snapshot CaptureTacticalSnapshot(int t, Dictionary<string, Vector2> pos, Dictionary<string, float> rotation,
             Dictionary<string, int> health, Dictionary<string, bool> dead, Dictionary<string, bool> shooting, Dictionary<string, string> shootTarget,
-            List<UnitAI> units, Dictionary<string, float> yByUnit)
+            List<UnitAI> units, Dictionary<string, float> yByUnit, int[] destroyedBuildingIdsThisTick)
         {
             var states = new UnitState[units.Count];
             for (int i = 0; i < units.Count; i++)
@@ -785,7 +793,7 @@ namespace Novgov.Server
                 zoneProgress2 = CaptureZone.Instance.ProgressTeam2;
             }
 
-            return new Snapshot { t = t, units = states, zone_progress_team1 = zoneProgress1, zone_progress_team2 = zoneProgress2 };
+            return new Snapshot { t = t, units = states, zone_progress_team1 = zoneProgress1, zone_progress_team2 = zoneProgress2, destroyed_building_ids = destroyedBuildingIdsThisTick };
         }
     }
 }

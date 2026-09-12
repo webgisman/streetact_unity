@@ -134,13 +134,46 @@ public class DestructibleEnvironment : MonoBehaviour
         }
     }
 
+    /// <summary>Rejoue la destruction VISUELLE d'un bâtiment pendant le rejeu d'un snapshot réseau
+    /// (2026-09-12 — voir MultiplayerMatchController.PlaySnapshotsBody et TacticalEvent.Kind.
+    /// WallDestroyed, jusqu'ici sans le moindre consommateur, voir §19.9.3 de 08-known-issues-and-
+    /// todo.md). JAMAIS TakeDamage/DestroyEnvironment tels quels : ceux-ci infligent 9999 dégâts à
+    /// toute unité dans l'empreinte (ligne ~266) — le serveur autoritaire a DÉJÀ décidé qui meurt
+    /// (les événements Death du même snapshot, appliqués séparément via UnitAI.ApplyNetworkDeath) ;
+    /// rejouer ce dégât ici tuerait une SECONDE fois des unités déjà mortes, ou une unité que le
+    /// calcul-empreinte LOCAL (potentiellement différent, ex: bâtiment tourné) désignerait à tort.
+    ///
+    /// Ne retire PAS non plus ce bâtiment de BuildingStructure.AllBuildings (contrairement à
+    /// DestroyEnvironment, ligne ~290) : TacticalGridBuilder identifie chaque bâtiment par son INDEX
+    /// dans cette liste (voir son commentaire, "template.id"), figé une seule fois au début de la
+    /// partie côté PUR (Deathmatch/Zone de Contrôle — TacticalWorldState.buildings n'est plus jamais
+    /// reconstruit depuis la scène après ça, voir RunExecutionPhasePure, "AUCUNE écriture sur un
+    /// DestructibleEnvironment"). Si CE client retirait un bâtiment de la liste au premier détruit,
+    /// tous les buildingId suivants envoyés par le serveur (des index dans SA PROPRE liste, jamais
+    /// raccourcie puisqu'il n'appelle jamais TakeDamage sur le vrai composant) désigneraient le
+    /// mauvais bâtiment pour le reste de la partie — un décalage d'un cran par bâtiment déjà détruit.</summary>
+    public void ApplyNetworkDestruction()
+    {
+        if (isDestroyed) return;
+        DestroyEnvironmentInternal(applyOccupantCasualties: false, removeFromRegistry: false);
+    }
+
     private void DestroyEnvironment()
     {
+        DestroyEnvironmentInternal(applyOccupantCasualties: true, removeFromRegistry: true);
+    }
+
+    private void DestroyEnvironmentInternal(bool applyOccupantCasualties, bool removeFromRegistry)
+    {
         isDestroyed = true;
-        
+
         Debug.Log($"<color=red><b>💥 EFFONDREMENT DU BÂTIMENT : {gameObject.name} EST PULVÉRISÉ EN RUINES TRAVERSABLES !</b></color>");
 
-        if (isHQ && Novgov.Network.MultiplayerMatchController.Instance != null && Novgov.Network.MultiplayerMatchController.IsFlowActive)
+        // Bilan de victoire de Conquête (isHQ) délibérément HORS DU PÉRIMÈTRE du rejeu réseau
+        // (applyOccupantCasualties=false) : c'est un mécanisme spécifique à la Conquête, déjà décidé
+        // par le calcul serveur autoritaire de CE mode — pas quelque chose que ce rejeu générique
+        // (Deathmatch/Zone de Contrôle) a besoin de re-déterminer lui-même.
+        if (applyOccupantCasualties && isHQ && Novgov.Network.MultiplayerMatchController.Instance != null && Novgov.Network.MultiplayerMatchController.IsFlowActive)
         {
             Debug.Log($"<color=magenta><b>🚨 LE QUARTIER GÉNÉRAL A ÉTÉ DÉTRUIT ! 🚨</b></color>");
             Novgov.Server.MatchSessionManager.IsHQDestroyedThisMatch = true;
@@ -190,6 +223,11 @@ public class DestructibleEnvironment : MonoBehaviour
 
         if (buildingStructure != null)
         {
+            // Écraser les occupants (dégâts réels, TakeDamage(9999)) : SOLO/serveur autoritaire
+            // uniquement — voir le commentaire de ApplyNetworkDestruction plus haut sur pourquoi un
+            // rejeu réseau ne doit jamais recalculer ni réappliquer ce dégât lui-même.
+            if (applyOccupantCasualties)
+            {
             List<UnitAI> casualties = new List<UnitAI>();
 
             if (buildingStructure.windows != null)
@@ -266,6 +304,7 @@ public class DestructibleEnvironment : MonoBehaviour
                     victim.TakeDamage(9999f, Vector3.up);
                 }
             }
+            } // fin applyOccupantCasualties
 
             // Désactiver le toit et la visibilité tactique
             if (buildingStructure.tacticalVisibility != null)
@@ -287,7 +326,11 @@ public class DestructibleEnvironment : MonoBehaviour
                 if (w != null) w.gameObject.SetActive(false);
             }
 
-            BuildingStructure.AllBuildings.Remove(buildingStructure);
+            // Retrait du registre : SOLO/serveur autoritaire uniquement — voir le commentaire de
+            // ApplyNetworkDestruction plus haut. Un rejeu réseau qui retirerait ce bâtiment décalerait
+            // l'index de TOUS les suivants dans BuildingStructure.AllBuildings, faussant tout
+            // buildingId envoyé par le serveur pour le reste de la partie.
+            if (removeFromRegistry) BuildingStructure.AllBuildings.Remove(buildingStructure);
         }
 
         // 3. Transformation visuelle complète : Aplatissement de TOUS les MeshFilters au ras du sol

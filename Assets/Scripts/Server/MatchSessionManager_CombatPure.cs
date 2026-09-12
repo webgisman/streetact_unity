@@ -480,7 +480,7 @@ namespace Novgov.Server
                 yByUnit[u.Id] = ms.CurrentYById.TryGetValue(u.Id, out float y0) ? y0 : 0f;
             }
 
-            var snapshots = new List<Snapshot> { CaptureTacticalSnapshotPure(ms, 0, pos, rotation, health, dead, shooting, shootTarget, teamOf, yByUnit) };
+            var snapshots = new List<Snapshot> { CaptureTacticalSnapshotPure(ms, 0, pos, rotation, health, dead, shooting, shootTarget, teamOf, yByUnit, null) };
 
             var ticks = events.Select(e => e.tick).Distinct().OrderBy(t => t).ToList();
             foreach (int tick in ticks)
@@ -515,7 +515,16 @@ namespace Novgov.Server
                     }
                 }
 
-                snapshots.Add(CaptureTacticalSnapshotPure(ms, tick * TickDurationMs, pos, rotation, health, dead, shooting, shootTarget, teamOf, yByUnit));
+                // Bâtiments détruits à CE tick précis (toujours tick 0 en pratique, voir
+                // TacticalResolver.ApplyAreaDamage/DestroyBuilding — aucun mur ne prend de dégâts hors
+                // mortier pour l'instant) — voir NetMessage.Snapshot.destroyed_building_ids. Delta
+                // (seulement les NOUVEAUX de ce tick), pas cumulatif : le client applique dans l'ordre
+                // et ApplyNetworkDestruction est idempotente (no-op si déjà détruit), donc répéter les
+                // mêmes id à chaque snapshot suivant n'apporterait rien.
+                int[] destroyedThisTick = events.Where(e => e.kind == TacticalEvent.Kind.WallDestroyed && e.tick == tick)
+                    .Select(e => e.buildingId).Distinct().ToArray();
+
+                snapshots.Add(CaptureTacticalSnapshotPure(ms, tick * TickDurationMs, pos, rotation, health, dead, shooting, shootTarget, teamOf, yByUnit, destroyedThisTick));
                 foreach (var id in shooting.Keys.ToList()) shooting[id] = false;
             }
 
@@ -560,7 +569,7 @@ namespace Novgov.Server
         /// une capture complète.</summary>
         private Snapshot CaptureTacticalSnapshotPure(MatchState ms, int t, Dictionary<string, Vector2> pos, Dictionary<string, float> rotation,
             Dictionary<string, int> health, Dictionary<string, bool> dead, Dictionary<string, bool> shooting, Dictionary<string, string> shootTarget,
-            Dictionary<string, int> teamOf, Dictionary<string, float> yByUnit)
+            Dictionary<string, int> teamOf, Dictionary<string, float> yByUnit, int[] destroyedBuildingIdsThisTick)
         {
             var states = new UnitState[pos.Count];
             int i = 0;
@@ -584,7 +593,7 @@ namespace Novgov.Server
 
             // La progression de zone n'est PLUS calculée ici : elle l'est une seule fois par tour,
             // dans BuildSnapshotsFromEventsPure, puis répartie sur les snapshots (voir là-bas).
-            return new Snapshot { t = t, units = states, zone_progress_team1 = ms.Zone != null ? ms.Zone.ProgressTeam1 : 0f, zone_progress_team2 = ms.Zone != null ? ms.Zone.ProgressTeam2 : 0f };
+            return new Snapshot { t = t, units = states, zone_progress_team1 = ms.Zone != null ? ms.Zone.ProgressTeam1 : 0f, zone_progress_team2 = ms.Zone != null ? ms.Zone.ProgressTeam2 : 0f, destroyed_building_ids = destroyedBuildingIdsThisTick };
         }
     }
 }
