@@ -300,7 +300,19 @@ namespace Novgov.Server
 
                     if (node.action == TacticalPathManager.NodeAction.TirMortier)
                     {
-                        mortarStrikesOut.Add(pos2D);
+                        // Validation anti-triche (2026-09-12, §19.9.5 de 08-known-issues-and-todo.md
+                        // — "mortarStrikes n'est validé par rien : ni type d'unité, ni portée"). Avant
+                        // ce garde, un client modifié pouvait attacher TirMortier à N'IMPORTE QUELLE
+                        // unité (même un Fantassin) et viser N'IMPORTE OÙ sur la carte : le serveur
+                        // ajoutait la frappe sans la moindre vérification. Même portée que le solo
+                        // (UnitAI_Combat.cs, "isMortar ? 120f"), mesurée depuis la position RÉELLE
+                        // atteinte par l'unité à ce point de son trajet (previousPos), pas sa position
+                        // de début de tour — un mortier a le droit de se déplacer puis tirer.
+                        const float MortarMaxRange = 120f;
+                        if (unit.isMortar && Vector2.Distance(previousPos, pos2D) <= MortarMaxRange)
+                        {
+                            mortarStrikesOut.Add(pos2D);
+                        }
                         continue;
                     }
 

@@ -492,7 +492,15 @@ namespace Novgov.Server
 
                 if (node.action == TacticalPathManager.NodeAction.TirMortier)
                 {
-                    mortarStrikesOut.Add(pos2D);
+                    // Validation anti-triche (2026-09-12) : voir le commentaire jumeau dans
+                    // BuildUnitOrdersPure (MatchSessionManager_CombatPure.cs) — même règle, même
+                    // portée (120m, UnitAI_Combat.cs "isMortar ? 120f"), symétrique entre les deux
+                    // moteurs pour ne pas laisser un exploit valide dans l'un et pas l'autre.
+                    const float MortarMaxRange = 120f;
+                    if (unit.isMortar && Vector2.Distance(previousPos, pos2D) <= MortarMaxRange)
+                    {
+                        mortarStrikesOut.Add(pos2D);
+                    }
                     continue;
                 }
 
