@@ -8,6 +8,12 @@ using UnityEngine;
 /// DestructibleEnvironment.ApplyNetworkDestruction (destruction de bâtiment enfin transmise au
 /// client, voir §19.9.3 de 08-known-issues-and-todo.md) plutôt que la sélection.
 ///
+/// Usage : voir l'en-tête de TacticalSelectionAutoTest.cs pour la ligne de commande EXACTE à
+/// utiliser — TOUJOURS avec "-buildTarget StandaloneWindows64 -standaloneBuildSubtarget Player"
+/// explicites, jamais omis : un précédent build serveur (ServerBuildScript) laisse
+/// EditorUserBuildSettings sur "Server" pour toute invocation batch suivante, ce qui masque tout le
+/// code client-only sans le moindre message d'erreur clair (piège trouvé en écrivant ces tests).
+///
 /// Ce que ce test garantit, et qui aurait été facile à casser sans lui : ApplyNetworkDestruction NE
 /// DOIT JAMAIS (1) infliger de dégâts aux unités proches — le serveur autoritaire a déjà décidé qui
 /// meurt via les événements Death du même snapshot — ni (2) retirer le bâtiment de

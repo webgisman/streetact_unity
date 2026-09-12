@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -18,10 +19,21 @@ using UnityEngine;
 /// Mode — seul Start() (déféré par Unity jusqu'à la première frame, qui n'arrive jamais hors Play
 /// Mode) a besoin d'un coup de pouce par réflexion.
 ///
-/// Usage : "Unity.exe -batchmode -nographics -quit -projectPath ... -executeMethod
-/// TacticalSelectionAutoTest.RunAll -logFile chemin.log" — cherche "[TacticalSelectionAutoTest]"
-/// dans le log. Toute assertion ratée lève une exception, que Unity remonte en code de sortie non
-/// nul en mode batch (mêmes conventions que ServerBuildScript/AndroidTestBuildScript).
+/// Usage : "Unity.exe -batchmode -nographics -quit -buildTarget StandaloneWindows64
+/// -standaloneBuildSubtarget Player -projectPath ... -executeMethod TacticalSelectionAutoTest.RunAll
+/// -logFile chemin.log" — cherche "[TacticalSelectionAutoTest]" dans le log. Toute assertion ratée
+/// lève une exception, que Unity remonte en code de sortie non nul en mode batch (mêmes conventions
+/// que ServerBuildScript/AndroidTestBuildScript).
+///
+/// PIÈGE TROUVÉ EN CONDITIONS RÉELLES (2026-09-12) — TOUJOURS préciser -buildTarget ET
+/// -standaloneBuildSubtarget Player explicitement, JAMAIS les omettre en supposant qu'Unity revient
+/// à un mode Éditeur normal par défaut : la cible/sous-cible de build actives sont un état PERSISTANT
+/// du projet (EditorUserBuildSettings, sur disque), pas remis à zéro entre deux invocations
+/// "-executeMethod" séparées. Un précédent build serveur (ServerBuildScript.BuildLinuxServer,
+/// "-standaloneBuildSubtarget Server") laisse UNITY_SERVER défini pour TOUTE invocation suivante tant
+/// qu'on ne repasse pas explicitement sur "Player" — auquel cas tout le code client-only (ici,
+/// TacticalPathManager_UI.cs en entier, y compris CycleSelectGroup) est invisible par réflexion,
+/// sans le moindre message d'erreur qui l'indique clairement (juste "méthode introuvable").
 ///
 /// Ne sauvegarde JAMAIS la scène temporaire créée pour ces tests — aucun risque de polluer les
 /// vraies scènes du projet (Assets/Scenes/SampleScene.unity, etc.).
@@ -50,6 +62,8 @@ public static class TacticalSelectionAutoTest
             TestEndTurnBlocksWithoutOrders, ref passed, ref failed);
         RunIsolated("FIN DE TOUR passe en Exécution une fois TOUTES les unités ordonnées",
             TestEndTurnProceedsWhenAllOrdered, ref passed, ref failed);
+        RunIsolated("Barre d'escouade : le cycle passe par toutes les unités du groupe puis boucle",
+            TestSquadBarCycleGoesThroughAllUnits, ref passed, ref failed);
 
         Debug.Log($"[TacticalSelectionAutoTest] {passed} réussi(s), {failed} échoué(s).");
         if (failed > 0)
@@ -275,6 +289,80 @@ public static class TacticalSelectionAutoTest
         if (mgr.phaseActuelle != TacticalPathManager.GamePhase.Execution)
         {
             Debug.LogError($"[TacticalSelectionAutoTest] Attendu phase=Execution (toutes les unités ordonnées), obtenu {mgr.phaseActuelle}");
+            return false;
+        }
+        return true;
+    }
+
+    // ---- Barre d'escouade (2026-09-12) -----------------------------------------------------
+    //
+    // TacticalPathManager_UI.CycleSelectGroup : la façon FIABLE d'enchaîner la sélection de
+    // plusieurs unités (clic sur l'icône de type dans le coin haut-droit, cycle + recentre la
+    // caméra), totalement indépendante du tap 3D et de ses soucis d'occlusion/angle de caméra —
+    // jamais vérifiée par un test avant aujourd'hui malgré son rôle central dans "la gestion des
+    // unités". Privée, mais un simple List<UnitAI> en paramètre — invoquée par réflexion, sans
+    // avoir besoin du binding UI Toolkit (elle ne touche jamais squadBarEl elle-même).
+
+    private static bool TestSquadBarCycleGoesThroughAllUnits()
+    {
+        TacticalPathManager mgr = MakeRealManager();
+        // SelectionnerUnite (appelée par CycleSelectGroup) lit Camera.main pour son son de
+        // confirmation — absent des autres tests de ce fichier, qui n'appellent jamais
+        // SelectionnerUnite directement (seulement ResolveClosestPlayerUnit, une méthode statique
+        // pure). Trouvé en conditions réelles ici même (NullReferenceException sur Camera.main).
+        GameObject camGo = new GameObject("TestCameraForSquadBar");
+        camGo.AddComponent<Camera>().tag = "MainCamera";
+
+        UnitAI u1 = MakeRealUnit("TestSquadA", new Vector3(0f, 0.9f, 0f), Vector3.one, 1);
+        UnitAI u2 = MakeRealUnit("TestSquadB", new Vector3(5f, 0.9f, 0f), Vector3.one, 1);
+        UnitAI u3 = MakeRealUnit("TestSquadC", new Vector3(10f, 0.9f, 0f), Vector3.one, 1);
+        var group = new System.Collections.Generic.List<UnitAI> { u1, u2, u3 };
+
+        MethodInfo cycleMethod = typeof(TacticalPathManager).GetMethod("CycleSelectGroup", BindingFlags.NonPublic | BindingFlags.Instance);
+        if (cycleMethod == null)
+        {
+            var candidates = typeof(TacticalPathManager).GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static)
+                .Where(m => m.Name.IndexOf("Cycle", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                .Select(m => m.Name);
+            throw new System.Exception("TacticalPathManager.CycleSelectGroup introuvable par réflexion. Candidats contenant 'Cycle' : [" + string.Join(", ", candidates) + "]");
+        }
+
+        FieldInfo selectedField = typeof(TacticalPathManager).GetField("uniteSelectionnee");
+        if (selectedField == null) throw new System.Exception("TacticalPathManager.uniteSelectionnee introuvable.");
+
+        // Rien de sélectionné au départ -> le 1er cycle doit prendre la PREMIÈRE unité du groupe
+        // (voir CycleSelectGroup : currentIndex reste -1 si uniteSelectionnee ne correspond à rien
+        // du groupe, (currentIndex + 1) % count retombe donc sur l'index 0).
+        cycleMethod.Invoke(mgr, new object[] { group });
+        var selected1 = (GameObject)selectedField.GetValue(mgr);
+        if (selected1 != u1.gameObject)
+        {
+            Debug.LogError($"[TacticalSelectionAutoTest] 1er cycle : attendu {u1.gameObject.name}, obtenu {(selected1 != null ? selected1.name : "null")}");
+            return false;
+        }
+
+        cycleMethod.Invoke(mgr, new object[] { group });
+        var selected2 = (GameObject)selectedField.GetValue(mgr);
+        if (selected2 != u2.gameObject)
+        {
+            Debug.LogError($"[TacticalSelectionAutoTest] 2e cycle : attendu {u2.gameObject.name}, obtenu {(selected2 != null ? selected2.name : "null")}");
+            return false;
+        }
+
+        cycleMethod.Invoke(mgr, new object[] { group });
+        var selected3 = (GameObject)selectedField.GetValue(mgr);
+        if (selected3 != u3.gameObject)
+        {
+            Debug.LogError($"[TacticalSelectionAutoTest] 3e cycle : attendu {u3.gameObject.name}, obtenu {(selected3 != null ? selected3.name : "null")}");
+            return false;
+        }
+
+        // 4e cycle : doit boucler et reprendre la 1ère unité.
+        cycleMethod.Invoke(mgr, new object[] { group });
+        var selected4 = (GameObject)selectedField.GetValue(mgr);
+        if (selected4 != u1.gameObject)
+        {
+            Debug.LogError($"[TacticalSelectionAutoTest] 4e cycle (bouclage attendu) : attendu {u1.gameObject.name}, obtenu {(selected4 != null ? selected4.name : "null")}");
             return false;
         }
         return true;
