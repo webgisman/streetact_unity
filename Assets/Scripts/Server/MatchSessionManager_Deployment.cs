@@ -117,6 +117,63 @@ namespace Novgov.Server
         // AutoDeployBattlefield (déploiement automatique), non concerné par ce changement.
         private static Vector3 ClampToDeploymentZone(Vector3 pos, int team) => pos;
 
+        /// <summary>ÉQUITÉ GÉOMÉTRIQUE, 2ème étage (2026-09-12) — voir MatchState.AuthoritativeCityHash
+        /// pour le contexte complet. Compare le hash que CE client vient de calculer sur SA propre
+        /// génération à la référence figée pour cette partie ; en cas d'écart, envoie la structure de
+        /// bâtiments AUTORITAIRE du serveur (jamais un différentiel partiel) pour que ce client
+        /// reconstruise sa ville à l'identique avant que le déploiement ne s'ouvre réellement.
+        /// Journalisé dans TOUS les cas (pas seulement l'échec) : un écart qui ne se reproduit jamais
+        /// dans les logs serait aussi suspect qu'un écart qui apparaît sans cesse.</summary>
+        private void HandleCityVerify(MatchState ms, PlayerConnection conn, NetMessage msg)
+        {
+            bool matches = msg.city_building_hash == ms.AuthoritativeCityHash;
+            Debug.Log($"[CityVerify] [{ms.MatchId}] {conn.Username} (équipe {conn.TeamId}) : " +
+                      $"hash client={msg.city_building_hash} ({msg.city_building_count} bâtiments), " +
+                      $"hash serveur={ms.AuthoritativeCityHash} ({ms.World.buildings.Count} bâtiments) -> " +
+                      $"{(matches ? "IDENTIQUE" : "DIVERGENT")}.");
+
+            if (matches)
+            {
+                conn.Send(new NetMessage { type = "city_verify_result", success = true });
+                return;
+            }
+
+            Debug.LogWarning($"[CityVerify] [{ms.MatchId}] Géométrie divergente pour {conn.Username} (équipe {conn.TeamId}) — " +
+                              $"envoi de la structure autoritaire ({ms.World.buildings.Count} bâtiments) pour resynchronisation.");
+            conn.Send(new NetMessage
+            {
+                type = "city_verify_result",
+                success = false,
+                city_buildings = SerializeBuildingsForNetwork(ms.World.buildings)
+            });
+        }
+
+        /// <summary>Copie intégrale (jamais un différentiel) de <paramref name="buildings"/> vers le
+        /// format réseau — voir NetMessage.BuildingGeometryDto pour le format exact et pourquoi la
+        /// hauteur de fenêtre (Y) n'est volontairement pas transmise.</summary>
+        private static BuildingGeometryDto[] SerializeBuildingsForNetwork(List<TacticalBuilding> buildings)
+        {
+            return buildings.Select(b => new BuildingGeometryDto
+            {
+                id = b.id,
+                height = b.height,
+                footprint = b.footprint.Select(p => new Vector2Data { x = p.x, y = p.y }).ToArray(),
+                doors = b.doors.Select(d => new DoorGeometryDto
+                {
+                    position = new Vector2Data { x = d.position.x, y = d.position.y },
+                    entry_direction = new Vector2Data { x = d.entryDirection.x, y = d.entryDirection.y },
+                    width = d.width
+                }).ToArray(),
+                windows = b.windows.Select(w => new WindowGeometryDto
+                {
+                    id = w.id,
+                    position = new Vector2Data { x = w.position.x, y = w.position.y },
+                    outward_normal = new Vector2Data { x = w.outwardNormal.x, y = w.outwardNormal.y },
+                    floor_level = w.floorLevel
+                }).ToArray()
+            }).ToArray();
+        }
+
         private static int InferUnitType(UnitAI u) => (int)InferUnitTypeEnum(u);
 
         /// <summary>Type d'unité déduit des drapeaux de l'UnitAI. Version typée, pour pouvoir
@@ -243,8 +300,8 @@ namespace Novgov.Server
             float mapWait = MapReadyMaxWaitSeconds;
             while (mapWait > 0f && !(p1.MapReady && p2.MapReady))
             {
-                DrainMessages(p1, 0);
-                DrainMessages(p2, 0);
+                DrainMessages(p1, 0, ms);
+                DrainMessages(p2, 0, ms);
                 if (p1.IsDisconnected && p2.IsDisconnected) yield break;
 
                 if (p1ReadyAtUtc == null && p1.MapReady) p1ReadyAtUtc = DateTime.UtcNow;
@@ -271,8 +328,8 @@ namespace Novgov.Server
             int lastTickP1 = -1, lastTickP2 = -1;
             while (!(p1Done && p2Done))
             {
-                DrainMessages(p1, 0);
-                DrainMessages(p2, 0);
+                DrainMessages(p1, 0, ms);
+                DrainMessages(p2, 0, ms);
                 if (p1.IsDisconnected && p2.IsDisconnected) yield break;
 
                 if (!p1Done)

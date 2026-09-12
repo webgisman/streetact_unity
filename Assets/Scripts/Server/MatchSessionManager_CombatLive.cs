@@ -57,7 +57,13 @@ namespace Novgov.Server
             ApplyForPlayer(p2, p1);
         }
 
-        private void DrainMessages(PlayerConnection conn, int turnNumber)
+        /// <summary><paramref name="msForCityVerify"/> est optionnel (null partout sauf
+        /// RunDeploymentPhasePure) : seule cette phase a besoin de répondre à "city_verify", et lui
+        /// seul dispose d'un MatchState sous la main (RunPlanningPhase/RunConquestPlanningPhase ne
+        /// travaillent qu'avec des PlayerConnection, architecture Live plus ancienne) — un paramètre
+        /// optionnel évite de changer la signature des 9 autres appels existants pour une seule
+        /// phase concernée.</summary>
+        private void DrainMessages(PlayerConnection conn, int turnNumber, MatchState msForCityVerify = null)
         {
             while (conn.TryDequeueMessage(out NetMessage msg))
             {
@@ -78,6 +84,10 @@ namespace Novgov.Server
                 else if (msg.type == "deployment_ready")
                 {
                     conn.MapReady = true;
+                }
+                else if (msg.type == "city_verify" && msForCityVerify != null)
+                {
+                    HandleCityVerify(msForCityVerify, conn, msg);
                 }
             }
         }

@@ -163,6 +163,13 @@ namespace Novgov.Server
             yield return EnsureTileLoadedAndSnapshot(ms, cacheKey, owningUserId);
             TryParseTileCacheKey(ms.CacheKey, out int matchTileX, out int matchTileY);
 
+            // ÉQUITÉ GÉOMÉTRIQUE, 2ème étage (2026-09-12) — voir MatchState.AuthoritativeCityHash et
+            // HandleCityVerify (MatchSessionManager_Deployment.cs). Calculé UNE FOIS ici, juste après
+            // que ms.World soit figé : c'est la référence à laquelle chaque client comparera SA propre
+            // génération avant que le déploiement ne s'ouvre.
+            ms.AuthoritativeCityHash = TacticalGridBuilder.ComputeBuildingListHash(ms.World.buildings);
+            Debug.Log($"[CityVerify] [{ms.MatchId}] Hash de référence figé : {ms.AuthoritativeCityHash} ({ms.World.buildings.Count} bâtiments, tuile {ms.CacheKey}).");
+
             if (ms.Mode == "zone_control")
             {
                 Vector2 zoneCenter2D = MatchGeometry.FindGroundLevelInGrid(ms.World.grid, Vector2.zero, 40f);

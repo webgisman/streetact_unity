@@ -86,6 +86,70 @@ namespace Novgov.Network
         // différents, édition OSM survenue entre les deux requêtes). Le client applique maintenant
         // ce JSON tel quel (CityGenerator.LoadZoneFromServerData) au lieu de le redemander lui-même.
         public string city_data_json;
+
+        // city_verify (client -> serveur, 2026-09-12, "équité géométrique, 2ème étage") : hash
+        // déterministe (voir Novgov.TacticalCore.TacticalGridBuilder.ComputeBuildingListHash) de la
+        // ville que CE client vient de générer localement, envoyé une fois sa carte prête, AVANT que
+        // le déploiement ne s'ouvre réellement — voir MultiplayerMatchController.
+        // LoadMatchMapThenOpenDeployment. city_building_count est purement informatif (logs serveur).
+        public int city_building_hash;
+        public int city_building_count;
+
+        // city_verify_result (serveur -> client) : `success` (champ partagé, voir plus haut) vrai si
+        // city_building_hash concordait avec MatchState.AuthoritativeCityHash — dans ce cas
+        // city_buildings reste vide, rien à faire. Sinon, la structure de bâtiments AUTORITAIRE du
+        // serveur (celle qui a réellement servi à figer ms.World, voir EnsureTileLoadedAndSnapshot)
+        // est jointe intégralement (jamais un différentiel partiel — voir CityGenerator.
+        // ApplyAuthoritativeBuildings : recréer une ville à partir d'un sous-ensemble laisserait des
+        // bâtiments du côté divergent, l'objectif est une ville identique à 100%, pas rapiécée).
+        public BuildingGeometryDto[] city_buildings;
+    }
+
+    /// <summary>Un point 2D (X, Z monde) — mêmes conventions que Novgov.TacticalCore.TacticalBuilding
+    /// (footprint/portes/fenêtres en 2D, la hauteur/l'élévation étant portée séparément).</summary>
+    [Serializable]
+    public class Vector2Data
+    {
+        public float x, y;
+    }
+
+    /// <summary>Copie réseau de Novgov.TacticalCore.TacticalDoor — voir BuildingGeometryDto.</summary>
+    [Serializable]
+    public class DoorGeometryDto
+    {
+        public Vector2Data position;
+        public Vector2Data entry_direction;
+        public float width;
+    }
+
+    /// <summary>Copie réseau de Novgov.TacticalCore.TacticalWindow — voir BuildingGeometryDto. La
+    /// hauteur réelle (Y) d'une fenêtre n'est PAS transmise : elle est recalculée côté client par une
+    /// formule purement déterministe à partir de floor_level (voir CityGenerator.
+    /// GenerateDoorsAndWindows, "floorY = 1.4f + f * 3.0f" — CityGenerator.ApplyAuthoritativeBuildings
+    /// reproduit exactement cette même formule), pas la peine de faire transiter une valeur qui se
+    /// recalcule à l'identique sans ambiguïté.</summary>
+    [Serializable]
+    public class WindowGeometryDto
+    {
+        public int id;
+        public Vector2Data position;
+        public Vector2Data outward_normal;
+        public int floor_level;
+    }
+
+    /// <summary>Copie réseau intégrale de Novgov.TacticalCore.TacticalBuilding — voir
+    /// "city_verify_result" ci-dessus et CityGenerator.ApplyAuthoritativeBuildings (côté client, seul
+    /// consommateur). L'empreinte (footprint) ne porte que le contour EXTÉRIEUR (pas de trous
+    /// intérieurs) — même simplification déjà acceptée par le cache disque L2 de TacticalGridBuilder
+    /// (BuildingTemplateDto), rien de nouveau introduit ici.</summary>
+    [Serializable]
+    public class BuildingGeometryDto
+    {
+        public int id;
+        public float height;
+        public Vector2Data[] footprint;
+        public DoorGeometryDto[] doors;
+        public WindowGeometryDto[] windows;
     }
 
     [Serializable]

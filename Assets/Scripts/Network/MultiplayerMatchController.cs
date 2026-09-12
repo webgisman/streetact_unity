@@ -439,6 +439,7 @@ namespace Novgov.Network
                 case "opponent_ghosted": OnOpponentGhosted(msg); break;
                 case "turn_result": if (!isPlayingSnapshots) StartCoroutine(PlaySnapshotsCoroutine(msg)); break;
                 case "match_over": StartCoroutine(DeferredMatchOver(msg)); break;
+                case "city_verify_result": OnCityVerifyResult(msg); break;
                 case "zone_captured": OnZoneCaptured(msg); break;
                 case "zone_attack_result": OnZoneAttackResult(msg); break;
             }
@@ -589,8 +590,124 @@ namespace Novgov.Network
                 yield break;
             }
 
+            yield return VerifyCityGeometryWithServer(cityGen);
+
             OpenDeploymentDock();
         }
+
+        // ÉQUITÉ GÉOMÉTRIQUE, 2ème étage (2026-09-12) — voir NetMessage.city_verify/
+        // city_verify_result et MatchState.AuthoritativeCityHash (serveur) pour le contexte complet.
+        // Vrai UNIQUEMENT entre l'envoi de "city_verify" et la réception de "city_verify_result" (ou
+        // l'expiration du filet de sécurité ci-dessous) — jamais laissé à true plus longtemps, sinon
+        // une résolution tardive/inattendue d'un ancien city_verify_result déclencherait une
+        // resynchronisation hors de propos.
+        private bool awaitingCityVerifyResult = false;
+
+        /// <summary>Calcule le hash de la ville que CE client vient de générer localement et le
+        /// compare à la référence du serveur AVANT que le dock de déploiement ne s'ouvre — voir
+        /// TacticalGridBuilder.ComputeBuildingListHash. Ne bloque JAMAIS indéfiniment : un serveur qui
+        /// ne répond pas dans les 15s (ancienne version sans ce message, coupure réseau ponctuelle)
+        /// laisse la partie continuer sur la géométrie locale plutôt que de bloquer le déploiement —
+        /// ce garde-fou est un filet de sécurité, pas une exigence bloquante.</summary>
+        private IEnumerator VerifyCityGeometryWithServer(CityGenerator cityGen)
+        {
+            if (cityGen == null) yield break;
+
+            var localState = Novgov.TacticalCore.TacticalGridBuilder.BuildFromScene();
+            int localHash = Novgov.TacticalCore.TacticalGridBuilder.ComputeBuildingListHash(localState.buildings);
+
+            awaitingCityVerifyResult = true;
+            GameServerClient.Instance.Send(new NetMessage
+            {
+                type = "city_verify",
+                city_building_hash = localHash,
+                city_building_count = localState.buildings.Count
+            });
+
+            const float CityVerifyMaxWaitSeconds = 15f;
+            float wait = CityVerifyMaxWaitSeconds;
+            while (awaitingCityVerifyResult && wait > 0f && (GameServerClient.Instance?.IsConnected ?? false))
+            {
+                wait -= Time.deltaTime;
+                yield return null;
+            }
+
+            if (awaitingCityVerifyResult)
+            {
+                Debug.LogWarning("[MultiplayerMatchController] Pas de city_verify_result reçu à temps — on continue sur la géométrie locale (filet de sécurité, jamais bloquant).");
+                awaitingCityVerifyResult = false;
+            }
+
+            // Si city_verify_result a déclenché une resynchronisation (voir OnCityVerifyResult), le
+            // dock de déploiement ne doit s'ouvrir qu'une fois la ville reconstruite — jamais pendant.
+            while (resyncInProgress) yield return null;
+        }
+
+        private void OnCityVerifyResult(NetMessage msg)
+        {
+            awaitingCityVerifyResult = false;
+
+            if (msg.success)
+            {
+                Debug.Log("[MultiplayerMatchController] Géométrie de carte confirmée identique au serveur.");
+                return;
+            }
+
+            int count = msg.city_buildings?.Length ?? 0;
+            Debug.LogWarning($"[MultiplayerMatchController] Géométrie de carte DIVERGENTE détectée par le serveur — resynchronisation depuis sa structure autoritaire ({count} bâtiments).");
+            CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
+            if (cityGen == null || msg.city_buildings == null)
+            {
+                Debug.LogError("[MultiplayerMatchController] Resynchronisation impossible (CityGenerator ou city_buildings absent) — la partie continue sur une géométrie potentiellement divergente.");
+                return;
+            }
+
+            resyncInProgress = true;
+            cityGen.ApplyAuthoritativeBuildings(ConvertToTacticalBuildings(msg.city_buildings), () => resyncInProgress = false);
+        }
+
+        /// <summary>NetMessage.BuildingGeometryDto (format réseau plat) -> Novgov.TacticalCore.
+        /// TacticalBuilding (type déjà partagé serveur/TacticalGridBuilder) — la hauteur de fenêtre
+        /// (Y) n'est pas transmise, voir NetMessage.WindowGeometryDto, CityGenerator.
+        /// ApplyAuthoritativeBuildings la recalcule avec la même formule déterministe que la
+        /// génération normale.</summary>
+        private static List<Novgov.TacticalCore.TacticalBuilding> ConvertToTacticalBuildings(BuildingGeometryDto[] dtos)
+        {
+            var result = new List<Novgov.TacticalCore.TacticalBuilding>(dtos.Length);
+            foreach (var dto in dtos)
+            {
+                result.Add(new Novgov.TacticalCore.TacticalBuilding
+                {
+                    id = dto.id,
+                    height = dto.height,
+                    footprint = (dto.footprint ?? System.Array.Empty<Vector2Data>())
+                        .Select(p => new Vector2(p.x, p.y)).ToList(),
+                    doors = (dto.doors ?? System.Array.Empty<DoorGeometryDto>())
+                        .Select(d => new Novgov.TacticalCore.TacticalDoor
+                        {
+                            position = new Vector2(d.position.x, d.position.y),
+                            entryDirection = new Vector2(d.entry_direction.x, d.entry_direction.y),
+                            width = d.width
+                        }).ToList(),
+                    windows = (dto.windows ?? System.Array.Empty<WindowGeometryDto>())
+                        .Select(w => new Novgov.TacticalCore.TacticalWindow
+                        {
+                            id = w.id,
+                            position = new Vector2(w.position.x, w.position.y),
+                            outwardNormal = new Vector2(w.outward_normal.x, w.outward_normal.y),
+                            floorLevel = w.floor_level
+                        }).ToList()
+                });
+            }
+            return result;
+        }
+
+        /// <summary>Vrai pendant la reconstruction de ville déclenchée par OnCityVerifyResult —
+        /// VerifyCityGeometryWithServer attend aussi la fin de CETTE étape (pas seulement la
+        /// réception du message) avant de laisser le dock de déploiement s'ouvrir : ouvrir le dock
+        /// pendant que la ville est en cours de démolition/reconstruction laisserait le joueur
+        /// déployer sur un champ de bataille à moitié détruit.</summary>
+        private bool resyncInProgress = false;
 
         /// <summary>Placement manuel (voir 03-network-protocol.md, "submit_deployment"/
         /// "deployment_result") : chaque joueur choisit où poser sa PROPRE escouade, dans son propre

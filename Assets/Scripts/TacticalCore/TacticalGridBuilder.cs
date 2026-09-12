@@ -327,6 +327,78 @@ namespace Novgov.TacticalCore
             return state; // pas de barricades : aucune n'a encore été posée sur une partie qui démarre
         }
 
+        /// <summary>Hash déterministe et portable d'une liste de bâtiments (empreinte + portes +
+        /// fenêtres + hauteur) — voir "city_verify"/"city_verify_result" dans MatchState.
+        /// AuthoritativeCityHash et MatchSessionManager_Deployment.HandleCityVerify pour l'usage :
+        /// permet à un client de comparer SA géométrie générée à celle du serveur sans transmettre
+        /// toute la structure à chaque fois, seulement quand elles diffèrent réellement.
+        ///
+        /// Trié par id d'abord (insensible à un réordonnancement accidentel de la liste). Chaque
+        /// float est quantifié au millimètre avant d'entrer dans le hash — même raison que
+        /// Novgov.Core.DeterministicHash (voir TacticalCoreSelfTest_DeterministicHash.cs) : une
+        /// projection GPS calculée légèrement différemment selon la plateforme (Android/ARM vs Linux
+        /// serveur) peut différer d'un dernier bit flottant sur une géométrie par ailleurs identique
+        /// — sans cette quantification, ce bruit sous le millimètre ferait rapporter une divergence
+        /// qui n'en est pas une. Combinaison FNV-1a (XOR puis multiplication par le nombre premier
+        /// FNV, entièrement en arithmétique entière 32 bits) : bit-identique sur toute plateforme
+        /// .NET/Mono/IL2CPP, contrairement à un hash basé sur GetHashCode() d'un type flottant.</summary>
+        public static int ComputeBuildingListHash(List<TacticalBuilding> buildings)
+        {
+            uint hash = 2166136261u; // FNV-1a offset basis
+
+            foreach (var b in buildings.OrderBy(x => x.id))
+            {
+                hash = CombineInt(hash, b.id);
+                hash = CombineFloat(hash, b.height);
+
+                hash = CombineInt(hash, b.footprint?.Count ?? 0);
+                if (b.footprint != null) foreach (var p in b.footprint) { hash = CombineFloat(hash, p.x); hash = CombineFloat(hash, p.y); }
+
+                hash = CombineInt(hash, b.doors?.Count ?? 0);
+                if (b.doors != null)
+                {
+                    foreach (var d in b.doors)
+                    {
+                        hash = CombineFloat(hash, d.position.x);
+                        hash = CombineFloat(hash, d.position.y);
+                        hash = CombineFloat(hash, d.entryDirection.x);
+                        hash = CombineFloat(hash, d.entryDirection.y);
+                        hash = CombineFloat(hash, d.width);
+                    }
+                }
+
+                hash = CombineInt(hash, b.windows?.Count ?? 0);
+                if (b.windows != null)
+                {
+                    foreach (var w in b.windows)
+                    {
+                        hash = CombineFloat(hash, w.position.x);
+                        hash = CombineFloat(hash, w.position.y);
+                        hash = CombineInt(hash, w.floorLevel);
+                    }
+                }
+            }
+
+            return unchecked((int)hash);
+        }
+
+        private static uint CombineInt(uint hash, int value)
+        {
+            unchecked
+            {
+                hash ^= (uint)value;
+                hash *= 16777619u; // FNV prime
+                return hash;
+            }
+        }
+
+        private static uint CombineFloat(uint hash, float value)
+        {
+            // Quantification au millimètre — voir ComputeBuildingListHash pour le pourquoi.
+            int quantized = Mathf.RoundToInt(value * 1000f);
+            return CombineInt(hash, quantized);
+        }
+
         private static void AddBarricadeSegment(TacticalWorldState state, RoadBarrier barrier)
         {
             Vector3 pos = barrier.transform.position;

@@ -66,6 +66,19 @@ namespace Novgov.Server
         // MatchGeometry/TacticalGridBuilder. Gardé pour les logs/diagnostics uniquement.
         public string CacheKey = "Default";
 
+        // ÉQUITÉ GÉOMÉTRIQUE, 2ème étage (2026-09-12) — voir "city_verify"/"city_verify_result" dans
+        // 03-network-protocol.md et MatchSessionManager_Deployment.HandleCityVerify. Le partage du
+        // même JSON Overpass exact (city_data_json, correctif 2026-09-05) empêche la cause la plus
+        // fréquente de divergence géométrique client/serveur, mais pas TOUTES : un décalage de
+        // version entre le build client et le build serveur (les deux sont reconstruits séparément),
+        // ou un cache disque local corrompu côté client, peuvent encore produire une ville
+        // différente à partir du MÊME JSON. Ce hash — calculé UNE FOIS ici, juste après que
+        // ms.World soit figé (voir EnsureTileLoadedAndSnapshot) — est LA référence à laquelle chaque
+        // client compare le sien avant que le déploiement ne s'ouvre réellement ; en cas d'écart, le
+        // serveur renvoie sa propre structure de bâtiments (ms.World.buildings) à ce client pour qu'il
+        // reconstruise sa ville à l'identique plutôt que de continuer sur une géométrie fausse.
+        public int AuthoritativeCityHash;
+
         // Largeur (demi-largeur, mètres) d'une barricade déployée — mesurée UNE SEULE FOIS au
         // démarrage du serveur depuis le vrai prefab Road_barrier (voir MatchSessionManager.
         // SetupWorldOnce/MeasureBarricadeHalfWidth) plutôt que devinée : une barricade posée en

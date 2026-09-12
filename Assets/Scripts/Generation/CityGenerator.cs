@@ -237,7 +237,18 @@ public class CityGenerator : MonoBehaviour
     private IEnumerator FinishZoneLoadFromJson(string jsonText)
     {
         yield return ProcessDataCoroutine(jsonText);
+        yield return FinalizeCityGeneration();
+    }
 
+    /// <summary>Attend le sol, bake le NavMesh autour des bâtiments fraîchement créés, puis relâche
+    /// les unités et marque la ville prête — extrait de FinishZoneLoadFromJson (2026-09-12) pour être
+    /// partagé avec ApplyAuthoritativeBuildingsCoroutine (résynchronisation "équité géométrique, 2ème
+    /// étage") : les deux chemins créent des bâtiments par des voies différentes (JSON Overpass vs
+    /// structure déjà résolue reçue du serveur), mais la finalisation (NavMesh/streaming/IsCityReady)
+    /// est identique dans les deux cas. Comportement STRICTEMENT inchangé par rapport à l'ancien code
+    /// inline de FinishZoneLoadFromJson — seule la localisation a changé.</summary>
+    private IEnumerator FinalizeCityGeneration()
+    {
         // 1. On attend que la carte de base (Sol) soit VRAIMENT téléchargée et générée par MapTileLoader
         MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
         if (mapLoader != null)
@@ -308,6 +319,226 @@ public class CityGenerator : MonoBehaviour
         GameManagerUI.OptimizeSceneMaterials();
         if (GameManagerUI.Instance != null) GameManagerUI.Instance.HideLoading();
         IsCityReady = true;
+    }
+
+    /// <summary>ÉQUITÉ GÉOMÉTRIQUE, 2ème étage (2026-09-12) — voir MatchState.AuthoritativeCityHash
+    /// (serveur) et NetMessage.city_verify_result pour le contexte complet. Appelée UNIQUEMENT quand
+    /// le serveur a détecté que la ville générée localement par ce client diffère de la sienne :
+    /// reconstruit la ville ENTIÈRE (jamais un patch partiel, voir NetMessage.BuildingGeometryDto)
+    /// directement depuis la structure déjà résolue reçue du serveur — sans repasser par le JSON
+    /// Overpass brut ni par l'algorithme de subdivision/placement de portes-fenêtres normal (qui a
+    /// justement produit un résultat différent une première fois sur ce client) : chaque bâtiment est
+    /// instancié tel quel (empreinte/hauteur/portes/fenêtres déjà figées), donc garanti identique au
+    /// serveur quoi qu'il arrive, plutôt que de retenter le même calcul en espérant un résultat
+    /// différent.</summary>
+    public void ApplyAuthoritativeBuildings(List<Novgov.TacticalCore.TacticalBuilding> buildings, System.Action onComplete)
+    {
+        StartCoroutine(ApplyAuthoritativeBuildingsCoroutine(buildings, onComplete));
+    }
+
+    private IEnumerator ApplyAuthoritativeBuildingsCoroutine(List<Novgov.TacticalCore.TacticalBuilding> buildings, System.Action onComplete)
+    {
+        CancelActiveGenerationAndClearCity();
+        IsCityReady = false;
+
+        GameObject cityRoot = new GameObject("City");
+        int processedSinceYield = 0;
+        int created = 0;
+        foreach (var template in buildings)
+        {
+            if (CreateBuildingObjectFromAuthoritative(template, cityRoot.transform)) created++;
+
+            if (++processedSinceYield >= BUILDINGS_PER_FRAME)
+            {
+                processedSinceYield = 0;
+                yield return null;
+            }
+        }
+        Debug.Log($"<color=cyan>[CityGenerator] Resynchronisation depuis la structure autoritaire du serveur : {created}/{buildings.Count} bâtiments recréés à l'identique.</color>");
+
+        yield return FinalizeCityGeneration();
+        onComplete?.Invoke();
+    }
+
+    /// <summary>Un bâtiment DÉJÀ résolu (empreinte/hauteur/portes/fenêtres exactes reçues du serveur)
+    /// — contrairement à CreateBuildingObject (chemin normal), aucune fusion de trous/subdivision en
+    /// lots ni génération procédurale de portes/fenêtres : tout est déjà connu, on instancie
+    /// directement. edgeIndex/edgeDistance de chaque porte (nécessaires à TacticalGridBuilder.
+    /// AddWallSegmentsForBuilding pour marquer le bon segment de mur "franchissable", voir ce
+    /// fichier) ne sont volontairement PAS transmis sur le réseau (NetMessage.DoorGeometryDto) : ils
+    /// se déduisent sans aucune ambiguïté de la position de la porte + de l'empreinte (voir
+    /// ResolveEdgeIndexAndDistance), pas la peine de faire transiter une donnée redondante. Même
+    /// remarque pour la hauteur Y d'une fenêtre (voir NetMessage.WindowGeometryDto) : recalculée ici
+    /// avec EXACTEMENT la même formule que GenerateDoorsAndWindows ("floorY = 1.4f + f * 3.0f").
+    /// Matériaux/mobilier urbain non reproduits à l'identique (dépendent du flux UnityEngine.Random
+    /// partagé, jamais transmis) — cosmétique uniquement, sans effet sur la résolution tactique.</summary>
+    private bool CreateBuildingObjectFromAuthoritative(Novgov.TacticalCore.TacticalBuilding template, Transform parent)
+    {
+        List<Vector2> footprint = template.footprint;
+        if (footprint == null || footprint.Count < 3)
+        {
+            Debug.LogWarning($"[CityGenerator] Bâtiment autoritaire ignoré (empreinte < 3 sommets) : id={template.id}");
+            return false;
+        }
+
+        float lotHeight = template.height > 0f ? template.height : 6f;
+        string lotName = "Building_Resync_" + template.id;
+
+        GameObject buildingGo = new GameObject(lotName);
+        buildingGo.transform.parent = parent;
+
+        BuildingStructure structure = buildingGo.AddComponent<BuildingStructure>();
+        structure.InitPolygon(footprint, lotHeight);
+        buildingGo.AddComponent<DestructibleEnvironment>();
+
+        if (template.doors != null)
+        {
+            foreach (var d in template.doors)
+            {
+                ResolveEdgeIndexAndDistance(footprint, d.position, out int edgeIndex, out float edgeDistance);
+                structure.doors.Add(new BuildingStructure.BuildingDoor
+                {
+                    position = new Vector3(d.position.x, 0f, d.position.y),
+                    entryDirection = new Vector3(d.entryDirection.x, 0f, d.entryDirection.y),
+                    edgeIndex = edgeIndex,
+                    edgeDistance = edgeDistance,
+                    width = d.width
+                });
+
+                // Même NavMeshLink que GenerateDoorsAndWindows (voir ce commentaire là-bas pour le
+                // pourquoi) — un lien manquant après resynchronisation laisserait le NavMesh visuel
+                // solo bloqué à cette porte, alors que le rendu normal (JSON Overpass) l'aurait posé.
+                GameObject doorLinkGo = new GameObject("Door_NavMeshLink");
+                doorLinkGo.transform.parent = buildingGo.transform;
+                doorLinkGo.transform.position = new Vector3(d.position.x, 0f, d.position.y);
+                var navLink = doorLinkGo.AddComponent<Unity.AI.Navigation.NavMeshLink>();
+                Vector3 outward = new Vector3(d.entryDirection.x, 0f, d.entryDirection.y);
+                navLink.startPoint = outward * 1.5f;
+                navLink.endPoint = -outward * 1.5f;
+                navLink.width = 1.5f;
+                navLink.bidirectional = true;
+            }
+        }
+
+        if (template.windows != null)
+        {
+            foreach (var w in template.windows)
+            {
+                // Même formule EXACTE que GenerateDoorsAndWindows ("floorY = 1.4f + f * 3.0f") — la
+                // hauteur Y n'est pas transmise sur le réseau, voir NetMessage.WindowGeometryDto.
+                float floorY = 1.4f + w.floorLevel * 3.0f;
+                structure.windows.Add(new BuildingStructure.BuildingWindow
+                {
+                    id = w.id,
+                    position = new Vector3(w.position.x, floorY, w.position.y),
+                    outwardNormal = new Vector3(w.outwardNormal.x, 0f, w.outwardNormal.y),
+                    floorLevel = w.floorLevel,
+                    isOccupied = false,
+                    occupant = null
+                });
+            }
+        }
+
+        // --- Meshes (mêmes fonctions PURES que le chemin normal, aucune dépendance au flux Random) ---
+        List<int> roofIndices = Triangulate(footprint);
+        if (roofIndices.Count == 0)
+        {
+            Debug.LogWarning($"[CityGenerator] Bâtiment autoritaire ignoré (triangulation impossible) : id={template.id}");
+            Destroy(buildingGo);
+            return false;
+        }
+
+        Mesh roofMesh = CreateHipRoofMesh(footprint, roofIndices, lotHeight);
+        GameObject roofGo = new GameObject("Roof");
+        roofGo.transform.parent = buildingGo.transform;
+        roofGo.AddComponent<MeshFilter>().sharedMesh = roofMesh;
+        var roofRenderer = roofGo.AddComponent<MeshRenderer>();
+        roofRenderer.sharedMaterial = GetRandomRoofMaterial();
+        roofRenderer.enabled = false;
+        roofGo.AddComponent<MeshCollider>().sharedMesh = roofMesh;
+
+        Mesh floorMesh = CreateFloorMesh(footprint, roofIndices, 0.08f);
+        GameObject floorGo = new GameObject("Footprint_2D");
+        floorGo.transform.parent = buildingGo.transform;
+        floorGo.AddComponent<MeshFilter>().sharedMesh = floorMesh;
+        var floorRenderer = floorGo.AddComponent<MeshRenderer>();
+        Material floorMat = Get2DBuildingMaterial();
+        floorRenderer.sharedMaterial = floorMat;
+        floorRenderer.enabled = true;
+        floorGo.AddComponent<MeshCollider>().sharedMesh = floorMesh;
+
+        if (floorMat != null)
+        {
+            Color tinted = JitterBuildingColor(Base2DBuildingColor, footprint[0]);
+            MaterialPropertyBlock tintBlock = new MaterialPropertyBlock();
+            if (floorMat.HasProperty("_BaseColor")) tintBlock.SetColor("_BaseColor", tinted);
+            if (floorMat.HasProperty("_Color")) tintBlock.SetColor("_Color", tinted);
+            floorRenderer.SetPropertyBlock(tintBlock);
+        }
+
+        Mesh outlineMesh = CreateOutlineMesh(footprint, 0.09f, 0.4f);
+        if (outlineMesh != null)
+        {
+            GameObject outlineGo = new GameObject("Outline_2D");
+            outlineGo.transform.parent = buildingGo.transform;
+            outlineGo.AddComponent<MeshFilter>().sharedMesh = outlineMesh;
+            var outlineRenderer = outlineGo.AddComponent<MeshRenderer>();
+            outlineRenderer.sharedMaterial = Get2DOutlineMaterial();
+            outlineRenderer.enabled = true;
+        }
+
+        Mesh wallsMesh = CreateWallsMesh(footprint, lotHeight, structure.doors);
+        GameObject wallsGo = new GameObject("Walls");
+        wallsGo.transform.parent = buildingGo.transform;
+        wallsGo.AddComponent<MeshFilter>().sharedMesh = wallsMesh;
+        var wallsRenderer = wallsGo.AddComponent<MeshRenderer>();
+        wallsRenderer.sharedMaterial = GetRandomWallMaterial();
+        wallsRenderer.enabled = false;
+        wallsGo.AddComponent<MeshCollider>().sharedMesh = wallsMesh;
+
+        BuildVisualOpenings(buildingGo, structure);
+
+        TacticalVisibility vis = buildingGo.AddComponent<TacticalVisibility>();
+        vis.roofObject = roofGo;
+        vis.structure = structure;
+
+        CreateRoofAccess(buildingGo, footprint, lotHeight);
+
+        return true;
+    }
+
+    /// <summary>Retrouve, purement géométriquement, sur quelle arête de <paramref name="footprint"/>
+    /// se trouve <paramref name="doorPos"/> (au décalage de 0.05m près vers l'extérieur, voir
+    /// GenerateDoorsAndWindows — négligeable face à la distance entre arêtes) — nécessaire car
+    /// edgeIndex/edgeDistance ne sont pas transmis sur le réseau (voir NetMessage.DoorGeometryDto),
+    /// une porte reçue étant par construction déjà posée sur une arête réelle de cette même
+    /// empreinte.</summary>
+    private static void ResolveEdgeIndexAndDistance(List<Vector2> footprint, Vector2 doorPos, out int edgeIndex, out float edgeDistance)
+    {
+        int n = footprint.Count;
+        edgeIndex = 0;
+        edgeDistance = 0f;
+        float bestSqrDist = float.MaxValue;
+
+        for (int i = 0; i < n; i++)
+        {
+            Vector2 a = footprint[i];
+            Vector2 b = footprint[(i + 1) % n];
+            Vector2 ab = b - a;
+            float lenSqr = ab.sqrMagnitude;
+            if (lenSqr < 0.0001f) continue;
+
+            float t = Mathf.Clamp01(Vector2.Dot(doorPos - a, ab) / lenSqr);
+            Vector2 projected = a + ab * t;
+            float sqrDist = (doorPos - projected).sqrMagnitude;
+
+            if (sqrDist < bestSqrDist)
+            {
+                bestSqrDist = sqrDist;
+                edgeIndex = i;
+                edgeDistance = t * Mathf.Sqrt(lenSqr);
+            }
+        }
     }
 
     /// <summary>ÉQUITÉ MULTIJOUEUR (2026-09-05) — point d'entrée principal pour charger une Zone à
