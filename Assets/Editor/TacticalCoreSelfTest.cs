@@ -42,6 +42,10 @@ public static partial class TacticalCoreSelfTest
         // ne suit pas le chemin") — voir TacticalCoreSelfTest_InfantryPathSim.cs.
         RunInfantryPathSimTests(ref passed, ref failed);
 
+        // Retour joueur 2026-09-12 ("les unités rentrent dans les polygones", PvP Deathmatch réel) —
+        // voir TacticalCoreSelfTest_BuildingIntrusion.cs.
+        RunBuildingIntrusionTests(ref passed, ref failed);
+
         Debug.Log(passed == 0 && failed == 0
             ? "[TacticalCoreSelfTest] Aucun test exécuté."
             : $"<color={(failed == 0 ? "green" : "red")}>[TacticalCoreSelfTest] {passed} réussi(s), {failed} échoué(s).</color>");

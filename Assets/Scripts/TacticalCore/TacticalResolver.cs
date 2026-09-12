@@ -483,18 +483,26 @@ namespace Novgov.TacticalCore
                         // autre du MÊME intérieur (confiné à son empreinte, comme sur un toit).
                         List<Vector2> confinement = currentInterior >= 0 ? state.buildings[currentInterior].footprint : null;
 
-                        // 2026-09-06 ("un char peut foncer dans un bâtiment") : un char ne porte
-                        // jamais enterBuildingId (aucun menu ne le lui propose, seule l'infanterie
-                        // peut viser targetInterior ci-dessus) — mais rien ne vérifiait que la
-                        // destination géométrique elle-même ne tombe pas quand même dans l'empreinte
-                        // d'un bâtiment que l'unité n'a jamais explicitement demandé à visiter. Dans
-                        // ce cas AppendLeg ci-dessous visait une cellule creusée non-franchissable
-                        // (TacticalGrid.CarveBuildingInteriors) : Pathfinding.FindPath échouait
-                        // systématiquement et son repli en ligne droite, jamais vérifié, coupait tout
-                        // droit à travers le mur. Un char redirige maintenant sa destination sur le
-                        // point au sol praticable le plus proche, HORS de ce bâtiment.
+                        // 2026-09-06 ("un char peut foncer dans un bâtiment"), généralisé le
+                        // 2026-09-12 ("les unités rentrent dans les polygones", retour multijoueur
+                        // Deathmatch) : une unité ordinaire ne porte enterBuildingId QUE si le joueur a
+                        // explicitement choisi "Entrer" au menu (targetInterior ci-dessus) — mais rien
+                        // ne vérifiait que la destination géométrique elle-même ne tombe pas quand même
+                        // dans l'empreinte d'un bâtiment que l'unité n'a JAMAIS demandé à visiter (tir
+                        // group-move dont le point cliqué recouvre un bâtiment, checkpoint automatique
+                        // du repli/formation, etc.). Dans ce cas AppendLeg ci-dessous visait une
+                        // cellule creusée non-franchissable (TacticalGrid.CarveBuildingInteriors) :
+                        // Pathfinding.FindPath échouait systématiquement (cellule d'arrivée
+                        // impraticable) et son repli en ligne droite, jamais vérifié, coupait tout
+                        // droit à travers le mur — initialement corrigé pour les seuls chars
+                        // (unit.isTank), mais le même repli en ligne droite s'applique à N'IMPORTE
+                        // QUELLE unité dont AppendLeg ne trouve pas de chemin, char ou pas : le
+                        // fantassin, le véhicule et le mortier "entraient dans le polygone" exactement
+                        // pareil, simplement jamais vérifié par un test avant ce jour. Toute unité qui
+                        // n'entre pas explicitement redirige donc sa destination sur le point au sol
+                        // praticable le plus proche, HORS de ce bâtiment.
                         Vector2 finalTarget = checkpoint.position;
-                        if (unit.isTank && confinement == null)
+                        if (confinement == null)
                         {
                             int blockingBuilding = FindRoofUnder(state, finalTarget); // vérifie l'appartenance à UNE empreinte, pas seulement les toits malgré le nom
                             if (blockingBuilding >= 0)
