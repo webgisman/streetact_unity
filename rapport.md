@@ -6,6 +6,15 @@ Suite à ton retour ("gestion des unités catastrophique, il faut changer le mod
 tout, il y a du code mort, unifie le mode de calcul"), voici ce qui a été fait AUJOURD'HUI, par-dessus
 la session de cette nuit (dont le détail original suit plus bas, §1-7).
 
+**En bref (détail de chaque point ci-dessous) :**
+- **A.** Déploiement de tout ce qui était en attente d'hier soir — FAIT
+- **B.** Nouveaux outils de test automatisés (Éditeur, pas juste le moteur pur) — FAIT, 8 tests verts
+- **C.** "Mets le calcul du Deathmatch sur tout le jeu" — DÉJÀ FAIT depuis le 30 août, vérifié
+- **D.** Nettoyage de code mort — FAIT (2 suppressions sûres) + 1 gros morceau probablement mort flagué, pas supprimé
+- **E.** Sur la sélection : une barre d'escouade fiable existe déjà, méconnue
+- **F.** Destruction de bâtiment enfin transmise au client — AJOUTÉ, testé, déployé
+- **G.** Tirs de mortier enfin validés (anti-triche) — AJOUTÉ, déployé
+
 ### A. Déploiement — FAIT (tout ce qui était en attente hier soir)
 
 Rebuild serveur Linux + APK Android depuis le code d'hier soir (le commit `427fc4b`), les DEUX vérifiés
@@ -116,6 +125,16 @@ Serveur + APK rebuild une seconde fois cet après-midi pour inclure ce dernier p
 sur novgov.com — conteneur stable, joignable de l'extérieur, sauvegarde
 `novgov-game-server:backup_20260912_134...` disponible en cas de souci.
 
+### G. Sécurité : les tirs de mortier n'étaient validés par RIEN — CORRIGÉ, déployé
+
+Trouvé en révisant le reste de la liste connue (§19.9.5) : un client modifié pouvait attacher un ordre
+"TirMortier" à N'IMPORTE QUELLE unité (même un Fantassin) et viser N'IMPORTE OÙ sur la carte — le
+serveur ajoutait la frappe sans la moindre vérification de type d'unité ni de portée. Corrigé
+symétriquement dans les deux moteurs (Deathmatch/Zone de Contrôle ET Conquête/Entraînement, qui
+partagent le même calcul) : seule une VRAIE unité Mortier peut désormais déclencher une frappe, et
+seulement à moins de 120m d'elle-même (même portée que le mode solo). Redéployé une 3e fois (serveur
+seul, ce correctif ne concerne pas le client).
+
 ### État git
 
 Tout committé et poussé sur `origin/master` :
@@ -123,6 +142,13 @@ Tout committé et poussé sur `origin/master` :
 - `fd39b73` (aujourd'hui — refactor + test auto + nettoyage code mort)
 - `200f954` (aujourd'hui — extension du test auto au garde-fou fin de tour)
 - `95ff4df` (aujourd'hui — destruction de bâtiment transmise au réseau, §F ci-dessus)
+- `e7e0adc` (aujourd'hui — mise à jour de ce rapport)
+- `02d0938` (aujourd'hui — validation anti-triche des tirs de mortier, §G ci-dessus)
+
+**novgov.com est actuellement sur `02d0938`, rebuild+redéployé et vérifié stable/joignable une
+dernière fois à 13h51.** L'APK (`build/Android/Novgov-Test.apk`) date du build précédent (`95ff4df`,
+13h45) — le dernier correctif (§G) est purement serveur, il n'y a rien à changer côté client pour
+lui.
 
 ---
 
