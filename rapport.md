@@ -1,5 +1,58 @@
 # Rapport de session — 2026-09-11/12
 
+## ⚡⚡⚡⚡⚡ MISE À JOUR 2026-09-12 (nuit, très tardive) — vérification géométrique client/serveur
+
+Suite à ta question ("le script tactical va-t-il fonctionner avec toutes les cartes ?") et à ta
+demande explicite d'ajouter un système de vérification : **fait**. Résumé de la conversation qui a
+mené au design, puis ce qui a été construit.
+
+**Ta question initiale** : le pipeline (empreinte/portes/fenêtres extraites de la scène réelle,
+`TacticalGridBuilder.BuildFromScene`) est-il générique ou codé en dur pour une carte précise ?
+Réponse : entièrement générique — aucune hypothèse de forme, boucle sur le nombre réel d'arêtes,
+déjà validé sur des centaines de vrais bâtiments OSM variés.
+
+**Ta proposition** : un système qui compare la structure des DEUX joueurs et envoie "l'info la plus
+riche" au "plus pauvre" en cas d'écart. Après vérification du code existant, j'ai trouvé que
+l'équité géométrique avait déjà un PREMIER étage (2026-09-05, JSON Overpass identique envoyé par le
+serveur) qui élimine la cause la plus fréquente — mais rien ne protège contre un décalage de version
+client/serveur ou un cache local corrompu produisant quand même une ville différente à partir du
+même JSON.
+
+**Ce qui a été construit** (voir commit `30d170b`) :
+- `TacticalGridBuilder.ComputeBuildingListHash` : hash déterministe (empreinte+portes+fenêtres+
+  hauteur, insensible à l'ordre, quantifié au millimètre pour survivre au bruit flottant
+  cross-plateforme légitime) de la liste de bâtiments — utilisable aussi bien côté serveur
+  (`ms.World.buildings`, déjà en mémoire, aucune scène nécessaire) que côté client
+  (`TacticalGridBuilder.BuildFromScene()`).
+- Nouveau message `city_verify` (client → serveur, hash + nombre de bâtiments) envoyé dès que la
+  carte du client est prête, AVANT que le dock de déploiement ne s'ouvre.
+- Nouveau message `city_verify_result` (serveur → client) : identique -> rien à faire ; différent ->
+  la structure de bâtiments AUTORITAIRE COMPLÈTE du serveur (jamais un différentiel partiel) est
+  jointe pour que ce client reconstruise sa ville à l'identique.
+- `CityGenerator.ApplyAuthoritativeBuildings` : reconstruit directement depuis cette structure déjà
+  résolue — SANS repasser par le JSON Overpass brut ni l'algorithme de subdivision/portes-fenêtres
+  normal (qui a justement produit un résultat différent une première fois). Portes/fenêtres
+  recréées à l'identique par des formules purement géométriques/déterministes (edgeIndex dérivé de
+  la position, hauteur de fenêtre recalculée par la même formule que la génération normale) — ni
+  l'un ni l'autre n'est transmis sur le réseau, ni nécessaire de le faire.
+- Verrouillé à la phase de CHARGEMENT uniquement, jamais en cours de partie : une reconstruction
+  complète de ville n'y est pas plus perturbante qu'un chargement normal, mais casserait tout
+  (indices de bâtiments, unités) si elle se déclenchait plus tard.
+
+**Testé** : 5 nouveaux tests automatisés (`Assets/Editor/TacticalCityVerifyAutoTest.cs`, vrais objets
+`CityGenerator`/`BuildingStructure`) — déterminisme/insensibilité à l'ordre/sensibilité à un vrai
+écart du hash, et fidélité complète de la reconstruction (empreinte, hauteur, edgeIndex de porte,
+hauteur de fenêtre). Trouvé au passage : `BuildingStructure.OnEnable()` ne s'exécute PAS
+automatiquement en mode batch Éditeur hors Play Mode (contrairement à un vrai Play Mode/build, où
+c'est toujours le cas) — contourné par réflexion dans le test, sans aucun impact sur le code de
+production (qui tourne, lui, toujours en vrai Play Mode). Tous les tests existants + les 3
+compile-checks restent verts.
+
+Protocole documenté dans `03-network-protocol.md` (`city_verify`/`city_verify_result`). Commit
+`30d170b`, poussé sur `origin/master`. Rebuild serveur + APK en cours de déploiement.
+
+---
+
 ## ⚡⚡⚡⚡ MISE À JOUR 2026-09-12 (nuit, tardive) — lire en premier
 
 Nouveau retour : « quand une unité perd il y a plusieurs dysfonctionnements, un menu sort alors

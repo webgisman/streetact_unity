@@ -136,6 +136,20 @@ automatique (`AutoDeployTeamFallback`), pas par le placement manuel.
 }
 ```
 
+### `city_verify`
+Équité géométrique, 2ème étage (2026-09-12). Le partage du JSON Overpass exact (`city_data_json` sur
+`match_found`, voir plus bas) élimine la cause la plus fréquente de divergence client/serveur, mais
+pas toutes : un décalage de version entre le build client et le build serveur (reconstruits
+séparément), ou un cache disque local corrompu côté client, peuvent encore produire une ville
+différente à partir du MÊME JSON. Envoyé UNE FOIS par CHAQUE client, dès que sa carte est prête,
+AVANT que le dock de déploiement ne s'ouvre réellement (voir `MultiplayerMatchController.
+VerifyCityGeometryWithServer`) — `city_building_hash` (`Novgov.TacticalCore.TacticalGridBuilder.
+ComputeBuildingListHash`, déterministe/insensible à l'ordre/quantifié au mm) résume la ville que CE
+client vient de générer localement ; `city_building_count` est purement informatif (logs serveur).
+```json
+{ "type": "city_verify", "city_building_hash": -1847203991, "city_building_count": 236 }
+```
+
 ## Messages Serveur → Client
 
 ### `match_found`
@@ -159,6 +173,29 @@ carte "Default" (`has_home_tile: false`) — elle est un bundle Resources identi
 inutile de la faire transiter.
 ```json
 { "type": "match_found", "match_id": "uuid", "team_id": 1, "opponent_username": "xX_Sniper_Xx", "mode": "conquest", "zone_tile_x": 66701, "zone_tile_y": 44060, "city_data_json": "{\"version\":0.6,\"elements\":[...]}" }
+```
+
+### `city_verify_result`
+Réponse à `city_verify` (voir plus haut), envoyée par `MatchSessionManager_Deployment.
+HandleCityVerify`. `success: true` : la ville de ce client concorde avec la référence du serveur
+(`MatchState.AuthoritativeCityHash`), rien de plus à faire. `success: false` : la structure de
+bâtiments AUTORITAIRE COMPLÈTE du serveur (celle qui a réellement servi à figer `ms.World`) est
+jointe dans `city_buildings` — JAMAIS un différentiel partiel, l'objectif est une ville identique à
+100 % chez ce client, pas rapiécée. Le client reconstruit alors sa ville ENTIÈRE à partir de cette
+structure (`CityGenerator.ApplyAuthoritativeBuildings`) plutôt que de re-parcourir le JSON Overpass
+brut ou l'algorithme normal de subdivision/portes-fenêtres — celui-ci a justement produit un
+résultat différent une première fois sur ce client, rien ne garantit qu'il ne diverge pas une
+seconde fois de la même façon.
+```json
+{ "type": "city_verify_result", "success": true }
+```
+```json
+{ "type": "city_verify_result", "success": false, "city_buildings": [
+  { "id": 0, "height": 6.2, "footprint": [{"x": -254.1, "y": -224.7}, ...],
+    "doors": [{ "position": {"x": -250.0, "y": -224.75}, "entry_direction": {"x": 0, "y": -1}, "width": 1.4 }],
+    "windows": [{ "id": 1, "position": {"x": -247.0, "y": -224.75}, "outward_normal": {"x": 0, "y": -1}, "floor_level": 0 }]
+  }, ...
+] }
 ```
 
 ### `heartbeat` (serveur -> client)
