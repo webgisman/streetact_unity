@@ -91,12 +91,38 @@ chaque unité de ce type, SANS passer par le tap 3D ni ses soucis d'occlusion/an
 la façon la plus fiable de sélectionner tes unités aujourd'hui, même après le correctif de tap — je le
 mentionne parce que ça a l'air d'être resté peu visible/peu utilisé.
 
+### F. Destruction de bâtiment enfin transmise au client (§19.9.3 de la liste connue) — AJOUTÉ, testé, DÉPLOYÉ
+
+Un bâtiment détruit par un mortier ne le devenait que côté serveur — les deux joueurs le voyaient
+rester intact à l'écran. Corrigé : le serveur transmet maintenant quels bâtiments viennent d'être
+détruits, et le client rejoue la destruction visuelle (gravats, écroulement) SANS jamais recalculer
+de dégâts (le serveur a déjà décidé qui meurt) ni retirer le bâtiment de sa liste interne (ce qui
+aurait décalé l'identité de tous les bâtiments suivants pour le reste de la partie — un piège trouvé
+et évité avant d'écrire le moindre code, pas après). Vérifié par 3 nouveaux tests automatisés
+(`Assets/Editor/TacticalNetworkReplayAutoTest.cs`, 3/3 verts) : pas de dégâts fantômes sur une unité
+voisine, pas de décalage d'index, pas d'effet de bord si le même bâtiment est signalé deux fois.
+
+Limite assumée et documentée (pas corrigée) : le mode Conquête (actuellement inatteignable depuis le
+menu, voir §C plus haut) retire encore ses bâtiments détruits de sa PROPRE liste côté serveur à
+chaque tour (comportement existant, non touché) — sur une partie à plusieurs tours, ça pourrait
+décaler les identifiants entre client et serveur. Non corrigé pour ne pas toucher aux hypothèses de
+l'IA (`TacticalAIPlanner`) sans pouvoir tester en conditions réelles ; sans impact sur Match à Mort/
+Zone de Contrôle (qui ne fonctionnent pas comme ça).
+
+### Redéploiement (encore) — FAIT
+
+Serveur + APK rebuild une seconde fois cet après-midi pour inclure ce dernier point, vérifiés frais
+(présence de `destroyed_building_ids`/`ApplyNetworkDestruction` dans les deux binaires) et redéployés
+sur novgov.com — conteneur stable, joignable de l'extérieur, sauvegarde
+`novgov-game-server:backup_20260912_134...` disponible en cas de souci.
+
 ### État git
 
 Tout committé et poussé sur `origin/master` :
 - `427fc4b` (hier soir — voir §1-6 plus bas)
 - `fd39b73` (aujourd'hui — refactor + test auto + nettoyage code mort)
 - `200f954` (aujourd'hui — extension du test auto au garde-fou fin de tour)
+- `95ff4df` (aujourd'hui — destruction de bâtiment transmise au réseau, §F ci-dessus)
 
 ---
 
