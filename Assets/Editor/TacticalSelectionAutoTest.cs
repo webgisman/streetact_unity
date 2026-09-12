@@ -46,6 +46,10 @@ public static class TacticalSelectionAutoTest
             TestDirectTapOnTankStillWins, ref passed, ref failed);
         RunIsolated("Aucune unité près du tap : la sélection ne doit rien retourner",
             TestNoUnitNearTapReturnsNull, ref passed, ref failed);
+        RunIsolated("FIN DE TOUR bloque (reste en Planification) si une unité n'a aucun ordre",
+            TestEndTurnBlocksWithoutOrders, ref passed, ref failed);
+        RunIsolated("FIN DE TOUR passe en Exécution une fois TOUTES les unités ordonnées",
+            TestEndTurnProceedsWhenAllOrdered, ref passed, ref failed);
 
         Debug.Log($"[TacticalSelectionAutoTest] {passed} réussi(s), {failed} échoué(s).");
         if (failed > 0)
@@ -201,6 +205,76 @@ public static class TacticalSelectionAutoTest
         {
             Debug.LogError($"[TacticalSelectionAutoTest] Attendu null, obtenu {result.gameObject.name} " +
                             $"(unitScreenPos={unitScreenPos}, tapScreenPos={tapScreenPos})");
+            return false;
+        }
+        return true;
+    }
+
+    // ---- Garde-fou FIN DE TOUR (2026-09-12) ----------------------------------------------------
+    //
+    // LancerExecutionTour() décide phaseActuelle SYNCHRONE MENT avant de démarrer sa coroutine
+    // d'exécution (StartCoroutine) — on peut donc vérifier le résultat de la décision (bloqué ou
+    // non) sans jamais laisser cette coroutine tourner. Une coroutine démarrée hors Play Mode ne
+    // progresse de toute façon jamais (rien ne pompe MoveNext() sans une vraie boucle de jeu) : elle
+    // reste inoffensivement suspendue à son premier "yield return new WaitForSeconds(...)" jusqu'à
+    // ce que le processus batch se termine (-quit).
+
+    private static TacticalPathManager MakeRealManager()
+    {
+        // Awake() suffit (s'exécute déjà à l'AddComponent, même hors Play Mode) : LancerExecutionTour
+        // ne lit ni lineRenderer ni UnitSpawnerUI, les deux seules choses que configure Start(), donc
+        // pas besoin de l'invoquer par réflexion ici. Volontaire : Start() instancie aussi
+        // TacticalRadarUI.Instance, dont le singleton paresseux appelle DontDestroyOnLoad — INTERDIT
+        // hors Play Mode ("The following game object is invoking the DontDestroyOnLoad method...
+        // cannot be part of an editor script"), trouvé en conditions réelles en écrivant ce test.
+        GameObject go = new GameObject("TestTacticalPathManager");
+        TacticalPathManager mgr = go.AddComponent<TacticalPathManager>();
+        return mgr;
+    }
+
+    private static bool TestEndTurnBlocksWithoutOrders()
+    {
+        TacticalPathManager mgr = MakeRealManager();
+        MakeRealUnit("TestSansOrdre1", new Vector3(0f, 0.9f, 0f), Vector3.one, 1);
+        MakeRealUnit("TestSansOrdre2", new Vector3(3f, 0.9f, 0f), Vector3.one, 1);
+        // Aucune des deux n'a reçu le moindre ordre (tacticalPath vide par défaut, voir UnitAI.cs).
+
+        mgr.phaseActuelle = TacticalPathManager.GamePhase.Planification;
+        mgr.LancerExecutionTour();
+
+        if (mgr.phaseActuelle != TacticalPathManager.GamePhase.Planification)
+        {
+            Debug.LogError($"[TacticalSelectionAutoTest] Attendu phase=Planification (bloqué), obtenu {mgr.phaseActuelle}");
+            return false;
+        }
+        return true;
+    }
+
+    private static bool TestEndTurnProceedsWhenAllOrdered()
+    {
+        TacticalPathManager mgr = MakeRealManager();
+        UnitAI u1 = MakeRealUnit("TestAvecOrdre1", new Vector3(0f, 0.9f, 0f), Vector3.one, 1);
+        UnitAI u2 = MakeRealUnit("TestAvecOrdre2", new Vector3(3f, 0.9f, 0f), Vector3.one, 1);
+        u1.AddTacticalNode(new TacticalPathManager.TacticalNode { position = u1.transform.position, action = TacticalPathManager.NodeAction.Guetter });
+        u2.AddTacticalNode(new TacticalPathManager.TacticalNode { position = u2.transform.position, action = TacticalPathManager.NodeAction.Guetter });
+
+        mgr.phaseActuelle = TacticalPathManager.GamePhase.Planification;
+        try
+        {
+            mgr.LancerExecutionTour();
+        }
+        catch (System.Exception e)
+        {
+            // La transition de phase qui nous intéresse ici est déjà SYNCHRONE, avant que
+            // LancerExecutionTour ne lance la coroutine de mouvement réel (ExecuterOrdres ->
+            // NavMeshAgent) — sans NavMesh bakée dans cette scène de test minimale, cette partie
+            // PEUT légitimement échouer ; on l'ignore, seule la décision de phase compte ici.
+            Debug.Log($"[TacticalSelectionAutoTest] (ignoré, hors du périmètre de ce test) exception après la transition de phase : {e.Message}");
+        }
+
+        if (mgr.phaseActuelle != TacticalPathManager.GamePhase.Execution)
+        {
+            Debug.LogError($"[TacticalSelectionAutoTest] Attendu phase=Execution (toutes les unités ordonnées), obtenu {mgr.phaseActuelle}");
             return false;
         }
         return true;
