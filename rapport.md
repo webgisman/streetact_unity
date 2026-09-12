@@ -125,6 +125,17 @@ Serveur + APK rebuild une seconde fois cet après-midi pour inclure ce dernier p
 sur novgov.com — conteneur stable, joignable de l'extérieur, sauvegarde
 `novgov-game-server:backup_20260912_134...` disponible en cas de souci.
 
+### G bis. Test automatisé étendu à la barre d'escouade + un piège d'outillage important trouvé et documenté
+
+Ajouté un 6e test : la barre d'escouade (cycle par type d'unité, coin haut-droit) fonctionne bien —
+vérifié en conditions réelles, pas supposé. En l'écrivant, trouvé un vrai piège qui aurait pu fausser
+silencieusement de futurs tests : la cible de build active d'Unity (Serveur/Client) est un réglage
+PERSISTANT du projet, pas remis à zéro entre deux commandes séparées. Après un rebuild du serveur
+Linux, toute commande de test suivante SANS préciser explicitement "-buildTarget StandaloneWindows64
+-standaloneBuildSubtarget Player" restait silencieusement en mode Serveur — rendant invisible tout le
+code client (dont la barre d'escouade elle-même) sans le moindre message d'erreur clair. Documenté en
+tête des deux fichiers de test pour que ça ne recommence jamais.
+
 ### G. Sécurité : les tirs de mortier n'étaient validés par RIEN — CORRIGÉ, déployé
 
 Trouvé en révisant le reste de la liste connue (§19.9.5) : un client modifié pouvait attacher un ordre
