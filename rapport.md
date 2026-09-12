@@ -1,5 +1,44 @@
 # Rapport de session — 2026-09-11/12
 
+## ⚡⚡⚡⚡ MISE À JOUR 2026-09-12 (nuit, tardive) — lire en premier
+
+Nouveau retour : « quand une unité perd il y a plusieurs dysfonctionnements, un menu sort alors
+qu'il ne devrait pas y être » + « il faut voir les unités ennemies pendant un combat, et qu'elles
+soient visibles sur le radar, pas seulement en multijoueur ». Deux causes réelles trouvées et
+corrigées, une troisième piste vérifiée et écartée (pas un bug) :
+
+**1. Menu contextuel qui traîne à la fin d'une partie multijoueur — trouvé en relisant le tout
+nouveau `DeferredMatchOver` de ce soir.** Ce correctif (attendre la fin du rejeu avant d'afficher
+l'écran de fin) a une fenêtre d'au moins une frame où `PlaySnapshotsBody` a déjà remis
+`phaseActuelle` à Planification (donc réactivé la sélection/le menu contextuel) AVANT que
+`DeferredMatchOver` ne reprenne la main pour afficher l'écran de fin — le joueur peut donc encore
+ouvrir un menu d'ordre sur une partie déjà terminée côté serveur, qui reste ensuite affiché par-dessus/
+derrière l'écran de fin. Corrigé : `TacticalPathManager.ForceCloseTacticalUIForMatchEnd()` (nouvelle
+méthode publique, ferme le menu + désélectionne) appelée juste avant `OnMatchOver`.
+
+**2. Radar muet pendant un combat multijoueur.** Le VRAI tir (`UnitAI_Combat.ShootAt`, solo/Conquête)
+déclenche une alerte rouge sur le radar (`FogOfWarEntity.NotifyAttack` → `TacticalRadarUI.PingAttack`)
+à chaque tir — c'est la seule chose qui indique OÙ un combat a lieu sans que le joueur ait déjà
+l'œil dessus. Le rejeu cosmétique du multijoueur (`PlayNetworkShotEffects`) reproduisait le son, le
+traceur et le flash, mais PAS cette alerte : le radar restait silencieux pendant un échange de tirs
+en multijoueur. Ajouté le même appel. Nouveau test automatisé (4e test de
+`TacticalNetworkReplayAutoTest.cs`) vérifie que l'alerte se déclenche bien.
+
+**Piste vérifiée et écartée** : le vrai brouillard de guerre (qui décide quelles unités ennemies
+sont réellement transmises à chaque client, `LineOfSight.CanBeSpotted`) fonctionne correctement et
+de façon identique au solo — ce n'est pas un bug, une unité non repérée ne DOIT pas être visible.
+Aucune trace non plus d'une fonctionnalité "la caméra suit automatiquement le combat" dans un mode
+quelconque (solo ou multijoueur) — si c'est ce qui est demandé, c'est une nouvelle fonctionnalité à
+définir ensemble (où doit regarder la caméra exactement, pendant combien de temps, est-ce que ça
+retire le contrôle au joueur), pas un bug à corriger silencieusement.
+
+Vérifié : 80 tests moteur pur + 3 simulation complète + 4/4 tests de rejeu réseau + les 3
+compile-checks, tous verts. Commit `2b53dfc`, poussé sur `origin/master`. Serveur ET APK rebuild
+propres (cache Bee vidé) et redéployés — DLL/APK datés après le commit, conteneur stable, port 7777
+joignable de l'extérieur, sauvegarde prise avant.
+
+---
+
 ## ⚡⚡⚡ MISE À JOUR 2026-09-12 (nuit) — lire en premier
 
 Des correctifs supplémentaires (rédigés directement dans l'arborescence de travail, documentés dans
