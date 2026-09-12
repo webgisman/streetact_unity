@@ -252,6 +252,18 @@ public partial class UnitAI
     {
         if (isMortar) return; // voir note ci-dessus : pas de rejeu fidèle possible pour l'instant
 
+        // 2026-09-12 (retour joueur : "il faut que le joueur voie les unités ennemies pendant un
+        // combat, et qu'elles soient aussi visibles sur le radar, pas seulement en mode
+        // multijoueur") : ShootAt (le VRAI tir, solo/Conquête "vivante") appelle
+        // FogOfWarEntity.NotifyAttack() ici, qui déclenche l'onde rouge de TacticalRadarUI —
+        // seule alerte qui indique OÙ un combat a lieu sans que le joueur ait déjà l'œil dessus.
+        // PlayNetworkShotEffects, le rejeu PUREMENT COSMÉTIQUE utilisé par le multijoueur
+        // (Deathmatch/Zone de Contrôle), reproduit tous les autres effets (son, traceur, flash)
+        // mais oubliait CELUI-CI : le radar restait muet pendant un échange de tirs multijoueur,
+        // même si le tireur ET la cible étaient déjà visibles/existants côté client.
+        FogOfWarEntity fow = GetComponent<FogOfWarEntity>();
+        if (fow != null) fow.NotifyAttack();
+
         if (combatAudioSource != null && combatAudioSource.clip != null)
         {
             combatAudioSource.pitch = Random.Range(0.9f, 1.1f);

@@ -865,6 +865,18 @@ namespace Novgov.Network
             {
                 yield return null;
             }
+
+            // 2026-09-12 (retour joueur : "un menu sort alors qu'il ne devrait pas y être" à la fin
+            // d'une partie) : la toute fin de PlaySnapshotsBody remet phaseActuelle à Planification
+            // (ré-active la sélection/le menu contextuel) AVANT que cette coroutine ne reprenne la
+            // main ici — au moins une frame durant laquelle le joueur peut encore sélectionner une
+            // unité ou ouvrir un menu d'ordre sur une partie déjà terminée côté serveur, laissant un
+            // menu contextuel ouvert par-dessus/derrière l'écran de fin qui s'affiche juste après.
+            // Fermé explicitement avant d'afficher cet écran, quoi qu'il ait pu se passer pendant
+            // cette fenêtre.
+            if (TacticalPathManager.Instance != null)
+                TacticalPathManager.Instance.ForceCloseTacticalUIForMatchEnd();
+
             OnMatchOver(msg);
         }
 

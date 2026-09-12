@@ -34,6 +34,8 @@ public static class TacticalNetworkReplayAutoTest
             TestNetworkDestructionKeepsBuildingIndexStable, ref passed, ref failed);
         RunIsolated("ApplyNetworkDestruction est idempotente (un second appel ne fait rien de plus)",
             TestNetworkDestructionIsIdempotent, ref passed, ref failed);
+        RunIsolated("PlayNetworkShotEffects déclenche l'alerte radar (retour 2026-09-12, radar muet en multijoueur)",
+            TestPlayNetworkShotEffectsPingsRadar, ref passed, ref failed);
 
         Debug.Log($"[TacticalNetworkReplayAutoTest] {passed} réussi(s), {failed} échoué(s).");
         if (failed > 0)
@@ -164,5 +166,43 @@ public static class TacticalNetworkReplayAutoTest
         // vrai), voir la garde en tête de ApplyNetworkDestruction.
         env.ApplyNetworkDestruction();
         return env.isDestroyed;
+    }
+
+    /// <summary>Retour de jeu 2026-09-12 (« il faut que le joueur voie les unités ennemies pendant un
+    /// combat, et qu'elles soient aussi visibles sur le radar, pas seulement en mode multijoueur ») :
+    /// le vrai ShootAt (solo/Conquête « vivante ») appelle FogOfWarEntity.NotifyAttack(), qui
+    /// déclenche l'onde rouge de TacticalRadarUI — seule alerte indiquant OÙ un combat a lieu sans que
+    /// le joueur ait déjà l'œil dessus. PlayNetworkShotEffects (rejeu cosmétique du multijoueur)
+    /// reproduisait tous les autres effets (son, traceur, flash) mais oubliait CELUI-CI : le radar
+    /// restait muet pendant un échange de tirs multijoueur. Vérifie ici que l'appel a bien été ajouté,
+    /// via le compte de <c>TacticalRadarUI.activePings</c> (privé, lu par réflexion) qui doit augmenter
+    /// de 1 après un seul appel à PlayNetworkShotEffects sur un tireur non-mortier.</summary>
+    private static bool TestPlayNetworkShotEffectsPingsRadar()
+    {
+        // TacticalRadarUI.Instance créerait normalement l'instance via DontDestroyOnLoad si aucune
+        // n'existe déjà — interdit hors Play Mode (voir l'en-tête de TacticalSelectionAutoTest.cs,
+        // même piège que TacticalPathManager.Start()). On crée donc l'instance nous-mêmes AVANT tout
+        // appel à .Instance, exactement comme MakeRealManager() évite Start() pour la même raison —
+        // ici Awake() (qui s'exécute, lui, automatiquement via AddComponent même hors Play Mode) suffit
+        // à poser _instance, donc le prochain accès à .Instance le trouvera déjà et ne recréera rien.
+        GameObject radarGo = new GameObject("TestTacticalRadarUI");
+        TacticalRadarUI radar = radarGo.AddComponent<TacticalRadarUI>();
+
+        FieldInfo pingsField = typeof(TacticalRadarUI).GetField("activePings", BindingFlags.NonPublic | BindingFlags.Instance);
+        if (pingsField == null) throw new System.Exception("TacticalRadarUI.activePings introuvable par réflexion.");
+        var pingsBefore = (System.Collections.IList)pingsField.GetValue(radar);
+        int countBefore = pingsBefore.Count;
+
+        UnitAI shooter = MakeUnitInsideFootprint(new Vector3(0f, 0.9f, 0f)); // fantassin ordinaire, pas un mortier
+        shooter.PlayNetworkShotEffects(new Vector3(10f, 0.9f, 0f));
+
+        var pingsAfter = (System.Collections.IList)pingsField.GetValue(radar);
+        if (pingsAfter.Count != countBefore + 1)
+        {
+            Debug.LogError($"[TacticalNetworkReplayAutoTest] activePings attendu à {countBefore + 1}, obtenu {pingsAfter.Count} — " +
+                            "PlayNetworkShotEffects n'a pas déclenché l'alerte radar.");
+            return false;
+        }
+        return true;
     }
 }

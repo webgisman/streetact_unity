@@ -9,6 +9,20 @@ public partial class TacticalPathManager
     // MENU CONTEXTUEL (ouverture/fermeture, options porte/fenêtre/bâtiment/sol, confirmation)
     // ==========================================
 
+    /// <summary>Ferme tout menu contextuel ouvert ET désélectionne l'unité courante — à appeler
+    /// depuis l'extérieur (voir MultiplayerMatchController.DeferredMatchOver, correctif 2026-09-12
+    /// "un menu contextuel apparaît alors que la partie est déjà terminée") juste avant d'afficher
+    /// l'écran de fin de partie. Nécessaire car la fin normale d'un rejeu de tour
+    /// (MultiplayerMatchController.PlaySnapshotsBody) remet `phaseActuelle` à Planification — donc
+    /// réactive la saisie tactique — AVANT que le différé de `match_over` ne reprenne la main pour
+    /// afficher l'écran de fin : le joueur dispose d'au moins une frame où il peut encore
+    /// sélectionner une unité ou ouvrir un menu d'ordre sur une partie déjà terminée côté serveur.
+    /// `SelectionnerUnite(null)` suffit : elle appelle déjà `FermerMenuContextuel` en interne.</summary>
+    public void ForceCloseTacticalUIForMatchEnd()
+    {
+        SelectionnerUnite(null);
+    }
+
     /// <summary>Referme le ContextMenu et réinitialise toute sélection tactique en attente
     /// (bâtiment/porte/fenêtre/checkpoint). Factorisé pour ne plus jamais oublier une des étapes :
     /// un seul de ces 4 flags ou l'un des deux Action laissé "vivant" par erreur suffit à ce qu'un
