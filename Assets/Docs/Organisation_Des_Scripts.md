@@ -17,7 +17,7 @@ de gameplay ne devrait être ajouté hors d'un de ces dossiers.
 | `Network/` | Client réseau multijoueur (`GameServerClient.cs`, `MultiplayerMatchController.cs`, `NetMessage.cs`) |
 | `Rendering/` | Fabriques de matériaux/textures procédurales (`SafeMaterialFactory.cs`, `ProceduralIconFactory.cs`) |
 | `Server/` | Code du serveur headless Unity (`JwtValidator.cs`, `PlayerConnection.cs`, `GameServerBootstrap.cs`, `MatchSessionManager.cs`) |
-| `UI/` | Interface (bootstrap/registre d'écrans UI Toolkit `UIBootstrap.cs`/`UIScreenManager.cs`, contrôleurs d'écran `GameManagerUI.cs`/`UnitSpawnerUI.cs`/`LeaderboardController.cs`, radar tactique legacy `TacticalRadarUI.cs`, thème C# miroir de `Theme.tss` `NovgovTheme.cs`, utilitaire `UIAnimator.cs`) |
+| `UI/` | Interface (bootstrap/registre d'écrans UI Toolkit `UIBootstrap.cs`/`UIScreenManager.cs`, contrôleurs d'écran `GameManagerUI.cs`/`UnitSpawnerUI.cs`/`LeaderboardController.cs`, radar tactique legacy `TacticalRadarUI.cs`, thème C# miroir de `Theme.tss` `NovgovTheme.cs`) |
 
 ## Points connus, pas des bugs
 

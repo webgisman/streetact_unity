@@ -97,6 +97,61 @@ public partial class TacticalPathManager
         return onRoof;
     }
 
+    /// <summary>Arbitre quelle unité alliée un tap doit sélectionner, entre la boucle tolérante
+    /// (distance-écran depuis <see cref="UnitAI.SelectionAnchorWorldPos"/> de CHAQUE unité vivante du
+    /// joueur) et un éventuel hit Physics.Raycast direct (<paramref name="raycastUnit"/>, déjà filtré
+    /// sur isPlayerControlled/!isDead par l'appelant). Extrait de HandlePointerInput (2026-09-12) —
+    /// PUBLIC et STATIC exprès pour être rejouable depuis un test Éditeur automatisé
+    /// (Assets/Editor/TacticalSelectionAutoTest.cs) sans avoir à simuler tout Update()/Input System :
+    /// c'est cette arbitrage précis (pas la détection de tap en amont) qui a laissé passer la
+    /// régression "un char vole la sélection à un fantassin voisin" (2026-09-12, trouvée par lecture
+    /// de log faute d'un test direct). Comportement identique à avant l'extraction — voir le
+    /// correctif 2026-09-06 dans l'historique git pour le raisonnement complet : le hit direct
+    /// l'emporte seulement s'il reste, LUI, au moins aussi proche du tap que le meilleur candidat de
+    /// la boucle tolérante, jamais inconditionnellement.</summary>
+    public static UnitAI ResolveClosestPlayerUnit(Vector2 pointerPosition, Camera camera, UnitAI raycastUnit, float maxTouchRadiusPx)
+    {
+        UnitAI closestUnit = null;
+        float closestScreenDist = maxTouchRadiusPx;
+
+        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
+        {
+            UnitAI unit = UnitAI.AllLivingUnits[i];
+            if (unit != null && unit.isPlayerControlled && !unit.isDead)
+            {
+                Vector3 screenPoint = camera.WorldToScreenPoint(unit.SelectionAnchorWorldPos);
+                if (screenPoint.z > 0) // Devant la caméra
+                {
+                    float dist = Vector2.Distance(pointerPosition, new Vector2(screenPoint.x, screenPoint.y));
+                    if (dist < closestScreenDist)
+                    {
+                        closestScreenDist = dist;
+                        closestUnit = unit;
+                    }
+                }
+            }
+        }
+
+        if (raycastUnit != null)
+        {
+            if (closestUnit == null || closestUnit == raycastUnit)
+            {
+                closestUnit = raycastUnit;
+            }
+            else
+            {
+                Vector3 raycastScreenPoint = camera.WorldToScreenPoint(raycastUnit.SelectionAnchorWorldPos);
+                float raycastScreenDist = raycastScreenPoint.z > 0
+                    ? Vector2.Distance(pointerPosition, new Vector2(raycastScreenPoint.x, raycastScreenPoint.y))
+                    : float.MaxValue;
+                if (raycastScreenDist <= closestScreenDist) closestUnit = raycastUnit;
+                // sinon closestUnit reste l'autre allié, réellement plus proche du tap.
+            }
+        }
+
+        return closestUnit;
+    }
+
     /// <summary>Retire le dernier point posé par l'unité sélectionnée, son hologramme et son tracé.
     /// Appelée par le clic DROIT (PC) et par le bouton "↶" de la barre tactique (tactile) — voir
     /// TacticalPathManager_UI.BindTacticalUI : jusqu'au 2026-09-07 seul le clic droit y menait, donc
@@ -239,7 +294,6 @@ public partial class TacticalPathManager
             // commande toujours en place, juste moins agressive).
             bool isGivingOrderToSelectedUnit = phaseActuelle == GamePhase.Planification && uniteSelectionnee != null;
             float maxTouchRadiusPx = isGivingOrderToSelectedUnit ? 60f : 75f;
-            float closestScreenDist = maxTouchRadiusPx;
 
             Ray ray = Camera.main.ScreenPointToRay(pointerPosition);
             RaycastHit hit;
@@ -267,72 +321,16 @@ public partial class TacticalPathManager
                 }
             }
 
-            // ARBITRAGE PAR DISTANCE-ÉCRAN (correctif 2026-09-06). Avant, un hit du Physics.Raycast
-            // direct sur un allié gagnait INCONDITIONNELLEMENT (la boucle tolérante ci-dessous,
-            // seule logique capable de départager plusieurs unités proches, était gardée par
-            // `if (closestUnit == null)` — jamais exécutée dans ce cas). Tant que les unités étaient
-            // de simples badges plats masqués en vue Commandement, le rayon ne pouvait quasiment
-            // jamais toucher qu'un point au ras du sol de l'unité visée : pas de conséquence. Depuis
-            // le retrait de ce masquage, le vrai modèle 3D (hauteur réelle, formes très différentes
-            // d'un type à l'autre) reste visible en 2D — et la vue Commandement reste de toute façon
-            // OBLIQUE (bridée à 75°, jamais un vrai zénithal, voir TacticalPathManager_ContextMenu),
-            // donc un modèle peut désormais en occulter visuellement un AUTRE dans une formation
-            // resserrée : le rayon touche alors l'unité de devant/occultante, pas celle réellement
-            // tapée, sans le moindre indice pour le joueur. On calcule maintenant TOUJOURS le
-            // meilleur candidat par distance à l'écran (comme avant), et on ne laisse le hit direct
-            // l'emporter que s'il reste, LUI, au moins aussi proche du tap que ce candidat — sinon
-            // l'unité réellement la plus proche du point tapé gagne à sa place.
+            // ARBITRAGE PAR DISTANCE-ÉCRAN (correctif 2026-09-06) : extrait dans
+            // ResolveClosestPlayerUnit (2026-09-12) pour pouvoir le rejouer depuis un test Éditeur
+            // automatisé (Assets/Editor/TacticalSelectionAutoTest.cs) sans avoir à simuler tout le
+            // pipeline Input System/Update() — c'était précisément cette logique (pas la détection de
+            // tap elle-même) qui a laissé passer la régression "un char vole la sélection à un
+            // fantassin voisin" (2026-09-12), trouvée par lecture de log en pleine nuit faute d'un
+            // test pour la rejouer directement. Comportement strictement inchangé, voir la méthode
+            // pour le détail du raisonnement.
             UnitAI raycastUnit = closestUnit;
-            closestUnit = null;
-            {
-                for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
-                {
-                    UnitAI unit = UnitAI.AllLivingUnits[i];
-                    if (unit != null && unit.isPlayerControlled && !unit.isDead)
-                    {
-                        // SelectionAnchorWorldPos (pas transform.position) : pour un blindé, le
-                        // pivot d'import peut être décalé de plusieurs mètres du centre visuel réel
-                        // (voir son commentaire dans UnitAI.cs) — root cause confirmée du rapport
-                        // "difficile de sélectionner les unités en multijoueur" (2026-09-09).
-                        Vector3 screenPoint = Camera.main.WorldToScreenPoint(unit.SelectionAnchorWorldPos);
-                        if (screenPoint.z > 0) // Devant la caméra
-                        {
-                            float dist = Vector2.Distance(pointerPosition, new Vector2(screenPoint.x, screenPoint.y));
-                            if (dist < closestScreenDist)
-                            {
-                                closestScreenDist = dist;
-                                closestUnit = unit;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (raycastUnit != null)
-            {
-                if (closestUnit == null || closestUnit == raycastUnit)
-                {
-                    // Rien de plus proche trouvé par la boucle tolérante (ou c'est la même unité) :
-                    // le hit direct l'emporte, exactement comme avant ce correctif — comportement
-                    // inchangé pour le cas normal (tap franc sur une unité isolée), et filet de
-                    // sécurité si l'unité touchée est un grand véhicule dont le pivot ne tombe pas
-                    // sous le doigt malgré un hit bien réel sur son collider.
-                    closestUnit = raycastUnit;
-                }
-                else
-                {
-                    // Un AUTRE allié a été trouvé strictement plus proche du tap à l'écran que le
-                    // meilleur candidat courant : comparer aussi la distance-écran DE l'unité
-                    // touchée par le raycast, pas seulement celle du hit lui-même, avant de
-                    // trancher.
-                    Vector3 raycastScreenPoint = Camera.main.WorldToScreenPoint(raycastUnit.SelectionAnchorWorldPos);
-                    float raycastScreenDist = raycastScreenPoint.z > 0
-                        ? Vector2.Distance(pointerPosition, new Vector2(raycastScreenPoint.x, raycastScreenPoint.y))
-                        : float.MaxValue;
-                    if (raycastScreenDist <= closestScreenDist) closestUnit = raycastUnit;
-                    // sinon closestUnit reste l'autre allié, réellement plus proche du tap.
-                }
-            }
+            closestUnit = ResolveClosestPlayerUnit(pointerPosition, Camera.main, raycastUnit, maxTouchRadiusPx);
 
             if (closestUnit != null)
             {

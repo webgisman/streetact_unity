@@ -247,22 +247,4 @@ namespace Novgov.Auth
         [Serializable]
         private class BuildingListWrapper { public PlayerBuilding[] items; }
     }
-
-    public static class UnityWebRequestExtensions
-    {
-        public static Task<UnityWebRequest> SendWebRequestAsync(this UnityWebRequest request)
-        {
-            var tcs = new TaskCompletionSource<UnityWebRequest>();
-            var operation = request.SendWebRequest();
-            operation.completed += (asyncOperation) => tcs.TrySetResult(request);
-            return tcs.Task;
-        }
-        
-        public static System.Runtime.CompilerServices.TaskAwaiter<UnityWebRequest> GetAwaiter(this UnityWebRequestAsyncOperation op)
-        {
-            var tcs = new TaskCompletionSource<UnityWebRequest>();
-            op.completed += _ => tcs.TrySetResult(op.webRequest);
-            return tcs.Task.GetAwaiter();
-        }
-    }
 }
