@@ -78,13 +78,17 @@ seulement le retour du processus lanceur) avant de considérer un build comme r�
 Documenté ici pour la prochaine fois : ne jamais enchaîner deux builds batch-mode dos à dos sans
 vérifier `tasklist`/`Get-Process Unity` d'abord.
 
-### Redéploiement — FAIT et vérifié
+### Redéploiement — FAIT et vérifié (serveur ET APK)
 
 Serveur Linux rebuild (propre, cache vidé) et redéployé sur novgov.com : conteneur
 `novgov-game-server-1-1` stable (`Up`, pas de crash-loop), logs propres (`236 bâtiments créés`, zéro
 échec), port `7777` confirmé joignable de l'extérieur. Sauvegarde de sécurité prise avant
-(`novgov-game-server:backup_<horodatage>` via `docker commit`). APK Android également rebuild frais
-(même correctif, nécessaire pour la préversion client du trajet) — voir le commit `68ec437`.
+(`novgov-game-server:backup_<horodatage>` via `docker commit`).
+
+APK Android également rebuild frais (`build/Android/Novgov-Test.apk`, mtime 20h21, largement après
+le commit du correctif `68ec437` à 19h55 — nécessaire pour que la PRÉVISION client du trajet, qui
+partage le même `TacticalResolver.ExpandOrder`, corresponde à ce que le serveur calcule
+réellement). Build confirmé réussi dans le log (`[AndroidTestBuildScript] Build Android réussi`).
 
 ---
 
