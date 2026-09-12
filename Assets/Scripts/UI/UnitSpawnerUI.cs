@@ -572,7 +572,8 @@ public class UnitSpawnerUI : MonoBehaviour
         int teamCount = GetTeamLivingUnitsCount(team);
         if (teamCount >= maxUnitsPerTeam)
         {
-            string teamName = (team == 1) ? "Joueur (Bleu)" : "Ennemi (Rouge)";
+            // Dans un contexte multijoueur, le "joueur" n'est pas toujours l'équipe 1.
+            string teamName = IsLocalPlayerTeam(team) ? "VOTRE ÉQUIPE (Bleu)" : "ENNEMI (Rouge)";
             ShowMessage($"Limite de {maxUnitsPerTeam} unités atteinte pour l'équipe {teamName} !", 3.0f);
             return null;
         }
@@ -1355,7 +1356,7 @@ public class UnitSpawnerUI : MonoBehaviour
             lr.SetPosition(i, new Vector3(Mathf.Cos(a) * radius, 0f, Mathf.Sin(a) * radius));
         }
 
-        Color zoneColor = team == 1 ? NovgovTheme.TeamPlayer : NovgovTheme.TeamEnemy;
+        Color zoneColor = IsLocalPlayerTeam(team) ? NovgovTheme.TeamPlayer : NovgovTheme.TeamEnemy;
         zoneColor.a = 0.85f;
         Material mat = SafeMaterialFactory.CreateUnlit(zoneColor);
         if (mat != null)
@@ -1635,6 +1636,28 @@ public class UnitSpawnerUI : MonoBehaviour
     }
 
 #endif
+
+    /// <summary>
+    /// Déclarée EN DEHORS du bloc #if !UNITY_SERVER ci-dessus (même raison que
+    /// <see cref="IsPointerOverOnGUI"/> juste en dessous, trouvée le même jour en corrigeant la
+    /// confusion "rôle"/couleur d'équipe côté joueur 2) : appelée depuis <c>StartPlacingUnit</c> et
+    /// depuis le rendu du cercle de zone de déploiement, tous les deux compilés inconditionnellement
+    /// — un build Dedicated Server échouait donc À LA COMPILATION ("IsLocalPlayerTeam n'existe pas
+    /// dans le contexte actuel"), pas seulement en silence à l'exécution. Le corps reste conditionnel
+    /// : côté serveur il n'y a de toute façon aucun `MultiplayerMatchController` client à interroger,
+    /// donc le repli "team == 1" (équipe 1 = convention historique solo) est la bonne réponse.
+    /// </summary>
+    private bool IsLocalPlayerTeam(int team)
+    {
+#if !UNITY_SERVER
+        if (Novgov.Network.MultiplayerMatchController.Instance != null &&
+            (Novgov.Network.MultiplayerMatchController.IsActive || Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive))
+        {
+            return team == Novgov.Network.MultiplayerMatchController.Instance.LocalTeamId;
+        }
+#endif
+        return team == 1;
+    }
 
     /// <summary>
     /// Remplace l'ancien test par Rect codées en dur : s'appuie sur le picking natif d'UI Toolkit,

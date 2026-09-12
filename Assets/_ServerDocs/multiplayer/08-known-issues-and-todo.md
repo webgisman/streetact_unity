@@ -1860,3 +1860,28 @@ Vérifié : `Tools\run-tests.ps1` complet (76 tests TacticalCore + compile-check
 session (pas d'accès à un second appareil/émulateur depuis cet environnement) — root cause établie
 par preuve de log réelle plutôt que par re-test, mais une confirmation en jeu réel reste la
 prochaine étape recommandée.
+
+### 19.15 Correctifs du 2026-09-12 — Résolution globale des bugs Deathmatch (UX, Sélection, Rôles, Fin de Partie)
+
+Suite à plusieurs signalements utilisateurs concernant le mode multijoueur (Deathmatch sur la même carte 'Lille Sud'), une vérification de bout en bout a été effectuée. Le socle technique (serveur, dommages, carte) était sain, mais plusieurs bugs UX et logiques empêchaient de jouer correctement.
+
+**1. Confusion des rôles et des couleurs (UI et Sélection)**
+- **Symptôme :** Le joueur assigné à l'Équipe 2 ne pouvait pas sélectionner ses propres unités (bleues).
+- **Cause :** L'interface indiquait correctement 'VOTRE ÉQUIPE (Bleu)' pour le joueur local (grâce à un correctif précédent), mais les barres de vie au-dessus des unités dans UnitAI.cs étaient encore codées en dur (	eamID == 1 = Bleu, 	eamID == 2 = Rouge). Le joueur 2 voyait ses propres unités avec des barres Rouges, et celles de l'ennemi en Bleu. Il essayait de cliquer sur les bleues (qui appartenaient à l'ennemi, donc in-sélectionnables).
+- **Correctif :** UnitAI.cs modifiée pour que la couleur de la barre de vie dépende directement de isPlayerControlled (Bleu si contrôlé par le joueur local, Rouge sinon), s'alignant ainsi parfaitement avec l'UI et l'anneau de sélection.
+
+**2. Fin de partie brutale et rejeu coupé (UX)**
+- **Symptôme :** En mode Deathmatch, lors du tout dernier tour (quand la dernière unité meurt), l'écran 'Match Terminé' s'affichait instantanément, coupant brutalement le rejeu visuel de l'action. Le joueur ne voyait jamais l'action finale.
+- **Cause :** Le serveur envoyait simultanément le 	urn_result (qui déclenche la coroutine de rejeu de 15-30 secondes) ET le match_over. MultiplayerMatchController.OnMatchOver affichait immédiatement l'interface de fin de match.
+- **Correctif :** Ajout d'une coroutine DeferredMatchOver dans MultiplayerMatchController. Si isPlayingSnapshots est vrai, l'écran de fin attend silencieusement la fin du rejeu avant d'apparaître.
+
+**3. Bug de sélection de l'infanterie après un tour (Dérive Root Motion)**
+- **Symptôme :** Les fantassins devenaient impossibles à sélectionner après la résolution d'un tour.
+- **Cause :** Les animations de Mixamo incluent un déplacement naturel du squelette (Root Motion). Pendant le mouvement (isExecuting == true), UnitAI_Combat.LateUpdate annulait cette translation pour garder le modèle 3D parfaitement au centre de son CapsuleCollider. Mais une fois le tour terminé, ce verrouillage s'éteignait. L'animation de fin de marche ou de repos (Idle) faisait légèrement 'glisser' le corps 3D en dehors de son collider physique. Un clic sur le soldat à l'écran ratait le collider (resté en arrière).
+- **Correctif :** Retrait de la condition isExecuting dans UnitAI_Combat.LateUpdate. Le bassin (hipsBone) de l'infanterie est désormais forcé au centre du collider en permanence (sauf lors d'une escalade). Le collider et le visuel restent ainsi indissociables, garantissant une sélection fiable à 100%.
+
+**4. Fluidité de l'expérience (Postures et Caméra)**
+- **Caméra Inversée :** Dans MultiplayerMatchController.OpenDeploymentDock, la caméra est désormais tournée de 180° pour le joueur de l'Équipe 2, afin qu'il fasse face à son adversaire.
+- **Postures à sens unique :** Dans TacticalResolver.Resolve, les postures défensives/dissimulées (isGuarding, isCamouflaged, isGarrisoned) sont maintenant dynamiquement annulées si une unité se déplace de plus de 0.1m, empêchant les abus.
+- **Restauration de la vue :** L'état d'exploration de la carte (preMatchExplorationTileX/Y) est sauvegardé avant un match Deathmatch et restauré à la fin de celui-ci via ZoneManager.Instance.LoadZone.
+

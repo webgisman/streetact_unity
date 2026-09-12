@@ -438,7 +438,7 @@ namespace Novgov.Network
                 case "turn_timer": lastServerSecondsRemaining = msg.seconds_remaining; break;
                 case "opponent_ghosted": OnOpponentGhosted(msg); break;
                 case "turn_result": if (!isPlayingSnapshots) StartCoroutine(PlaySnapshotsCoroutine(msg)); break;
-                case "match_over": OnMatchOver(msg); break;
+                case "match_over": StartCoroutine(DeferredMatchOver(msg)); break;
                 case "zone_captured": OnZoneCaptured(msg); break;
                 case "zone_attack_result": OnZoneAttackResult(msg); break;
             }
@@ -457,6 +457,11 @@ namespace Novgov.Network
         {
             expectingCloseAfterZoneResult = true;
             OnZoneResult?.Invoke($"Zone ({msg.zone_tile_x},{msg.zone_tile_y}) capturée sans résistance ! (+{msg.rating_delta} classement)");
+            // Avancer la vue de la carte locale vers la zone nouvellement capturée
+            if (Novgov.Generation.ZoneManager.Instance != null)
+            {
+                Novgov.Generation.ZoneManager.Instance.LoadZone(msg.zone_tile_x, msg.zone_tile_y);
+            }
         }
 
         private void OnZoneAttackResult(NetMessage msg)
@@ -478,6 +483,9 @@ namespace Novgov.Network
             OnZoneResult?.Invoke(message);
         }
 
+        private int? preMatchExplorationTileX = null;
+        private int? preMatchExplorationTileY = null;
+
         private void OnMatchFound(NetMessage msg)
         {
             LostUnits.Clear();
@@ -493,6 +501,12 @@ namespace Novgov.Network
             {
                 Debug.LogError("[MultiplayerMatchController] UnitSpawnerUI introuvable dans la scène.");
                 return;
+            }
+
+            if (currentMode != "conquest" && Novgov.Generation.ZoneManager.Instance != null)
+            {
+                preMatchExplorationTileX = Novgov.Generation.ZoneManager.Instance.CurrentTileX;
+                preMatchExplorationTileY = Novgov.Generation.ZoneManager.Instance.CurrentTileY;
             }
 
             if (currentMode == "conquest")
@@ -598,6 +612,22 @@ namespace Novgov.Network
             UnitSpawnerUI.Instance.ClearAllUnits();
             UnitSpawnerUI.Instance.maxUnitsPerTeam = 4;
             UnitSpawnerUI.Instance.OpenDockForMultiplayerDeployment(localTeamId);
+
+            // Centrage de la caméra sur la zone de déploiement du joueur local
+            if (TacticalCamera.Instance != null)
+            {
+                Vector3 center = localTeamId == 1 ? new Vector3(-25f, 0f, -25f) : new Vector3(25f, 0f, 25f);
+                TacticalCamera.Instance.focusPosition = center;
+                if (localTeamId == 2)
+                {
+                    // L'équipe 2 déploie depuis le coin Nord-Est, on tourne la caméra à 180° pour faire face au champ de bataille
+                    TacticalCamera.Instance.currentYaw = 225f;
+                }
+                else
+                {
+                    TacticalCamera.Instance.currentYaw = 45f;
+                }
+            }
             IsDeploymentPhaseActive = true;
 
             MusicManager.SetGameplayVolume();
@@ -826,8 +856,31 @@ namespace Novgov.Network
             await Novgov.Auth.SupabaseDatabaseClient.ClaimBuilding(zoneId, rndIndex);
         }
 
+        private IEnumerator DeferredMatchOver(NetMessage msg)
+        {
+            // Attendre la fin du rejeu (tour final) s'il y en a un en cours, pour ne pas couper
+            // brutalement l'animation de mort de la dernière unité et cacher le champ de bataille
+            // derrière l'écran de fin.
+            while (isPlayingSnapshots)
+            {
+                yield return null;
+            }
+            OnMatchOver(msg);
+        }
+
         private void OnMatchOver(NetMessage msg)
         {
+            // Restauration de la vue d'exploration si on l'avait sauvegardée (Deathmatch)
+            if (preMatchExplorationTileX.HasValue && preMatchExplorationTileY.HasValue && currentMode != "conquest")
+            {
+                if (Novgov.Generation.ZoneManager.Instance != null)
+                {
+                    Novgov.Generation.ZoneManager.Instance.LoadZone(preMatchExplorationTileX.Value, preMatchExplorationTileY.Value);
+                }
+                preMatchExplorationTileX = null;
+                preMatchExplorationTileY = null;
+            }
+
             bool isVictory = msg.winner_team == localTeamId;
 
             ComputeLostUnitsFromDeployedVsAlive();

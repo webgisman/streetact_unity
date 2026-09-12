@@ -46,7 +46,29 @@ namespace Novgov.TacticalCore
             // de l'INDEX exact, dans ce chemin étendu, où l'unité l'atteint réellement — c'est cet
             // index qui déclenche sa commande, pas la fin de l'ordre entier (voir ExpandOrder).
             var expandedByUnitId = new Dictionary<string, ExpandedOrder>();
-            foreach (var u in movers) expandedByUnitId[u.id] = ExpandOrder(state, u, orderByUnitId[u.id]);
+            foreach (var u in movers)
+            {
+                var expanded = ExpandOrder(state, u, orderByUnitId[u.id]);
+                expandedByUnitId[u.id] = expanded;
+
+                // 2026-09-12 : Correction des "Postures à sens unique". Si l'ordre implique un déplacement
+                // réel (distance cumulée du chemin > 0.1m), l'unité perd immédiatement ses postures statiques.
+                if (expanded.steps.Count > 0)
+                {
+                    float dist = Vector2.Distance(u.position, expanded.steps[0]);
+                    for (int i = 1; i < expanded.steps.Count; i++)
+                    {
+                        dist += Vector2.Distance(expanded.steps[i - 1], expanded.steps[i]);
+                    }
+                    if (dist > 0.1f)
+                    {
+                        u.isGuarding = false;
+                        u.isCamouflaged = false;
+                        u.isGarrisoned = false;
+                        u.windowNormal = null;
+                    }
+                }
+            }
 
             // outputY veut dire "hauteur CHANGÉE pendant cette résolution" (voir TacticalUnit.outputY) :
             // il faut donc le remettre à null au début, sinon la valeur d'un tour précédent est

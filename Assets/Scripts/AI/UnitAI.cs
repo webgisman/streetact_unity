@@ -810,7 +810,7 @@ public partial class UnitAI : MonoBehaviour
         fg.transform.localPosition = new Vector3(0, 0, -0.02f);
         fg.transform.localScale = new Vector3(1f, 1f, 1f);
         
-        Color teamCol = (teamID == 2) ? new Color(1f, 0.15f, 0.15f, 1f) : new Color(0.15f, 0.6f, 1f, 1f);
+        Color teamCol = (!isPlayerControlled) ? new Color(1f, 0.15f, 0.15f, 1f) : new Color(0.15f, 0.6f, 1f, 1f);
         Material fgMat = SafeMaterialFactory.CreateUnlit(teamCol);
         fg.GetComponent<Renderer>().material = fgMat;
         healthBarFill = fg.transform;
@@ -842,7 +842,7 @@ public partial class UnitAI : MonoBehaviour
             Renderer r = healthBarFill.GetComponent<Renderer>();
             if (r != null && r.material != null)
             {
-                Color teamCol = (teamID == 2) ? new Color(1f, 0.15f, 0.15f, 1f) : new Color(0.15f, 0.6f, 1f, 1f);
+                Color teamCol = (!isPlayerControlled) ? new Color(1f, 0.15f, 0.15f, 1f) : new Color(0.15f, 0.6f, 1f, 1f);
                 if (r.material.HasProperty("_BaseColor")) r.material.SetColor("_BaseColor", teamCol);
                 else r.material.color = teamCol;
             }

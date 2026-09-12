@@ -182,7 +182,7 @@ public partial class UnitAI
         }
 
         // SOLUTION PARE-BALLE : Annulation manuelle de la translation d'animation (Fantassins uniquement) !
-        if (hipsBone != null && isExecuting && !isTank && !isClimbing)
+        if (hipsBone != null && !isTank && !isClimbing)
         {
             Vector3 fixedPos = hipsBone.localPosition;
             fixedPos.x = initialHipsLocalPos.x;
