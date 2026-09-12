@@ -49,7 +49,17 @@ production (qui tourne, lui, toujours en vrai Play Mode). Tous les tests existan
 compile-checks restent verts.
 
 Protocole documenté dans `03-network-protocol.md` (`city_verify`/`city_verify_result`). Commit
-`30d170b`, poussé sur `origin/master`. Rebuild serveur + APK en cours de déploiement.
+`30d170b`, poussé sur `origin/master`.
+
+**Redéployé et vérifié** : serveur Linux (cache Bee vidé, rebuild propre — DLL managé daté après le
+commit `40a5be3`) et APK Android (même vérification de fraîcheur), tous deux confirmés à jour.
+Conteneur `novgov-game-server-1-1` stable, sauvegarde prise avant redéploiement, port 7777 confirmé
+joignable de l'extérieur.
+
+### Fin de session
+
+Tout ce qui a été demandé cette nuit est fait, testé, documenté, commité/poussé et déployé en
+production. PC éteint après ce rapport, comme demandé.
 
 ---
 
