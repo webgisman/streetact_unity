@@ -20,10 +20,15 @@
                         <ui:VisualElement name="squad-bar" style="flex-direction: row; align-items: center; picking-mode: Ignore;" />
                     </ui:VisualElement>
 
-                    <!-- Top-Right Actions: Bell + End Turn -->
-                    <ui:VisualElement style="flex-direction: row; align-items: center; picking-mode: Ignore;">
+                    <!-- Toutes les actions du tour (cloche, vue 3D, annuler, FIN DE TOUR) dans UN
+                         SEUL bandeau "glass" (.hud-action-cluster, Theme.tss) — remplace des boutons
+                         flottants indépendants qui se lisaient comme "éparpillés" (retour direct
+                         d'un test réel à 2 clients, 2026-09-13). picking-mode: Position (pas
+                         Ignore) sur ce conteneur : c'est maintenant LUI la zone cliquable de fond,
+                         chaque bouton garde son propre picking par-dessus. -->
+                    <ui:VisualElement name="top-actions-row" class="hud-action-cluster" style="picking-mode: Position;">
 
-                        <ui:VisualElement name="planification-group" style="picking-mode: Ignore; margin-right: 12px;">
+                        <ui:VisualElement name="planification-group" style="picking-mode: Ignore; margin-right: 10px;">
                             <ui:VisualElement name="notif-bell-wrap" style="align-items: center;">
                                 <ui:Button name="notif-bell-button" class="btn-glass btn-icon-only" style="width: 44px; height: 44px; border-radius: 22px;">
                                     <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/bell.png');" />
@@ -32,31 +37,29 @@
                             </ui:VisualElement>
                         </ui:VisualElement>
 
-                        <ui:VisualElement name="top-actions-row" style="flex-direction: row; align-items: center; picking-mode: Ignore;">
-                            <!-- Bascule caméra 2D/3D : réglage de vue, pas un ordre tactique, donc
-                                 séparée du flux de sélection/déplacement (voir ContextMenuScreen).
-                                 btn-glass (comme la cloche juste à côté) plutôt que btn-secondary :
-                                 son fond plein sombre se fondait dans une carte sombre une fois le
-                                 bandeau noir retiré derrière lui, le rendant quasi invisible. -->
-                            <ui:Button name="view3d-button" class="btn-glass btn-icon-only" style="display: none; height: 48px; width: 48px; margin-right: 10px;">
-                                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/magnifier.png');" />
-                            </ui:Button>
-                            <!-- Annuler le dernier point posé. Ajouté le 2026-09-07 : cette action
-                                 n'existait QUE via le clic droit de la souris (voir
-                                 TacticalPathManager_Input.HandlePointerInput) — donc pas du tout sur
-                                 la plateforme cible, un téléphone. Un joueur mobile qui posait un
-                                 checkpoint au mauvais endroit n'avait aucun moyen de le retirer. -->
-                            <ui:Button name="undo-node-button" class="btn-glass btn-icon-only" style="display: none; height: 48px; width: 48px; margin-right: 10px;">
-                                <ui:Label text="↶" style="font-size: 26px; -unity-text-align: middle-center;" />
-                            </ui:Button>
-                            <ui:Button name="end-turn-button" class="btn-primary btn-with-icon" style="height: 52px; min-width: 168px; padding: 0 18px; justify-content: center;">
-                                <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/play.png'); -unity-background-image-tint-color: var(--color-accent-text); margin-right: 8px;" />
-                                <ui:Label text="FIN DE TOUR" style="font-size: 20px;" />
-                            </ui:Button>
-                        </ui:VisualElement>
+                        <!-- Bascule caméra 2D/3D : réglage de vue, pas un ordre tactique, donc
+                             séparée du flux de sélection/déplacement (voir ContextMenuScreen).
+                             btn-glass (comme la cloche juste à côté) plutôt que btn-secondary :
+                             son fond plein sombre se fondait dans une carte sombre une fois le
+                             bandeau noir retiré derrière lui, le rendant quasi invisible. -->
+                        <ui:Button name="view3d-button" class="btn-glass btn-icon-only" style="display: none; height: 48px; width: 48px; margin-right: 10px;">
+                            <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/magnifier.png');" />
+                        </ui:Button>
+                        <!-- Annuler le dernier point posé. Ajouté le 2026-09-07 : cette action
+                             n'existait QUE via le clic droit de la souris (voir
+                             TacticalPathManager_Input.HandlePointerInput) — donc pas du tout sur
+                             la plateforme cible, un téléphone. Un joueur mobile qui posait un
+                             checkpoint au mauvais endroit n'avait aucun moyen de le retirer. -->
+                        <ui:Button name="undo-node-button" class="btn-glass btn-icon-only" style="display: none; height: 48px; width: 48px; margin-right: 10px;">
+                            <ui:Label text="↶" style="font-size: 26px; -unity-text-align: middle-center;" />
+                        </ui:Button>
+                        <ui:Button name="end-turn-button" class="btn-primary btn-with-icon" style="height: 52px; min-width: 168px; padding: 0 18px; justify-content: center;">
+                            <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/play.png'); -unity-background-image-tint-color: var(--color-accent-text); margin-right: 8px;" />
+                            <ui:Label text="FIN DE TOUR" style="font-size: 20px;" />
+                        </ui:Button>
 
                         <!-- Execution Group -->
-                        <ui:VisualElement name="execution-group" style="display: none; flex-direction: row; align-items: center; picking-mode: Position;">
+                        <ui:VisualElement name="execution-group" style="display: none; flex-direction: row; align-items: center; picking-mode: Position; margin-left: 10px;">
                             <ui:Label name="execution-label" text="ACTION EN COURS..." class="panel" style="color: var(--color-accent); font-size: 18px; -unity-font-style: bold; padding: 8px 14px; margin-right: 8px;" />
                             <ui:Button name="skip-button" text="Passer" class="btn-secondary" style="height: 48px; padding: 0 14px; font-size: 17px;" />
                         </ui:VisualElement>

@@ -55,7 +55,21 @@
     --color-info-hover: rgb(112, 156, 180);
 
     --font-head: url("/Assets/Fonts/BlackOpsOne-Regular.ttf");
-    --font-body: url("/Assets/Fonts/Oswald-Variable.ttf");
+    /* CORRECTIF (2026-09-13, trouvé lors du premier vrai test à 2 clients Play Mode) : le fichier
+       "Oswald-Variable.ttf" est une police VARIABLE (une seule police OpenType encodant plusieurs
+       graisses via des axes, d'où son nom) — UI Toolkit ne sait PAS instancier de police variable
+       pour son rendu de texte dynamique à l'exécution (moteur FreeType interne). Résultat en jeu
+       (jamais visible dans le Game View de l'Éditeur avant ce test, seulement dans un vrai build
+       Player) : "Unable to generate text. Failed to load font 'Oswald' ... The font face could not
+       be initialized." en boucle — TOUT texte utilisant --font-body (donc la quasi-totalité des
+       Label/Button du jeu, --font-head/BlackOpsOne n'étant lui PAS variable et donc épargné) ne
+       s'affichait tout simplement pas. Repli sur LiberationSans (police STATIQUE déjà présente,
+       fournie par le package TextMesh Pro Essentials, donc garantie de fonctionner) : moins fidèle
+       à l'identité visuelle "commando" voulue que l'Oswald condensé, mais du texte qui s'affiche
+       vraiment vaut mieux qu'une police plus jolie mais invisible. Pour restaurer l'Oswald condensé,
+       il faudra une vraie police STATIQUE (ex. "Oswald-Regular.ttf", une graisse fixe extraite de la
+       famille variable — disponible séparément sur Google Fonts), pas ce fichier "-Variable". */
+    --font-body: url("/Assets/TextMesh Pro/Fonts/LiberationSans.ttf");
 }
 
 /* Transition d'apparition des écrans plein-cadre (2026-09-13, demande explicite : "il faut que
@@ -164,6 +178,23 @@
 .hub-badge-ok {
     color: var(--color-text-dim);
     font-size: 14px;
+}
+
+/* Regroupe les actions du HUD tactique (cloche/vue 3D/annuler/FIN DE TOUR) en UN SEUL bandeau
+   "glass" au lieu de boutons flottants indépendants côte à côte (2026-09-13, retour utilisateur
+   direct sur capture d'écran : "ne mets pas les boutons éparpillés comme ça, c'est pas
+   gamefiable/intuitif") — même langage visuel que .dock-panel (glass + liseré laiton en haut),
+   pour que ce groupe se lise comme UN tableau de bord cohérent plutôt que des morceaux disjoints. */
+.hud-action-cluster {
+    flex-direction: row;
+    align-items: center;
+    background-color: rgba(20, 18, 12, 0.72);
+    border-width: 1px;
+    border-color: var(--color-panel-border-dim);
+    border-top-width: 2px;
+    border-top-color: var(--color-accent);
+    border-radius: 4px;
+    padding: 6px 10px;
 }
 
 /* white-space: normal en base, ici et sur Button ci-dessous : par défaut, UI Toolkit NE fait PAS

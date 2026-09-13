@@ -231,10 +231,19 @@ public class UIScreenManager : MonoBehaviour
         if (screens.TryGetValue(name, out var el)) FadeIn(el);
     }
 
-    /// <summary>Affiche/masque un écran indépendamment des autres (ex: superposer une bannière sur le HUD).</summary>
+    /// <summary>Affiche/masque un écran indépendamment des autres (ex: superposer une bannière sur le HUD).
+    /// IDEMPOTENT (2026-09-13, correctif "icônes qui vibrent") : plusieurs appelants (TacticalPathManager_UI.
+    /// Update -> TacticalBottomBar/ContextMenu, UnitSpawnerUI.RefreshDeploymentDockUI -> DeploymentDock)
+    /// réaffirment volontairement la même visibilité À CHAQUE FRAME (voir leurs commentaires respectifs :
+    /// c'est délibéré, pour survivre à un Show() ailleurs qui masquerait cet écran une fois pour toutes).
+    /// Sans ce garde, chaque frame relançait FadeIn() depuis zéro (opacity 0 -> planifié 1 une frame plus
+    /// tard -> re-remis à 0 la frame suivante avant même d'y arriver) : un scintillement continu à 60 Hz
+    /// sur CHAQUE écran concerné, exactement ce qui ressemblait à des "icônes qui vibrent" en jeu.</summary>
     public void SetVisible(string name, bool visible)
     {
         if (!screens.TryGetValue(name, out var el)) return;
+        bool currentlyVisible = el.style.display == DisplayStyle.Flex;
+        if (visible == currentlyVisible) return;
         if (visible) FadeIn(el); else HideInstant(el);
     }
 
