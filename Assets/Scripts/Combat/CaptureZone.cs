@@ -45,6 +45,16 @@ public class CaptureZone : MonoBehaviour
         ProgressTeam2 = 0f;
     }
 
+    /// <summary>Restaure une progression déjà connue (2026-09-13, rythme async — voir
+    /// MatchSessionManager_AsyncPause.cs) : une CaptureZone fraîche est recréée à chaque reprise après
+    /// pause (l'ancienne a été détruite avec le reste de la scène), sa progression doit donc être
+    /// réappliquée explicitement au lieu de repartir de 0%.</summary>
+    public void RestoreProgress(float progressTeam1, float progressTeam2)
+    {
+        ProgressTeam1 = Mathf.Clamp(progressTeam1, 0f, 100f);
+        ProgressTeam2 = Mathf.Clamp(progressTeam2, 0f, 100f);
+    }
+
     /// <summary>Appelé à chaque tick de capture pendant la phase d'exécution.</summary>
     public void Tick()
     {

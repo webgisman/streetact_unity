@@ -221,10 +221,14 @@ namespace Novgov.Server
                     PausedRosterDto roster = null;
                     yield return FetchPausedRoster(matchId, r => roster = r);
                     RespawnPausedRoster(roster);
-                    // Zone de Contrôle : la progression de capture NE SURVIT PAS à une pause
-                    // (simplification assumée, voir MatchSessionManager_AsyncPause.cs) — une Zone
-                    // fraîche est recréée à chaque reprise.
-                    if (mode == "zone_control") CaptureZone.CreateAtMapCenter();
+                    // Zone de Contrôle : une CaptureZone fraîche est recréée (l'ancienne a été
+                    // détruite avant la pause), mais sa progression est restaurée depuis le roster
+                    // sérialisé (2026-09-13) — elle ne repart plus de 0% à chaque reprise.
+                    if (mode == "zone_control")
+                    {
+                        var zone = CaptureZone.CreateAtMapCenter();
+                        if (roster != null) zone.RestoreProgress(roster.zone_progress_team1, roster.zone_progress_team2);
+                    }
 
                     ApplyForPlayerLiveNoAI(p1, p2);
                     ApplyForPlayerLiveNoAI(p2, p1);

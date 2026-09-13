@@ -18,37 +18,101 @@ namespace Novgov.Server
     /// l'attente (potentiellement des heures). Les vraies UnitAI ne sont respawnées qu'au moment de
     /// résoudre le tour suivant, une fois les deux joueurs (ou le délai de 6h) prêts.
     ///
-    /// SIMPLIFICATION ASSUMÉE : seuls position/rotation/PV/type/équipe survivent à une pause. L'état
-    /// de garnison (fenêtre occupée)/embuscade/camouflage d'une unité est PERDU si un cycle pause/
-    /// reprise a lieu pendant qu'elle l'utilisait — un compromis de portée, pas un oubli. Documenté
-    /// dans 11-real-engine-switch-2026-09-13.md.
+    /// ÉTAT PERSISTÉ À TRAVERS UNE PAUSE (2026-09-13, étendu suite à demande explicite — "critique") :
+    /// position/rotation/PV/type/équipe, ET garnison de fenêtre (isGarrisoned + la fenêtre exacte),
+    /// intérieur de bâtiment (currentBuilding), guet (isGuarding), camouflage (isCamouflaged), et
+    /// perché sur toit (isRooftopSniper). Identifie bâtiment/fenêtre par INDEX dans
+    /// BuildingStructure.AllBuildings au moment de la sérialisation, jamais par référence C# (détruite
+    /// avec la scène) — valide seulement parce que la reprise recharge TOUJOURS la même carte
+    /// (LoadZoneOnServer/RestoreDefaultMapOnServer avec le même cacheKey) avant de relire ces index,
+    /// et que la génération de ville est déterministe à partir des mêmes données (même hypothèse déjà
+    /// faite ailleurs dans ce projet pour la vérification de hash de géométrie, voir city_verify).
+    ///
+    /// RESTE non persisté (simplification assumée, documentée dans
+    /// 11-real-engine-async-pace-notifications-2026-09-13.md) : tacticalPath en cours (vide de toute
+    /// façon à cet instant précis — la pause n'a lieu qu'après ResetOrderState en fin d'exécution),
+    /// cooldowns d'arme exacts (repartent à 0, avantage mineur et temporaire pour l'unité concernée).
+    /// La progression de Zone de Contrôle, elle, SURVIT maintenant à une pause (zone_progress_team1/2
+    /// ci-dessous) — ce n'était pas le cas dans la version précédente de ce fichier.
     /// </summary>
     public partial class MatchSessionManager
     {
         private const float AsyncPlanningSeconds = 6f * 60f * 60f; // 6 heures
 
-        [Serializable] private class PausedUnitDto { public string unit_id; public int unit_type; public int team_id; public float x; public float y; public float z; public float ry; public int health; }
-        [Serializable] private class PausedRosterDto { public PausedUnitDto[] units; }
+        [Serializable]
+        private class PausedUnitDto
+        {
+            public string unit_id;
+            public int unit_type;
+            public int team_id;
+            public float x;
+            public float y;
+            public float z;
+            public float ry;
+            public int health;
+            public bool is_garrisoned;
+            public int garrison_building_id = -1; // index dans BuildingStructure.AllBuildings, -1 = aucun
+            public int garrison_window_id = -1;   // BuildingWindow.id à l'intérieur de ce bâtiment
+            public int current_building_id = -1;  // intérieur (hors garnison de fenêtre), -1 = aucun
+            public bool is_guarding;
+            public bool is_camouflaged;
+            public bool is_rooftop_sniper;
+        }
+        [Serializable] private class PausedRosterDto { public PausedUnitDto[] units; public float zone_progress_team1; public float zone_progress_team2; }
 
-        /// <summary>Photo de toutes les vraies UnitAI vivantes de CE match, avant destruction. Écrit
+        /// <summary>Photo de toutes les vraies UnitAI vivantes de CE match, avant destruction — PV,
+        /// position, ET état tactique persistant (garnison/intérieur/guet/camouflage/toit). Écrit
         /// directement dans matches.paused_roster_json (PATCH REST, même mécanisme que
         /// CloseMatchRecord).</summary>
         private IEnumerator PersistPausedRoster(string matchId)
         {
+            var buildingsSnapshot = new List<BuildingStructure>(BuildingStructure.AllBuildings);
+            var buildingIndex = new Dictionary<BuildingStructure, int>();
+            for (int i = 0; i < buildingsSnapshot.Count; i++) buildingIndex[buildingsSnapshot[i]] = i;
+
             var units = UnitAI.AllLivingUnits.Where(u => u != null && !u.isDead).ToList();
             var dto = new PausedRosterDto
             {
-                units = units.Select(u => new PausedUnitDto
+                units = units.Select(u =>
                 {
-                    unit_id = u.gameObject.name,
-                    unit_type = (int)UnitTypeStats.InferType(u),
-                    team_id = u.teamID,
-                    x = u.transform.position.x,
-                    y = u.transform.position.y,
-                    z = u.transform.position.z,
-                    ry = u.transform.eulerAngles.y,
-                    health = u.health
-                }).ToArray()
+                    int garrisonBuildingId = -1, garrisonWindowId = -1;
+                    if (u.isGarrisoned && u.currentWindow != null)
+                    {
+                        // La fenêtre ne porte pas de référence directe vers "son" bâtiment — on
+                        // cherche celui dont la liste windows contient cette instance précise.
+                        foreach (var b in buildingsSnapshot)
+                        {
+                            if (b != null && b.windows != null && b.windows.Contains(u.currentWindow))
+                            {
+                                garrisonBuildingId = buildingIndex[b];
+                                garrisonWindowId = u.currentWindow.id;
+                                break;
+                            }
+                        }
+                    }
+                    int currentBuildingId = (u.currentBuilding != null && buildingIndex.TryGetValue(u.currentBuilding, out int bi)) ? bi : -1;
+
+                    return new PausedUnitDto
+                    {
+                        unit_id = u.gameObject.name,
+                        unit_type = (int)UnitTypeStats.InferType(u),
+                        team_id = u.teamID,
+                        x = u.transform.position.x,
+                        y = u.transform.position.y,
+                        z = u.transform.position.z,
+                        ry = u.transform.eulerAngles.y,
+                        health = u.health,
+                        is_garrisoned = u.isGarrisoned,
+                        garrison_building_id = garrisonBuildingId,
+                        garrison_window_id = garrisonWindowId,
+                        current_building_id = currentBuildingId,
+                        is_guarding = u.isGuarding,
+                        is_camouflaged = u.isCamouflaged,
+                        is_rooftop_sniper = u.isRooftopSniper
+                    };
+                }).ToArray(),
+                zone_progress_team1 = currentMatchMode == "zone_control" && CaptureZone.Instance != null ? CaptureZone.Instance.ProgressTeam1 : 0f,
+                zone_progress_team2 = currentMatchMode == "zone_control" && CaptureZone.Instance != null ? CaptureZone.Instance.ProgressTeam2 : 0f
             };
             string json = JsonUtility.ToJson(dto);
             // Échappement minimal : le JSON de dto est déjà valide, on l'enveloppe dans un objet
@@ -57,7 +121,7 @@ namespace Novgov.Server
             // de repasser par un DTO englobant.
             string patchBody = "{\"paused_roster_json\":" + json + "}";
             yield return PostgrestPatch($"/matches?id=eq.{matchId}", patchBody);
-            Debug.Log($"[AsyncPause] [{matchId}] Effectif ({dto.units.Length} unité(s)) sérialisé — scène libérée pour d'autres matchs.");
+            Debug.Log($"[AsyncPause] [{matchId}] Effectif ({dto.units.Length} unité(s)) sérialisé (garnison/intérieur/guet/camouflage/toit inclus) — scène libérée pour d'autres matchs.");
         }
 
         /// <summary>Relit le dernier effectif sérialisé pour ce match — null si jamais mis en pause
@@ -110,10 +174,17 @@ namespace Novgov.Server
         /// ordres soumis par le client pendant l'attente référencent des unit_id par ce nom
         /// (NetMessage.UnitOrder.unit_id), jamais réappris depuis un nouveau spawn ; sans ce nom
         /// préservé, tout ordre soumis pendant que la partie était en pause serait silencieusement
-        /// ignoré (ApplyOrdersToUnits ne retrouverait plus l'unité par son ancien nom).</summary>
+        /// ignoré (ApplyOrdersToUnits ne retrouverait plus l'unité par son ancien nom).
+        ///
+        /// Restaure aussi garnison/intérieur/guet/camouflage/toit — appelé APRÈS que la carte a été
+        /// rechargée (LoadZoneOnServer/RestoreDefaultMapOnServer), donc BuildingStructure.AllBuildings
+        /// est déjà repeuplé dans le MÊME ordre qu'au moment de la sérialisation (génération
+        /// déterministe à partir des mêmes données — même hypothèse que city_verify).</summary>
         private void RespawnPausedRoster(PausedRosterDto roster)
         {
             if (roster?.units == null) return;
+            var buildingsSnapshot = new List<BuildingStructure>(BuildingStructure.AllBuildings);
+
             foreach (var u in roster.units)
             {
                 UnitAI ai = UnitSpawnerUI.Instance.SpawnUnitAt((UnitSpawnerUI.UnitType)u.unit_type, new Vector3(u.x, u.y, u.z), u.team_id, forcedName: u.unit_id, skipSafeSpawnAdjustment: true);
@@ -121,6 +192,38 @@ namespace Novgov.Server
                 ai.transform.rotation = Quaternion.Euler(0f, u.ry, 0f);
                 ai.health = u.health;
                 ai.isPlayerControlled = true; // voir RunMatchLive : les deux camps sont toujours de vrais joueurs ici
+                ai.isGuarding = u.is_guarding;
+                ai.isCamouflaged = u.is_camouflaged;
+                ai.isRooftopSniper = u.is_rooftop_sniper;
+
+                if (u.current_building_id >= 0 && u.current_building_id < buildingsSnapshot.Count)
+                {
+                    BuildingStructure building = buildingsSnapshot[u.current_building_id];
+                    if (building != null)
+                    {
+                        building.RegisterUnitInside(ai);
+                        ai.currentBuilding = building;
+                    }
+                }
+
+                if (u.is_garrisoned && u.garrison_building_id >= 0 && u.garrison_building_id < buildingsSnapshot.Count)
+                {
+                    BuildingStructure building = buildingsSnapshot[u.garrison_building_id];
+                    BuildingStructure.BuildingWindow window = building?.windows?.Find(w => w.id == u.garrison_window_id);
+                    if (building != null && window != null)
+                    {
+                        building.OccupyWindow(window, ai);
+                        ai.currentWindow = window;
+                        ai.isGarrisoned = true;
+                    }
+                    else
+                    {
+                        // Fenêtre introuvable (bâtiment détruit/géométrie différente depuis la pause,
+                        // en principe impossible mais pas structurellement garanti) — repli sûr : PAS
+                        // de garnison plutôt qu'un état incohérent (currentWindow pointant sur rien).
+                        Debug.LogWarning($"[AsyncPause] Fenêtre de garnison introuvable au respawn pour '{u.unit_id}' (bâtiment {u.garrison_building_id}, fenêtre {u.garrison_window_id}) — reprise sans garnison pour cette unité.");
+                    }
+                }
             }
         }
 
