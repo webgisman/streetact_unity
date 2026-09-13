@@ -79,17 +79,23 @@ services:
     networks: [internal]
 
   # ---------------------------------------------------------------------
-  # Serveur de jeu Unity Headless — AUTORITAIRE. UNE SEULE instance (2026-08-30, remplace le pool
-  # de 3 instances du même jour) : depuis "Option B" + le pool de threads (voir MatchSessionManager.
-  # RunExecutionPhasePure), UN processus fait tourner des centaines/milliers de parties Deathmatch/
-  # Zone de Contrôle EN PARALLÈLE — le pool de 3 processus ne servait plus qu'à payer 2x le coût de
-  # base d'un moteur Unity (RAM/CPU) sans gain de capacité réel. La table "server_instances"
-  # (schema.sql §7, mise à jour toutes les 2s via ReportInstanceStatus) et la logique côté client
-  # (MultiplayerMatchController.ConnectToGameServerCoroutine, "choisir une instance libre") sont
-  # conservées telles quelles — elles fonctionnent déjà correctement avec une seule ligne dans la
-  # table, aucun changement nécessaire pour repasser à plusieurs instances plus tard si le besoin
-  # (résilience, pas capacité) s'en faisait sentir : copier-coller ce bloc avec un nouveau port et un
-  # nouvel INSTANCE_ID suffirait.
+  # Serveur de jeu Unity Headless — AUTORITAIRE. POOL DE 3 INSTANCES RÉTABLI (2026-09-13) : la
+  # bascule "Deathmatch/Zone de Contrôle utilisent maintenant de vraies UnitAI/BuildingStructure de
+  # scène" (voir MatchSessionManager_MatchLive.cs, 09-real-unity-combat-investigation-2026-09-13.md)
+  # réintroduit la contrainte "un seul match à la fois par processus" que l'Option B du 2026-08-30
+  # avait supprimée — chaque processus ne peut de nouveau faire tourner qu'UN match (Deathmatch,
+  # Zone de Contrôle OU Conquête) à la fois. Remettre 3 instances redonne 3 matchs simultanés au lieu
+  # d'un seul, exactement le mécanisme que le commentaire d'origine (voir git blame) avait laissé prêt
+  # à réactiver "si le besoin (résilience, pas capacité) s'en faisait sentir" — sauf qu'ici c'est bien
+  # redevenu un besoin de CAPACITÉ, pas seulement de résilience. La table "server_instances"
+  # (schema.sql §7) et la logique côté client (MultiplayerMatchController.ConnectToGameServerCoroutine,
+  # "choisir une instance libre") n'ont eu besoin d'AUCUNE modification pour ça — elles géraient déjà
+  # une table à N lignes avant la consolidation à 1 seule instance.
+  #
+  # IMPORTANT pour un déploiement VPS réel : les ports 7778/7779 avaient été FERMÉS dans UFW lors de
+  # la consolidation à 1 instance (voir 01-deployment-vps.md) — il faut les rouvrir
+  # (`ufw allow 7778/tcp && ufw allow 7779/tcp`) avant que game-server-2/3 soient réellement
+  # joignables depuis l'extérieur, sinon ils tournent mais restent inaccessibles.
   # ---------------------------------------------------------------------
   game-server-1:
     build:
@@ -112,6 +118,52 @@ services:
       - tactical-grid-cache:/root/.config/unity3d/DefaultCompany/Novgov/TacticalGridCache
     ports:
       - "7777:7777"
+    networks: [internal]
+
+  game-server-2:
+    build:
+      context: ./game-server
+    image: novgov-game-server:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      rest:
+        condition: service_started
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      GAME_PORT: 7777
+      REST_URL: https://novgov.com/rest/v1
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      INSTANCE_ID: game-server-2
+      PUBLIC_PORT: 7778
+    volumes:
+      - tactical-grid-cache:/root/.config/unity3d/DefaultCompany/Novgov/TacticalGridCache
+    ports:
+      - "7778:7777"
+    networks: [internal]
+
+  game-server-3:
+    build:
+      context: ./game-server
+    image: novgov-game-server:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      rest:
+        condition: service_started
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      GAME_PORT: 7777
+      REST_URL: https://novgov.com/rest/v1
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      INSTANCE_ID: game-server-3
+      PUBLIC_PORT: 7779
+    volumes:
+      - tactical-grid-cache:/root/.config/unity3d/DefaultCompany/Novgov/TacticalGridCache
+    ports:
+      - "7779:7777"
     networks: [internal]
 
   # ---------------------------------------------------------------------
