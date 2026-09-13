@@ -33,12 +33,17 @@ coûte :
 - **Chargement de carte plus lent** pour une tuile GPS réelle (toujours "à froid", jusqu'à 60s) — le
   résolveur pur pouvait servir une géométrie déjà en cache disque en ~65ms.
 
-`TacticalResolver.Resolve()` lui-même a zéro appelant aujourd'hui — le code est resté en place
-(`Assets/Scripts/TacticalCore/TacticalResolver.cs`/`LineOfSight.cs`) car un test-harness entier lui
-est encore rattaché (voir "Ce qui n'a PAS été fait" en bas). Toute la famille "Pure"
-(`MatchState.cs`, `MatchSessionManager_CombatPure.cs`, `RunMatch`/`TryStartMatch` d'origine,
-`RunDeploymentPhasePure`, etc.) a en revanche été supprimée : elle ne servait plus à rien une fois
-plus aucun mode ne l'appelait.
+**Mise à jour du 2026-09-13 (plus tard le même jour) : `TacticalResolver.Resolve()` et
+`LineOfSight.cs` ont été supprimés du dépôt.** Ils avaient zéro appelant en production depuis le
+passage ci-dessus, et le test-harness qui leur était rattaché (11 fichiers
+`Assets/Editor/TacticalCoreSelfTest_*.cs` + `Tools/TacticalCoreTests/TacticalCoreSelfTest_FullMatchSim.cs`)
+testait exclusivement ce résolveur — retiré avec lui. Ce qui reste dans ce test-harness (A*/
+`TacticalGrid` non-régression, hash déterministe, sentinelles client, plafonds de déploiement) ne
+dépendait jamais de `TacticalResolver`/`LineOfSight` et a été préservé tel quel, vérifié par un
+compile Editor + un build serveur réels après coup. Toute la famille "Pure" (`MatchState.cs`,
+`MatchSessionManager_CombatPure.cs`, `RunMatch`/`TryStartMatch` d'origine, `RunDeploymentPhasePure`,
+etc.) avait déjà été supprimée plus tôt le même jour, pour la même raison (plus aucun mode ne
+l'appelait).
 
 ## Comment ça marche concrètement aujourd'hui
 
@@ -87,11 +92,13 @@ ces notifications** — seule l'écriture serveur existe pour l'instant.
 
 ## Ce qui n'a PAS été fait (limites connues, assumées)
 
-- **`TacticalResolver.cs`/`LineOfSight.cs` ne sont PAS supprimés** malgré zéro appelant en jeu : un
-  test-harness entier en dépend (`Assets/Editor/TacticalCoreSelfTest_*.cs`, 11 fichiers, et
-  `Tools/TacticalCoreTests/`). Les supprimer sans traiter ces tests casserait la compilation. Décider
-  du sort de ces tests (les supprimer avec le résolveur, ou les garder comme filet de sécurité si le
-  résolveur pur est un jour réactivé) est une décision séparée, pas prise dans cette session.
+- ~~`TacticalResolver.cs`/`LineOfSight.cs` ne sont PAS supprimés~~ **FAIT plus tard le 2026-09-13** —
+  supprimés avec les 8 fichiers de test qui les testaient exclusivement (`TacticalCoreSelfTest.cs`,
+  `_BuildingEntry`, `_BuildingIntrusion`, `_DoorEntry`, `_InfantryPathSim`, `_ResolveMutatesInPlace`,
+  `_Roof`, `_VerticalBudget`, `_Wait`, et `Tools/TacticalCoreTests/TacticalCoreSelfTest_FullMatchSim.cs`
+  partiellement) ; `TacticalCoreSelfTest.cs`, `_Client.cs` et le FullMatchSim ont été conservés mais
+  réduits à ce qui ne dépendait pas du résolveur (A*/`TacticalGrid`, hash déterministe, sentinelles
+  client, plafonds de déploiement) — re-vérifié par un compile Editor et un build serveur réels.
 - **Aucun test réel à 2 joueurs** depuis la bascule du 2026-09-13 — ni pour le vrai moteur, ni pour
   le cycle pause/reprise async, ni pour le choix élargi de types d'unité au déploiement.
 - **Notifications** : écriture serveur seule, aucune lecture/affichage côté client.
