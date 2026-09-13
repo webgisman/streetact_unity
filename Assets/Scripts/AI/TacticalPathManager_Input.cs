@@ -11,6 +11,18 @@ public partial class TacticalPathManager
     private Vector2 pointerDownPos;
     private bool isPointerDown = false;
 
+    /// <summary>Facteur d'échelle DPI pour tout seuil de tolérance de tap exprimé en pixels dans ce
+    /// fichier (tap-vs-glissement, rayon de sélection tolérant) — même formule déjà éprouvée dans
+    /// TacticalCamera.cs pour les gestes de pincement/rotation (référence ~160 DPI, la densité
+    /// "mdpi" Android historique contre laquelle ces seuils ont été réglés à l'œil). Sans cette
+    /// échelle, un seuil qui semble juste sur un écran à 160 DPI (Éditeur, vieux téléphone) devient
+    /// 2 à 3× trop petit en pixels RÉELS sur un téléphone moderne (souvent 400+ DPI) — un tap
+    /// parfaitement immobile y dépasse alors la distance tolérée et se fait rejeter comme un
+    /// glissement, ou une autre unité légèrement manquée retombe hors du rayon tolérant. Repli sur 1
+    /// si Screen.dpi n'est pas rapporté (0, certains émulateurs/environnements) plutôt que d'inventer
+    /// une valeur.</summary>
+    private static float DpiTouchScale => (Screen.dpi > 0f) ? (Screen.dpi / 160f) : 1f;
+
     // Un bouton du ContextMenu (option/ANNULER/TERMINÉ/vue 3D) qui masque le menu peut faire fuiter
     // le RELÂCHEMENT de ce même clic physique vers un raycast 3D brut, dans la MÊME frame (voir les
     // commentaires dans ShowContextMenu/BindTacticalUI) — armé à Time.frameCount par ces boutons,
@@ -247,10 +259,19 @@ public partial class TacticalPathManager
             // la branche d'appui s'exécutait, isActionClick n'était jamais levé et le tap était
             // PUREMENT PERDU — isPointerDown restait même armé avec une position périmée. C'est le
             // "la sélection ne répond plus" : le joueur tape sur son unité, rien ne se passe.
+            //
+            // 2026-09-13 : seuil mis à l'échelle DPI (voir DpiTouchScale ci-dessous) — un tap qui
+            // tremble de 45px BRUTS est un tap parfaitement immobile sur un écran de commandement
+            // (~160 DPI, la référence historique du projet), mais correspond à un vrai petit
+            // GLISSEMENT sur un téléphone moderne (souvent 400+ DPI, presque 3x plus de pixels par
+            // pouce) — ce même tap y dépassait ce seuil et était pris pour un glisser-déposer au lieu
+            // d'un tap, perdant le clic (jamais "isActionClick") : symptôme rapporté "je n'arrive pas
+            // à sélectionner les unités", des DEUX côtés (tout appareil dont la densité dépasse la
+            // référence est concerné, pas un camp en particulier).
             if (wasReleased && isPointerDown)
             {
                 isPointerDown = false;
-                if (Vector2.Distance(pointerDownPos, pointerPosition) < 45f)
+                if (Vector2.Distance(pointerDownPos, pointerPosition) < 45f * DpiTouchScale)
                 {
                     isActionClick = true;
                 }
@@ -292,8 +313,14 @@ public partial class TacticalPathManager
             // si la boucle tolérante ne trouve rien) — ce réglage ne concernait que les taps
             // "presque" sur la cible. Toujours plus strict que 75px (protection contre le vol de
             // commande toujours en place, juste moins agressive).
+            // 2026-09-13 : ces deux seuils sont maintenant mis à l'échelle DPI (DpiTouchScale) — voir
+            // le commentaire sur le seuil de 45px plus haut dans cette même méthode pour le
+            // raisonnement complet. Réglés à l'origine (45px -> 60px, etc.) en testant sur un
+            // appareil/l'Éditeur à ~160 DPI ; jamais remis à l'échelle pour un écran de téléphone
+            // réel bien plus dense, d'où le même symptôme qui semblait "déjà corrigé" mais persistait
+            // en usage réel.
             bool isGivingOrderToSelectedUnit = phaseActuelle == GamePhase.Planification && uniteSelectionnee != null;
-            float maxTouchRadiusPx = isGivingOrderToSelectedUnit ? 60f : 75f;
+            float maxTouchRadiusPx = (isGivingOrderToSelectedUnit ? 60f : 75f) * DpiTouchScale;
 
             Ray ray = Camera.main.ScreenPointToRay(pointerPosition);
             RaycastHit hit;

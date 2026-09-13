@@ -727,7 +727,15 @@ namespace Novgov.Network
             _ = Novgov.Auth.SupabaseDatabaseClient.GetRoster();
 
             UnitSpawnerUI.Instance.ClearAllUnits();
-            UnitSpawnerUI.Instance.maxUnitsPerTeam = 4;
+            // 2026-09-13 (demande explicite, "laisse-moi choisir tous les types d'unité au
+            // déploiement") : ce plafond était codé en dur à 4, sous le vrai budget serveur
+            // (MaxDeployedCombatUnits = 6, voir MatchSessionManager_Deployment.cs) — un joueur qui
+            // plaçait déjà 4 Fantassin (4/8 points, budget encore largement disponible) se retrouvait
+            // bloqué par ce plafond CLIENT et ne pouvait alors plus jamais poser un Char/Canon/Mortier,
+            // même avec des points restants. Référence directe à la constante serveur (déjà publique
+            // pour l'affichage du budget, voir plus bas "Points : {points} / CombatPointBudget") au
+            // lieu d'un second nombre en dur qui pouvait diverger.
+            UnitSpawnerUI.Instance.maxUnitsPerTeam = Novgov.Server.MatchSessionManager.MaxDeployedCombatUnits;
             UnitSpawnerUI.Instance.OpenDockForMultiplayerDeployment(localTeamId);
 
             // Centrage de la caméra sur la zone de déploiement du joueur local
