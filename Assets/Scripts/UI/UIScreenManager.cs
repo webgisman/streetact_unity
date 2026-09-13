@@ -30,6 +30,7 @@ public class UIScreenManager : MonoBehaviour
         ("Roster", "UI/RosterScreen"),
         ("Buildings", "UI/BuildingsScreen"),
         ("Notifications", "UI/NotificationsScreen"),
+        ("Sieges", "UI/SiegesScreen"),
         ("ZoneMap", "UI/ZoneMapScreen"),
         ("ZoneResult", "UI/ZoneResultScreen"),
         ("Auth", "UI/AuthScreen"),

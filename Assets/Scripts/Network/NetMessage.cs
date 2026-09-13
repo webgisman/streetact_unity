@@ -30,6 +30,14 @@ namespace Novgov.Network
         public string reason;
         public int winner_team;
 
+        // join_matchmaking (mode="siege_attack_deploy"/"siege_defend_deploy", 2026-09-13) : id de la
+        // ligne public.zone_sieges concernée (créée côté client via l'appel RPC start_siege() AVANT
+        // d'ouvrir cette connexion — voir SupabaseDatabaseClient.StartSiege). Le serveur revérifie
+        // toujours en base que ce siège existe, est "pending", et que l'appelant est bien
+        // attacker_user_id/defender_user_id selon le mode — un client modifié ne peut donc jamais
+        // soumettre un déploiement pour un siège qui n'est pas le sien.
+        public long siege_id;
+
         // join_matchmaking (mode="conquest") / match_found / zone_captured / zone_attack_result :
         // index de tuile Slippy Map (Zoom CityGenerator.ZONE_ZOOM) de la Zone de Conquête concernée.
         // join_matchmaking (mode="deathmatch"/"zone_control", 2026-08-30, "des milliers de cartes") :

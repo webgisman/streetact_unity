@@ -64,11 +64,19 @@
                 </ui:VisualElement>
             </ui:Button>
 
-            <ui:Button name="btn-buildings" class="btn-secondary btn-with-icon" style="margin-bottom: 24px; min-height: 80px;">
+            <ui:Button name="btn-buildings" class="btn-secondary btn-with-icon" style="margin-bottom: 16px; min-height: 80px;">
                 <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/city.png');" />
                 <ui:VisualElement class="btn-text-col">
                     <ui:Label text="BÂTIMENTS &amp; RESSOURCES" />
                     <ui:Label text="Collecter les Points d'Action générés" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
+
+            <ui:Button name="btn-sieges" class="btn-secondary btn-with-icon" style="margin-bottom: 24px; min-height: 80px;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/shield.png');" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="SIÈGES EN COURS" />
+                    <ui:Label text="Défendre vos Zones attaquées, suivre vos attaques" class="btn-subtitle" />
                 </ui:VisualElement>
             </ui:Button>
 

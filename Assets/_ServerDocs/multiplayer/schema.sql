@@ -440,6 +440,183 @@ $$;
 grant execute on function public.claim_daily_bonus() to authenticated;
 
 -- =========================================================================
+-- 11. Sièges de Zone — PvP asynchrone (2026-09-13, demande explicite : "les joueurs vont vouloir
+-- attaquer une map déjà conquise... le joueur doit être notifié et organiser tout cela").
+--
+-- Principe : attaquer une Zone NEUTRE reste inchangé (capture instantanée, voir §6/Conquête plus
+-- haut). Attaquer une Zone déjà possédée par un AUTRE joueur passe maintenant par un vrai siège en
+-- 2 temps au lieu d'un combat instantané contre une garnison IA :
+--   1. start_siege() (ci-dessous) : déclare le siège, notifie le défenseur, ouvre une fenêtre de
+--      6h. L'attaquant se connecte ensuite au serveur de jeu pour DÉPLOYER ses unités (comme un
+--      déploiement de Conquête classique) — ce déploiement est capturé (position/type de chaque
+--      unité) et stocké ici, PAS résolu immédiatement.
+--   2. Si le défenseur se connecte dans les 6h et choisit de défendre, il déploie À SON TOUR sa
+--      garnison (son VRAI roster, avec la liberté de composition) — dès que les deux déploiements
+--      sont présents, le serveur résout IMMÉDIATEMENT le combat (vrai moteur Unity, voir
+--      MatchSessionManager_Siege.cs). Sinon, à l'expiration des 6h, le serveur génère
+--      automatiquement une défense à partir du roster ACTUEL du défenseur (même mécanisme que
+--      l'ancienne Conquête instantanée) et résout le combat tout seul, sans qu'aucun des deux
+--      joueurs n'ait besoin d'être connecté à cet instant précis.
+-- Dans tous les cas, le résultat est notifié aux DEUX joueurs (table "notifications" ci-dessus).
+-- =========================================================================
+
+-- Niveau de bâtiment (1 à 3) : investissement du propriétaire dans SA Zone (upgrade_building()
+-- ci-dessous) — augmente à la fois le revenu passif (voir le calcul d'intérêt de ZoneIncomeLoop,
+-- désormais pondéré par ce niveau) ET la force de la garnison auto-générée en cas de siège non
+-- défendu en direct (voir MatchSessionManager_Siege.ResolveSiegeNow). C'est le levier
+-- "organiser/renforcer son économie" demandé : un joueur qui investit ses AP dans SES bâtiments
+-- plutôt que dans l'expansion devient mécaniquement plus dur à déloger.
+alter table public.zones add column if not exists building_level integer not null default 1;
+
+-- Bouclier de grâce : une Zone qui vient d'être attaquée (gagnée OU perdue) ne peut plus être
+-- assiégée à nouveau avant cette date — sans ça, une Zone fraîchement conquise (ou fraîchement
+-- défendue avec succès, roster probablement affaibli) pouvait être ré-attaquée en boucle par
+-- n'importe qui, sans la moindre chance de se réorganiser entre deux sièges.
+alter table public.zones add column if not exists shield_until timestamptz;
+
+create table public.zone_sieges (
+    id bigint generated always as identity primary key,
+    tile_x integer not null,
+    tile_y integer not null,
+    zoom smallint not null,
+    attacker_user_id uuid not null references auth.users(id) on delete cascade,
+    defender_user_id uuid not null references auth.users(id) on delete cascade,
+    status text not null default 'pending', -- 'pending' | 'resolved'
+    -- Chacun un objet {"units":[{unit_id,unit_type,team_id,x,y,z}, ...]} — même structure que
+    -- Network.DeployedUnit côté client/serveur — jamais un tableau JSON nu au premier niveau
+    -- (limitation de JsonUtility côté Unity, voir MatchSessionManager_AsyncPause.paused_roster_json
+    -- pour le même choix déjà fait ailleurs dans ce schéma).
+    attacker_deployment_json jsonb,
+    defender_deployment_json jsonb,
+    deadline timestamptz not null,
+    winner_user_id uuid references auth.users(id),
+    created_at timestamptz not null default now(),
+    resolved_at timestamptz
+);
+
+create index on public.zone_sieges (status, deadline);
+create index on public.zone_sieges (defender_user_id, status);
+create index on public.zone_sieges (attacker_user_id, status);
+
+alter table public.zone_sieges enable row level security;
+
+create policy "Un joueur voit les sièges où il est attaquant ou défenseur"
+    on public.zone_sieges for select
+    to authenticated
+    using (auth.uid() = attacker_user_id or auth.uid() = defender_user_id);
+
+-- Seul le serveur de jeu (service_role, écrit les déploiements/la résolution) ou la fonction
+-- start_siege() ci-dessous (SECURITY DEFINER) peuvent écrire ici — jamais un PATCH/POST direct du
+-- client, même pour ses propres sièges (un client modifié pourrait sinon s'auto-déclarer vainqueur).
+revoke insert, update, delete on public.zone_sieges from authenticated;
+
+-- Déclare un siège sur une Zone déjà possédée par un autre joueur. Vérifie l'absence de bouclier
+-- actif et l'absence d'un siège déjà en cours sur cette même Zone (un seul siège actif à la fois
+-- par Zone, dans l'ordre d'arrivée) avant d'insérer la ligne et de notifier le défenseur.
+create or replace function public.start_siege(p_tile_x integer, p_tile_y integer, p_zoom smallint)
+returns table(new_siege_id bigint, siege_deadline timestamptz)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_attacker uuid := auth.uid();
+    v_owner uuid;
+    v_shield timestamptz;
+    v_existing bigint;
+    v_deadline timestamptz;
+begin
+    if v_attacker is null then
+        raise exception 'Non authentifié';
+    end if;
+
+    select owner_user_id, shield_until into v_owner, v_shield
+        from public.zones where tile_x = p_tile_x and tile_y = p_tile_y and zoom = p_zoom
+        for update;
+
+    if v_owner is null then
+        raise exception 'Zone neutre : capturez-la directement, pas besoin de siège';
+    end if;
+    if v_owner = v_attacker then
+        raise exception 'Vous possédez déjà cette zone';
+    end if;
+    if v_shield is not null and v_shield > now() then
+        raise exception 'Zone protégée jusqu''à %', v_shield;
+    end if;
+
+    select id into v_existing from public.zone_sieges
+        where tile_x = p_tile_x and tile_y = p_tile_y and zoom = p_zoom and status = 'pending';
+    if v_existing is not null then
+        raise exception 'Un siège est déjà en cours sur cette zone';
+    end if;
+
+    v_deadline := now() + interval '6 hours';
+    insert into public.zone_sieges (tile_x, tile_y, zoom, attacker_user_id, defender_user_id, deadline)
+        values (p_tile_x, p_tile_y, p_zoom, v_attacker, v_owner, v_deadline)
+        returning id into new_siege_id;
+    siege_deadline := v_deadline;
+
+    insert into public.notifications (user_id, type, message)
+        values (v_owner, 'under_attack',
+            'Votre territoire est assiégé ! Défendez-le dans les 6 prochaines heures ou votre garnison actuelle la défendra automatiquement.');
+
+    return next;
+end;
+$$;
+
+grant execute on function public.start_siege(integer, integer, smallint) to authenticated;
+
+-- Améliore le bâtiment de la Zone (niveau 1 -> 2 -> 3), coût croissant en AP. SECURITY DEFINER :
+-- action_points/zones.building_level ne sont pas directement modifiables par le client (voir les
+-- revoke plus haut/plus bas), seule cette fonction peut les changer ensemble, atomiquement.
+create or replace function public.upgrade_building(p_tile_x integer, p_tile_y integer, p_zoom smallint)
+returns table(new_action_points integer, new_level integer)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_user uuid := auth.uid();
+    v_owner uuid;
+    v_level integer;
+    v_cost integer;
+    v_ap integer;
+begin
+    if v_user is null then
+        raise exception 'Non authentifié';
+    end if;
+
+    select owner_user_id, building_level into v_owner, v_level
+        from public.zones where tile_x = p_tile_x and tile_y = p_tile_y and zoom = p_zoom
+        for update;
+
+    if v_owner is null or v_owner != v_user then
+        raise exception 'Vous ne possédez pas cette zone';
+    end if;
+    if v_level >= 3 then
+        raise exception 'Niveau de bâtiment maximum déjà atteint';
+    end if;
+
+    v_cost := case v_level when 1 then 200 when 2 then 500 else 999999 end;
+
+    select action_points into v_ap from public.profiles where id = v_user for update;
+    if v_ap is null or v_ap < v_cost then
+        raise exception 'Points d''action insuffisants (% disponibles, % requis)', coalesce(v_ap, 0), v_cost;
+    end if;
+
+    update public.profiles set action_points = action_points - v_cost where id = v_user;
+    update public.zones set building_level = v_level + 1
+        where tile_x = p_tile_x and tile_y = p_tile_y and zoom = p_zoom;
+
+    new_action_points := v_ap - v_cost;
+    new_level := v_level + 1;
+    return next;
+end;
+$$;
+
+grant execute on function public.upgrade_building(integer, integer, smallint) to authenticated;
+
+-- =========================================================================
 -- Note sur les écritures : le serveur de jeu Unity headless se connecte à Postgres
 -- avec sa propre chaîne de connexion (rôle "postgres", réseau Docker interne, jamais
 -- exposé publiquement) et contourne volontairement RLS/PostgREST pour ces écritures

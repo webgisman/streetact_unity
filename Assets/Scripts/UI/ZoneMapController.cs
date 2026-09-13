@@ -52,6 +52,17 @@ namespace Novgov.UI
         // résultat (capture/combat/refus) revient — voir HandleZoneResult et Show().
         private bool attackInFlight = false;
 
+        // Statut des Zones voisines, rafraîchi par RefreshNeighborOwnership — conservé en champs
+        // (2026-09-13) pour que les clics sur les boutons de direction (liés UNE SEULE FOIS dans
+        // BindUiOnce) puissent réagir au statut ACTUEL de la Zone visée (neutre/mienne/ennemie +
+        // bouclier) plutôt qu'à un flux d'attaque fixe décidé une fois pour toutes au chargement.
+        private readonly Dictionary<(int, int), string> lastKnownOwners = new Dictionary<(int, int), string>();
+        private readonly Dictionary<(int, int), string> lastKnownShields = new Dictionary<(int, int), string>();
+        // Vrai dès qu'un premier RefreshNeighborOwnership a réussi — une tuile ABSENTE de
+        // lastKnownOwners après ça signifie "Zone neutre, jamais capturée" (aucune ligne "zones"),
+        // PAS "statut inconnu" (voir OnDirectionClicked/DescribeOwner, même convention).
+        private bool neighborStatusLoaded = false;
+
         private void Awake()
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -75,6 +86,7 @@ namespace Novgov.UI
             RefreshCurrentZoneLabel();
             if (statusLabel != null) statusLabel.text = "";
             attackInFlight = false;
+            neighborStatusLoaded = false;
             UIScreenManager.Instance?.Show("ZoneMap");
             StartCoroutine(RefreshNeighborOwnership());
         }
@@ -95,10 +107,13 @@ namespace Novgov.UI
             btnAttackSouth = mapRoot.Q<Button>("btn-attack-south");
             btnAttackEast = mapRoot.Q<Button>("btn-attack-east");
             btnAttackWest = mapRoot.Q<Button>("btn-attack-west");
-            btnAttackNorth.clicked += () => Attack(ZoneManager.EnsureInstance().AttackNorth);
-            btnAttackSouth.clicked += () => Attack(ZoneManager.EnsureInstance().AttackSouth);
-            btnAttackEast.clicked += () => Attack(ZoneManager.EnsureInstance().AttackEast);
-            btnAttackWest.clicked += () => Attack(ZoneManager.EnsureInstance().AttackWest);
+            // 2026-09-13 : ne branche plus directement sur ZoneManager.AttackX (capture instantanée
+            // fixe) — une Zone ennemie passe maintenant par un siège (OnDirectionClicked décide au
+            // moment du clic, selon le statut ACTUEL de la Zone visée, voir lastKnownOwners/Shields).
+            btnAttackNorth.clicked += () => OnDirectionClicked(0, -1);
+            btnAttackSouth.clicked += () => OnDirectionClicked(0, 1);
+            btnAttackEast.clicked += () => OnDirectionClicked(1, 0);
+            btnAttackWest.clicked += () => OnDirectionClicked(-1, 0);
             mapRoot.Q<Button>("btn-zone-back").clicked += () => GameManagerUI.Instance?.ReturnToStartupMenu();
 
             VisualElement resultRoot = UIScreenManager.Instance.GetScreen("ZoneResult");
@@ -119,6 +134,79 @@ namespace Novgov.UI
             attackAction();
         }
 
+        /// <summary>Décide, au moment du clic, quoi faire de la Zone dans cette direction — capture
+        /// instantanée (neutre, inchangé), aucune action (déjà à vous), ou déclaration d'un SIÈGE
+        /// (ennemie, 2026-09-13) au lieu de l'ancien combat instantané contre une garnison IA. Le
+        /// statut vient de lastKnownOwners/lastKnownShields, remplis par le dernier
+        /// RefreshNeighborOwnership — un statut pas encore connu (juste après Show()) refuse l'action
+        /// plutôt que de risquer une décision sur une donnée périmée/absente.</summary>
+        private void OnDirectionClicked(int dx, int dy)
+        {
+            if (attackInFlight) return;
+            if (!neighborStatusLoaded)
+            {
+                if (statusLabel != null) statusLabel.text = "Statut des Zones pas encore connu — patientez.";
+                return;
+            }
+
+            ZoneManager zm = ZoneManager.EnsureInstance();
+            var tile = (zm.CurrentTileX + dx, zm.CurrentTileY + dy);
+            string myUserId = SupabaseAuthClient.CurrentSession?.user?.id;
+
+            // Absente de lastKnownOwners == Zone neutre (jamais capturée, aucune ligne "zones") —
+            // même convention que DescribeOwner ci-dessous, pas "statut inconnu" (voir
+            // neighborStatusLoaded juste au-dessus, qui couvre déjà ce cas).
+            lastKnownOwners.TryGetValue(tile, out string owner);
+
+            if (string.IsNullOrEmpty(owner))
+            {
+                // Neutre : capture instantanée inchangée (voir MatchSessionManager.RunConquestRequest).
+                Attack(() => MultiplayerMatchController.EnsureInstance().AttackZone(tile.Item1, tile.Item2));
+                return;
+            }
+
+            if (owner == myUserId)
+            {
+                if (statusLabel != null) statusLabel.text = "Cette Zone vous appartient déjà.";
+                return;
+            }
+
+            if (lastKnownShields.TryGetValue(tile, out string shieldUntilIso) && !string.IsNullOrEmpty(shieldUntilIso)
+                && System.DateTime.TryParse(shieldUntilIso, null, System.Globalization.DateTimeStyles.RoundtripKind, out System.DateTime shieldUntil)
+                && shieldUntil > System.DateTime.UtcNow)
+            {
+                var remaining = shieldUntil - System.DateTime.UtcNow;
+                if (statusLabel != null) statusLabel.text = $"Zone protégée encore {remaining.Hours}h{remaining.Minutes:D2} — impossible d'assiéger pour l'instant.";
+                return;
+            }
+
+            StartCoroutine(StartSiegeThenDeploy(tile.Item1, tile.Item2));
+        }
+
+        /// <summary>Déclare le siège (RPC start_siege, voir schema.sql §11) puis, seulement en cas de
+        /// succès, connecte l'attaquant pour son déploiement (SiegeZone) — jamais l'inverse : un
+        /// déploiement ne doit jamais démarrer pour un siège qui n'a en fait pas pu être créé
+        /// (bouclier posé entre-temps par une autre attaque, ou déjà un siège en cours sur cette
+        /// Zone).</summary>
+        private IEnumerator StartSiegeThenDeploy(int tileX, int tileY)
+        {
+            attackInFlight = true;
+            if (statusLabel != null) statusLabel.text = "Déclaration du siège...";
+
+            var task = SupabaseDatabaseClient.StartSiege(tileX, tileY, CityGenerator.ZONE_ZOOM);
+            while (!task.IsCompleted) yield return null;
+            var (ok, siegeId, error) = task.Result;
+
+            if (!ok)
+            {
+                attackInFlight = false;
+                if (statusLabel != null) statusLabel.text = $"Siège impossible : {error}";
+                yield break;
+            }
+
+            MultiplayerMatchController.EnsureInstance().SiegeZone(tileX, tileY, siegeId);
+        }
+
         private void RefreshCurrentZoneLabel()
         {
             if (currentZoneLabel == null) return;
@@ -133,7 +221,7 @@ namespace Novgov.UI
             UIScreenManager.Instance?.Show("ZoneResult");
         }
 
-        [System.Serializable] private class NeighborZoneEntry { public int tile_x; public int tile_y; public string owner_user_id; }
+        [System.Serializable] private class NeighborZoneEntry { public int tile_x; public int tile_y; public string owner_user_id; public string shield_until; }
         [System.Serializable] private class NeighborZoneQueryResult { public NeighborZoneEntry[] items; }
 
         /// <summary>Interroge le statut des 4 Zones voisines (neutre/possédée par moi/possédée par un
@@ -157,7 +245,7 @@ namespace Novgov.UI
 
             (int x, int y) north = (cx, cy - 1), south = (cx, cy + 1), east = (cx + 1, cy), west = (cx - 1, cy);
             string filter = $"tile_x=gte.{cx - 1}&tile_x=lte.{cx + 1}&tile_y=gte.{cy - 1}&tile_y=lte.{cy + 1}";
-            string url = $"{SupabaseAuthClient.RestBaseUrl}/zones?zoom=eq.{CityGenerator.ZONE_ZOOM}&{filter}&select=tile_x,tile_y,owner_user_id";
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/zones?zoom=eq.{CityGenerator.ZONE_ZOOM}&{filter}&select=tile_x,tile_y,owner_user_id,shield_until";
 
             using (UnityWebRequest req = UnityWebRequest.Get(url))
             {
@@ -166,6 +254,8 @@ namespace Novgov.UI
                 yield return req.SendWebRequest();
 
                 var owners = new System.Collections.Generic.Dictionary<(int, int), string>();
+                lastKnownOwners.Clear();
+                lastKnownShields.Clear();
                 // Distingue "requête réussie" de "échec réseau/parsing" : auparavant un échec
                 // laissait le dictionnaire vide sans le signaler, et DescribeOwner affichait alors
                 // silencieusement "Neutre" pour les 4 Zones (aucune entrée trouvée = statut par
@@ -179,7 +269,15 @@ namespace Novgov.UI
                         string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
                         var parsed = JsonUtility.FromJson<NeighborZoneQueryResult>(wrapped);
                         if (parsed?.items != null)
-                            foreach (var e in parsed.items) owners[(e.tile_x, e.tile_y)] = e.owner_user_id;
+                        {
+                            foreach (var e in parsed.items)
+                            {
+                                owners[(e.tile_x, e.tile_y)] = e.owner_user_id;
+                                lastKnownOwners[(e.tile_x, e.tile_y)] = e.owner_user_id;
+                                lastKnownShields[(e.tile_x, e.tile_y)] = e.shield_until;
+                            }
+                        }
+                        neighborStatusLoaded = true;
                     }
                     catch (System.Exception ex)
                     {

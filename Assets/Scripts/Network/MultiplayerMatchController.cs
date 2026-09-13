@@ -85,6 +85,11 @@ namespace Novgov.Network
         private int attackTileX;
         private int attackTileY;
 
+        // Siège ciblé par SiegeZone()/DefendSiege() (2026-09-13) — id de la ligne public.zone_sieges
+        // déjà créée côté client (SupabaseDatabaseClient.StartSiege, appelé AVANT cette connexion) ou
+        // déjà existante (défense). Voir NetMessage.siege_id.
+        private long pendingSiegeId;
+
         /// <summary>Résultat d'une demande de conquête INSTANTANÉE (zone_captured/zone_attack_result,
         /// pas de combat) — voir Novgov.UI.ZoneMapController, seul abonné actuel, qui affiche le
         /// message sur ZoneResultScreen. Le cas "combat de conquête" (match_found -> déploiement ->
@@ -326,7 +331,8 @@ namespace Novgov.Network
             // zone_tile_x/y (attackTileX/Y ci-dessus, une Zone précisément visée, pas un domicile).
             bool hasHomeTile = false;
             int homeTileX = 0, homeTileY = 0;
-            if (selectedMode != "conquest")
+            bool targetsSpecificZone = selectedMode == "conquest" || selectedMode == "siege_attack_deploy" || selectedMode == "siege_defend_deploy";
+            if (!targetsSpecificZone)
             {
                 var zoneManager = Novgov.Generation.ZoneManager.Instance;
                 if (zoneManager != null && zoneManager.HasHomeZone)
@@ -341,12 +347,13 @@ namespace Novgov.Network
             {
                 type = "join_matchmaking",
                 mode = selectedMode,
-                zone_tile_x = selectedMode == "conquest" ? attackTileX : homeTileX,
-                zone_tile_y = selectedMode == "conquest" ? attackTileY : homeTileY,
-                has_home_tile = hasHomeTile
+                zone_tile_x = targetsSpecificZone ? attackTileX : homeTileX,
+                zone_tile_y = targetsSpecificZone ? attackTileY : homeTileY,
+                has_home_tile = hasHomeTile,
+                siege_id = pendingSiegeId
             });
 
-            statusMessage = selectedMode == "conquest" ? $"Attaque de la Zone ({attackTileX},{attackTileY})..." : "Recherche d'adversaire...";
+            statusMessage = targetsSpecificZone ? $"Attaque de la Zone ({attackTileX},{attackTileY})..." : "Recherche d'adversaire...";
         }
 
         /// <summary>Demande au serveur d'attaquer/capturer la Zone de Conquête (tileX,tileY) — voir
@@ -359,6 +366,33 @@ namespace Novgov.Network
             selectedMode = "conquest";
             attackTileX = tileX;
             attackTileY = tileY;
+            StartCoroutine(ConnectToGameServerCoroutine());
+        }
+
+        /// <summary>Déploiement de l'ATTAQUANT pour un siège déjà déclaré (le siège lui-même doit
+        /// avoir été créé AVANT cet appel via SupabaseDatabaseClient.StartSiege — voir
+        /// Novgov.UI.ZoneMapController). Le serveur ouvre le même dock de déploiement qu'une Conquête
+        /// classique, mais ne fait tourner AUCUN combat immédiatement : voir
+        /// MatchSessionManager_Siege.RunSiegeAttackDeploy, résultat via "siege_deploy_ack"
+        /// (OnSiegeDeployAck), jamais "match_found"->combat->"match_over".</summary>
+        public void SiegeZone(int tileX, int tileY, long siegeId)
+        {
+            selectedMode = "siege_attack_deploy";
+            attackTileX = tileX;
+            attackTileY = tileY;
+            pendingSiegeId = siegeId;
+            StartCoroutine(ConnectToGameServerCoroutine());
+        }
+
+        /// <summary>Déploiement du DÉFENSEUR pour un siège en cours contre lui (voir la table
+        /// public.zone_sieges / la notification "under_attack" qui l'a informé) — même mécanique que
+        /// SiegeZone, côté défenseur. Voir MatchSessionManager_Siege.RunSiegeDefendDeploy.</summary>
+        public void DefendSiege(int tileX, int tileY, long siegeId)
+        {
+            selectedMode = "siege_defend_deploy";
+            attackTileX = tileX;
+            attackTileY = tileY;
+            pendingSiegeId = siegeId;
             StartCoroutine(ConnectToGameServerCoroutine());
         }
 
@@ -442,6 +476,7 @@ namespace Novgov.Network
                 case "city_verify_result": OnCityVerifyResult(msg); break;
                 case "zone_captured": OnZoneCaptured(msg); break;
                 case "zone_attack_result": OnZoneAttackResult(msg); break;
+                case "siege_deploy_ack": OnSiegeDeployAck(msg); break;
             }
         }
 
@@ -484,6 +519,34 @@ namespace Novgov.Network
             OnZoneResult?.Invoke(message);
         }
 
+        /// <summary>Réponse à la soumission d'un déploiement de SIÈGE (2026-09-13) — attaquant
+        /// (mode="siege_attack_deploy") ou défenseur (mode="siege_defend_deploy") vient de valider
+        /// son placement, voir MatchSessionManager_Siege.cs. Jamais de match live derrière : le
+        /// serveur ferme la connexion juste après (comme zone_captured/zone_attack_result), d'où la
+        /// réutilisation du même drapeau/événement OnZoneResult (déjà écouté par ZoneMapController
+        /// pour afficher un écran de résultat) plutôt que d'inventer un nouvel écran pour ça.</summary>
+        private void OnSiegeDeployAck(NetMessage msg)
+        {
+            expectingCloseAfterZoneResult = true;
+            string message;
+            if (msg.success)
+            {
+                message = currentMode == "siege_defend_deploy"
+                    ? "Défense organisée ! Le résultat du siège vous sera notifié."
+                    : "Siège lancé ! Le défenseur a 6 heures pour organiser sa défense — vous serez notifié du résultat.";
+            }
+            else
+            {
+                message = msg.reason switch
+                {
+                    "siege_invalid" => "Ce siège n'est plus valide (déjà résolu, expiré, ou vous n'y êtes pour rien).",
+                    "server_busy" => "Serveur occupé — réessayez dans un instant.",
+                    _ => "Impossible de soumettre ce déploiement de siège pour le moment.",
+                };
+            }
+            OnZoneResult?.Invoke(message);
+        }
+
         private int? preMatchExplorationTileX = null;
         private int? preMatchExplorationTileY = null;
 
@@ -510,11 +573,12 @@ namespace Novgov.Network
                 preMatchExplorationTileY = Novgov.Generation.ZoneManager.Instance.CurrentTileY;
             }
 
-            if (currentMode == "conquest")
+            if (currentMode == "conquest" || currentMode == "siege_attack_deploy" || currentMode == "siege_defend_deploy")
             {
                 // La géométrie RÉELLE de la Zone attaquée (bâtiments + sol + NavMesh) doit être
                 // chargée sur CE client avant d'ouvrir le déploiement — sans ça, le joueur placerait
-                // ses unités sur l'ancienne carte encore affichée à l'écran.
+                // ses unités sur l'ancienne carte encore affichée à l'écran. Même chargement pour un
+                // déploiement de siège (attaquant ou défenseur) : c'est la même vraie Zone GPS.
                 statusMessage = "Chargement de la Zone attaquée...";
                 StartCoroutine(LoadMatchMapThenOpenDeployment(true, msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
                 return;
@@ -1399,6 +1463,67 @@ namespace Novgov.Network
             }
         }
 
+        /// <summary>2026-09-13 : liste les sièges "pending" où le joueur est attaquant (statut
+        /// "en attente de résolution") ou défenseur ("Défendre maintenant" ouvre le même dock de
+        /// déploiement que l'attaquant, côté équipe 2 — voir MultiplayerMatchController.DefendSiege).</summary>
+        private async void RefreshSiegesScreen()
+        {
+            var root = UIScreenManager.Instance.GetScreen("Sieges");
+            if (root == null) return;
+            var scroll = root.Q<ScrollView>("sieges-scroll");
+            if (scroll == null) return;
+            scroll.Clear();
+            var lblLoading = new Label("Chargement des sièges...");
+            lblLoading.style.color = Color.white;
+            scroll.Add(lblLoading);
+
+            string myUserId = Novgov.Auth.SupabaseAuthClient.CurrentSession?.user?.id;
+            var (ok, list) = await Novgov.Auth.SupabaseDatabaseClient.GetMySieges();
+            scroll.Clear();
+            if (!ok || list == null || list.Length == 0)
+            {
+                var lbl = new Label("Aucun siège en cours (ni comme attaquant, ni comme défenseur).");
+                lbl.style.color = Color.white;
+                lbl.style.whiteSpace = WhiteSpace.Normal;
+                scroll.Add(lbl);
+                return;
+            }
+
+            foreach (var s in list)
+            {
+                bool isDefender = s.defender_user_id == myUserId;
+                var row = new VisualElement();
+                row.style.flexDirection = FlexDirection.Row;
+                row.style.justifyContent = Justify.SpaceBetween;
+                row.style.alignItems = Align.Center;
+                row.style.paddingTop = 8;
+                row.style.paddingBottom = 8;
+                row.style.borderBottomWidth = 1;
+                row.style.borderBottomColor = new Color(1, 1, 1, 0.2f);
+
+                var lblInfo = new Label(isDefender
+                    ? $"Zone ({s.tile_x},{s.tile_y}) assiégée — répondez avant l'échéance !"
+                    : $"Zone ({s.tile_x},{s.tile_y}) — siège en attente de résolution (vous êtes l'attaquant).");
+                lblInfo.style.color = Color.white;
+                lblInfo.style.fontSize = 15;
+                lblInfo.style.whiteSpace = WhiteSpace.Normal;
+                lblInfo.style.flexShrink = 1;
+                row.Add(lblInfo);
+
+                if (isDefender)
+                {
+                    var btnDefend = new Button();
+                    btnDefend.text = "Défendre maintenant";
+                    int tileX = s.tile_x, tileY = s.tile_y;
+                    long siegeId = s.id;
+                    btnDefend.clicked += () => DefendSiege(tileX, tileY, siegeId);
+                    row.Add(btnDefend);
+                }
+
+                scroll.Add(row);
+            }
+        }
+
         private async void RefreshBuildingsScreen()
         {
             var root = UIScreenManager.Instance.GetScreen("Buildings");
@@ -1428,15 +1553,44 @@ namespace Novgov.Network
                 var row = new VisualElement();
                 row.style.flexDirection = FlexDirection.Row;
                 row.style.justifyContent = Justify.SpaceBetween;
+                row.style.alignItems = Align.Center;
                 row.style.paddingTop = 8;
                 row.style.paddingBottom = 8;
                 row.style.borderBottomWidth = 1;
                 row.style.borderBottomColor = new Color(1,1,1,0.2f);
 
-                var lblInfo = new Label($"Zone: {z.tile_x},{z.tile_y} | Bâtiment HQ: {z.hq_building_index}");
+                var lblInfo = new Label($"Zone: {z.tile_x},{z.tile_y} | Bâtiment HQ: {z.hq_building_index} | Niveau: {z.building_level}/3");
                 lblInfo.style.color = Color.white;
                 lblInfo.style.fontSize = 16;
+                lblInfo.style.whiteSpace = WhiteSpace.Normal;
+                lblInfo.style.flexShrink = 1;
                 row.Add(lblInfo);
+
+                // 2026-09-13 : "renforcer son économie" (demande explicite) — investir des AP dans SA
+                // Zone augmente à la fois le revenu passif (ZoneIncomeLoop) ET la force de la
+                // garnison auto-générée en cas de siège non défendu en direct (voir
+                // MatchSessionManager_Siege.ResolveSiegeNow, schema.sql §11).
+                if (z.building_level < 3)
+                {
+                    var btnUpgrade = new Button();
+                    int cost = z.building_level == 1 ? 200 : 500;
+                    btnUpgrade.text = $"Améliorer ({cost} AP)";
+                    int tileX = z.tile_x, tileY = z.tile_y;
+                    btnUpgrade.clicked += async () =>
+                    {
+                        btnUpgrade.SetEnabled(false);
+                        var (upgraded, newAp, newLevel, error) = await Novgov.Auth.SupabaseDatabaseClient.UpgradeBuilding(tileX, tileY, CityGenerator.ZONE_ZOOM);
+                        if (!upgraded) Debug.LogWarning($"[MultiplayerMatchController] Amélioration de ({tileX},{tileY}) refusée : {error}");
+                        RefreshBuildingsScreen();
+                    };
+                    row.Add(btnUpgrade);
+                }
+                else
+                {
+                    var lblMax = new Label("Niveau maximum");
+                    lblMax.style.color = Color.gray;
+                    row.Add(lblMax);
+                }
 
                 scroll.Add(row);
             }
@@ -1562,6 +1716,12 @@ namespace Novgov.Network
                 RefreshNotificationsScreen();
             };
 
+            Button siegesBtn = modeSelectRoot?.Q<Button>("btn-sieges");
+            if (siegesBtn != null) siegesBtn.clicked += () => {
+                UIScreenManager.Instance.Show("Sieges");
+                RefreshSiegesScreen();
+            };
+
             Button backToStartupBtn = modeSelectRoot?.Q<Button>("btn-back-startup");
             if (backToStartupBtn != null)
             {
@@ -1580,6 +1740,9 @@ namespace Novgov.Network
 
             var notifRoot = UIScreenManager.Instance.GetScreen("Notifications");
             notifRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.ModeSelect));
+
+            var siegesRoot = UIScreenManager.Instance.GetScreen("Sieges");
+            siegesRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.ModeSelect));
 
             authRoot = UIScreenManager.Instance.GetScreen("Auth");
             authTitleLabel = authRoot.Q<Label>("title-label");

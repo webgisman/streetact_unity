@@ -74,7 +74,12 @@ namespace Novgov.Server
         /// isPlayerControlled=false avant cet appel (voir RunMatchLive) — ExecuterOrdres() ne planifie
         /// lui-même RIEN, mais une unité restée isPlayerControlled=false ailleurs dans le pipeline
         /// pourrait rester intégralement passive (ni ordre humain ni IA), un silence différent du
-        /// "tenir la position en se défendant" voulu pour un joueur ghosté.</summary>
+        /// "tenir la position en se défendant" voulu pour un joueur ghosté.
+        ///
+        /// p1 PEUT être null depuis 2026-09-13 (résolution HEADLESS d'un siège de Zone, voir
+        /// MatchSessionManager_Siege.ResolveSiegeNow — ni l'attaquant ni le défenseur n'ont de
+        /// connexion live pendant la résolution, la simulation elle-même n'en a jamais eu besoin,
+        /// seul l'envoi des snapshots en fin de tour en dépendait).</summary>
         private IEnumerator RunExecutionPhaseRealEngine(int turnNumber, PlayerConnection p1, PlayerConnection p2)
         {
             DateTime executionStartUtc = DateTime.UtcNow;
@@ -141,7 +146,7 @@ namespace Novgov.Server
             Snapshot[] snapshotsForTeam1 = FilterRealEngineSnapshotsForTeam(snapshots, unitById, 1);
             Snapshot[] snapshotsForTeam2 = FilterRealEngineSnapshotsForTeam(snapshots, unitById, 2);
 
-            if (!p1.IsDisconnected)
+            if (p1 != null && !p1.IsDisconnected)
             {
                 p1.Send(new NetMessage { type = "turn_result", turn_number = turnNumber, snapshot_interval_ms = TickDurationMs, snapshots = snapshotsForTeam1 });
             }

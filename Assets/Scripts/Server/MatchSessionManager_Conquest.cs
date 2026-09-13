@@ -321,7 +321,7 @@ namespace Novgov.Server
 
             if (captured && !string.IsNullOrEmpty(defenderOwnerId))
             {
-                yield return LootActionPoints(attacker, defenderOwnerId);
+                yield return LootActionPoints(attacker.UserId, defenderOwnerId);
             }
 
             yield return ApplyConquestRatingDelta(attacker, captured, won);
@@ -356,8 +356,11 @@ namespace Novgov.Server
         /// "username=eq." alors que defenderOwnerId/attacker.UserId sont de vrais UUID (colonne
         /// "id") — ne correspondait donc JAMAIS à une ligne réelle, et la colonne action_points
         /// elle-même n'existait pas encore avant cette même session (voir schema.sql §10) : ce
-        /// pillage n'avait donc jamais pu fonctionner ne serait-ce qu'une fois en production.</summary>
-        private IEnumerator LootActionPoints(PlayerConnection attacker, string defenderOwnerId)
+        /// pillage n'avait donc jamais pu fonctionner ne serait-ce qu'une fois en production.
+        /// Prend un simple userId (pas une PlayerConnection, 2026-09-13) : réutilisé par la
+        /// résolution HEADLESS des sièges (MatchSessionManager_Siege.cs), où aucun des deux joueurs
+        /// n'a de connexion live pendant la résolution.</summary>
+        private IEnumerator LootActionPoints(string attackerUserId, string defenderOwnerId)
         {
             int stolenAP = 0;
             yield return FetchActionPoints(defenderOwnerId, ap => stolenAP = ap);
@@ -366,10 +369,10 @@ namespace Novgov.Server
             yield return PostgrestPatch($"/profiles?id=eq.{defenderOwnerId}", "{\"action_points\":0}");
 
             int attackerAP = 0;
-            yield return FetchActionPoints(attacker.UserId, ap => attackerAP = ap);
-            yield return PostgrestPatch($"/profiles?id=eq.{attacker.UserId}", "{\"action_points\":" + (attackerAP + stolenAP) + "}");
+            yield return FetchActionPoints(attackerUserId, ap => attackerAP = ap);
+            yield return PostgrestPatch($"/profiles?id=eq.{attackerUserId}", "{\"action_points\":" + (attackerAP + stolenAP) + "}");
 
-            Debug.Log($"[Conquête] {attacker.UserId} a pillé {stolenAP} AP au joueur {defenderOwnerId} !");
+            Debug.Log($"[Conquête] {attackerUserId} a pillé {stolenAP} AP au joueur {defenderOwnerId} !");
         }
 
         private IEnumerator FetchActionPoints(string userId, Action<int> onResult)

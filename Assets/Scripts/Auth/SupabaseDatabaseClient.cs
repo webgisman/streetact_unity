@@ -218,11 +218,18 @@ namespace Novgov.Auth
             public int tile_y;
             public string owner_user_id;
             public int hq_building_index = -1;
+            // 2026-09-13 (schema.sql §11) : niveau d'investissement du propriétaire (1-3, voir
+            // UpgradeBuilding) et fin de bouclier de grâce après un siège résolu (ISO 8601, vide/null
+            // = pas de bouclier actif).
+            public int building_level = 1;
+            public string shield_until;
         }
+
+        private const string ZoneInfoSelect = "tile_x,tile_y,owner_user_id,hq_building_index,building_level,shield_until";
 
         public static async Task<(bool ok, ZoneInfo zone)> GetZoneInfo(int tileX, int tileY, int zoom)
         {
-            string url = $"{SupabaseAuthClient.RestBaseUrl}/zones?tile_x=eq.{tileX}&tile_y=eq.{tileY}&zoom=eq.{zoom}&select=tile_x,tile_y,owner_user_id,hq_building_index";
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/zones?tile_x=eq.{tileX}&tile_y=eq.{tileY}&zoom=eq.{zoom}&select={ZoneInfoSelect}";
             using var req = UnityWebRequest.Get(url);
             SetupHeaders(req);
             await req.SendWebRequest();
@@ -239,13 +246,98 @@ namespace Novgov.Auth
                 return (false, new ZoneInfo[0]);
 
             string userId = SupabaseAuthClient.CurrentSession.user.id;
-            string url = $"{SupabaseAuthClient.RestBaseUrl}/zones?owner_user_id=eq.{userId}&select=tile_x,tile_y,owner_user_id,hq_building_index";
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/zones?owner_user_id=eq.{userId}&select={ZoneInfoSelect}";
             using var req = UnityWebRequest.Get(url);
             SetupHeaders(req);
             await req.SendWebRequest();
             if (req.result != UnityWebRequest.Result.Success) return (false, new ZoneInfo[0]);
 
             return (true, JsonHelper.FromJson<ZoneInfo>(req.downloadHandler.text));
+        }
+
+        [Serializable] private class SiegeStartEntry { public long new_siege_id; public string siege_deadline; }
+
+        /// <summary>Déclare un siège sur une Zone déjà possédée par un autre joueur (schema.sql §11,
+        /// fonction start_siege) — vérifie bouclier/siège déjà en cours SERVEUR-SIDE (SECURITY
+        /// DEFINER), écrit la notification au défenseur. N'ouvre PAS encore la connexion de jeu :
+        /// voir Novgov.Network.MultiplayerMatchController.SiegeZone, appelé seulement si ok=true.</summary>
+        public static async Task<(bool ok, long siegeId, string error)> StartSiege(int tileX, int tileY, int zoom)
+        {
+            if (SupabaseAuthClient.CurrentSession == null) return (false, 0, "Non connecté");
+
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/rpc/start_siege";
+            string json = "{\"p_tile_x\":" + tileX + ",\"p_tile_y\":" + tileY + ",\"p_zoom\":" + zoom + "}";
+            using var req = new UnityWebRequest(url, "POST");
+            req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
+            req.downloadHandler = new DownloadHandlerBuffer();
+            SetupHeaders(req);
+            req.SetRequestHeader("Content-Type", "application/json");
+            await req.SendWebRequest();
+
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                string body = req.downloadHandler.text;
+                return (false, 0, string.IsNullOrEmpty(body) ? req.error : body);
+            }
+
+            var arr = JsonHelper.FromJson<SiegeStartEntry>(req.downloadHandler.text);
+            if (arr == null || arr.Length == 0) return (false, 0, "Réponse inattendue");
+            return (true, arr[0].new_siege_id, null);
+        }
+
+        [Serializable] private class UpgradeBuildingEntry { public int new_action_points; public int new_level; }
+
+        /// <summary>Améliore le bâtiment de la Zone (niveau 1->2->3, schema.sql §11, fonction
+        /// upgrade_building) — coût croissant en AP, vérifié/déduit atomiquement côté serveur.</summary>
+        public static async Task<(bool ok, int newActionPoints, int newLevel, string error)> UpgradeBuilding(int tileX, int tileY, int zoom)
+        {
+            if (SupabaseAuthClient.CurrentSession == null) return (false, 0, 0, "Non connecté");
+
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/rpc/upgrade_building";
+            string json = "{\"p_tile_x\":" + tileX + ",\"p_tile_y\":" + tileY + ",\"p_zoom\":" + zoom + "}";
+            using var req = new UnityWebRequest(url, "POST");
+            req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
+            req.downloadHandler = new DownloadHandlerBuffer();
+            SetupHeaders(req);
+            req.SetRequestHeader("Content-Type", "application/json");
+            await req.SendWebRequest();
+
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                string body = req.downloadHandler.text;
+                return (false, 0, 0, string.IsNullOrEmpty(body) ? req.error : body);
+            }
+
+            var arr = JsonHelper.FromJson<UpgradeBuildingEntry>(req.downloadHandler.text);
+            if (arr == null || arr.Length == 0) return (false, 0, 0, "Réponse inattendue");
+            return (true, arr[0].new_action_points, arr[0].new_level, null);
+        }
+
+        [Serializable]
+        public class SiegeInfo
+        {
+            public long id;
+            public int tile_x;
+            public int tile_y;
+            public string attacker_user_id;
+            public string defender_user_id;
+            public string status;
+            public string deadline;
+        }
+
+        /// <summary>Sièges "pending" où le joueur connecté est attaquant OU défenseur — la policy RLS
+        /// (schema.sql §11) filtre déjà à ses propres lignes, pas besoin d'un filtre explicite ici.</summary>
+        public static async Task<(bool ok, SiegeInfo[] sieges)> GetMySieges()
+        {
+            if (SupabaseAuthClient.CurrentSession == null) return (false, new SiegeInfo[0]);
+
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/zone_sieges?status=eq.pending&select=id,tile_x,tile_y,attacker_user_id,defender_user_id,status,deadline&order=deadline.asc";
+            using var req = UnityWebRequest.Get(url);
+            SetupHeaders(req);
+            await req.SendWebRequest();
+            if (req.result != UnityWebRequest.Result.Success) return (false, new SiegeInfo[0]);
+
+            return (true, JsonHelper.FromJson<SiegeInfo>(req.downloadHandler.text));
         }
 
         // --- NOTIFICATIONS (schema.sql §9) — écrites UNIQUEMENT par le serveur de jeu (connexion

@@ -116,6 +116,7 @@ namespace Novgov.Server
             StartCoroutine(SetupWorldOnce());
             StartCoroutine(InstanceHeartbeatLoop());
             StartCoroutine(ZoneIncomeLoop());
+            StartCoroutine(SiegeResolutionLoop());
         }
 
         // =====================================================================
@@ -140,12 +141,16 @@ namespace Novgov.Server
             }
         }
 
-        [Serializable] private class ZoneOwnerEntry { public string owner_user_id; }
+        [Serializable] private class ZoneOwnerEntry { public string owner_user_id; public int building_level; }
         [Serializable] private class ZoneOwnerQueryResult { public ZoneOwnerEntry[] items; }
 
+        /// <summary>2026-09-13 : le revenu par Zone était fixe (10 AP), quel que soit l'investissement
+        /// du propriétaire — pondéré maintenant par building_level (schema.sql §11, upgrade_building())
+        /// pour que "renforcer son économie" (demande explicite) ait un effet réel et mesurable, pas
+        /// seulement un plafond de défense plus dur en cas de siège.</summary>
         private IEnumerator GrantZoneIncome()
         {
-            string url = $"{GameServerBootstrap.RestUrl}/zones?owner_user_id=not.is.null&select=owner_user_id";
+            string url = $"{GameServerBootstrap.RestUrl}/zones?owner_user_id=not.is.null&select=owner_user_id,building_level";
             using var req = UnityEngine.Networking.UnityWebRequest.Get(url);
             req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
             req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
@@ -156,7 +161,8 @@ namespace Novgov.Server
                 yield break;
             }
 
-            var ownedCounts = new Dictionary<string, int>();
+            var incomeByOwner = new Dictionary<string, int>();
+            var zoneCountByOwner = new Dictionary<string, int>();
             try
             {
                 string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
@@ -166,8 +172,11 @@ namespace Novgov.Server
                     foreach (var e in parsed.items)
                     {
                         if (string.IsNullOrEmpty(e.owner_user_id)) continue;
-                        ownedCounts.TryGetValue(e.owner_user_id, out int cur);
-                        ownedCounts[e.owner_user_id] = cur + 1;
+                        int level = Mathf.Max(1, e.building_level);
+                        incomeByOwner.TryGetValue(e.owner_user_id, out int curIncome);
+                        incomeByOwner[e.owner_user_id] = curIncome + level * ZoneIncomePerZone;
+                        zoneCountByOwner.TryGetValue(e.owner_user_id, out int curCount);
+                        zoneCountByOwner[e.owner_user_id] = curCount + 1;
                     }
                 }
             }
@@ -177,13 +186,13 @@ namespace Novgov.Server
                 yield break;
             }
 
-            foreach (var kv in ownedCounts)
+            foreach (var kv in incomeByOwner)
             {
                 int currentAp = 0;
                 yield return FetchActionPoints(kv.Key, ap => currentAp = ap);
-                int income = kv.Value * ZoneIncomePerZone;
+                int income = kv.Value;
                 yield return PostgrestPatch($"/profiles?id=eq.{kv.Key}", "{\"action_points\":" + (currentAp + income) + "}");
-                Debug.Log($"[ZoneIncome] {kv.Key} : +{income} AP pour {kv.Value} Zone(s) possédée(s).");
+                Debug.Log($"[ZoneIncome] {kv.Key} : +{income} AP pour {zoneCountByOwner[kv.Key]} Zone(s) possédée(s) (niveaux de bâtiment inclus).");
             }
         }
 
@@ -301,6 +310,21 @@ namespace Novgov.Server
                     if (conn.Mode == "practice_ai")
                     {
                         HandlePracticeAiMessage(conn);
+                        break;
+                    }
+
+                    // Sièges de Zone (2026-09-13) : comme la Conquête, PAS un appariement — une
+                    // connexion dédiée à UN siège précis (déjà créé via start_siege() côté client),
+                    // pour y soumettre un déploiement (attaquant OU défenseur). Voir
+                    // MatchSessionManager_Siege.cs.
+                    if (conn.Mode == "siege_attack_deploy")
+                    {
+                        HandleSiegeAttackDeployMessage(conn, msg);
+                        break;
+                    }
+                    if (conn.Mode == "siege_defend_deploy")
+                    {
+                        HandleSiegeDefendDeployMessage(conn, msg);
                         break;
                     }
 

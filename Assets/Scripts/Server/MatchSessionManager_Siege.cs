@@ -1,0 +1,616 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using Novgov.Network;
+using UnityEngine;
+using UnityEngine.Networking;
+
+namespace Novgov.Server
+{
+    /// <summary>
+    /// Sièges de Zone PvP asynchrones (2026-09-13, demande explicite : "les joueurs vont vouloir
+    /// attaquer une map déjà conquise... le joueur doit être notifié et organiser tout cela").
+    /// Voir schema.sql §11 pour le schéma complet (zones.building_level/shield_until, table
+    /// public.zone_sieges, fonctions start_siege()/upgrade_building()).
+    ///
+    /// Déroulé en 2 temps, jamais un combat instantané comme l'ancienne Conquête contre un joueur
+    /// (RunConquestSkirmish, toujours vs garnison IA, INCHANGÉE — reste utilisée pour une Zone
+    /// NEUTRE) :
+    ///   1. Le client appelle start_siege() (RPC, schema.sql §11) — hors de ce fichier, avant même
+    ///      d'ouvrir une connexion ici — puis se connecte avec mode="siege_attack_deploy" pour
+    ///      DÉPLOYER (comme un déploiement de Conquête classique). Ce déploiement est capturé
+    ///      (type + nombre de chaque unité, voir SerializeDeployedUnits) et stocké dans
+    ///      zone_sieges.attacker_deployment_json — AUCUN combat ne tourne encore à ce stade.
+    ///   2. Si le défenseur se connecte avant l'échéance (mode="siege_defend_deploy"), il déploie à
+    ///      son tour sa propre garnison — dès que les deux déploiements sont présents, le combat est
+    ///      résolu IMMÉDIATEMENT (ResolveSiegeNow). Sinon, SiegeResolutionLoop détecte l'échéance
+    ///      dépassée et génère automatiquement une défense à partir du roster ACTUEL du défenseur.
+    ///
+    /// Résolution (ResolveSiegeNow) : les deux forces ne sont PAS spawnées à leurs zones de
+    /// déploiement PvP habituelles (à ~70m l'une de l'autre, hors de portée d'engagement) — aucun des
+    /// deux camps n'a d'ordre de mouvement à ce stade (ni attaquant ni défenseur n'est un joueur
+    /// vivant pendant la résolution), donc rien ne les ferait jamais se rapprocher. Elles sont
+    /// spawnées en formation de choc SERRÉE (SpawnClashForce, ~10-15m d'écart) pour que le combat
+    /// auto-engage naturellement (UnitAI_Combat.Update()/GetVisibleEnemy(), qui ne dépend d'AUCUN
+    /// ordre — seulement de la portée/ligne de vue) sans avoir besoin de réintroduire un planificateur
+    /// tactique headless. Un seul appel à RunExecutionPhaseRealEngine suffit alors à trancher (vrai
+    /// moteur Unity, comme partout ailleurs cette session).
+    /// </summary>
+    public partial class MatchSessionManager
+    {
+        // =====================================================================
+        // DTOs réseau/DB
+        // =====================================================================
+
+        [Serializable] private class DeployedUnitList { public DeployedUnit[] units; }
+
+        [Serializable]
+        private class SiegeRowDto
+        {
+            public long id;
+            public int tile_x;
+            public int tile_y;
+            public int zoom;
+            public string attacker_user_id;
+            public string defender_user_id;
+            public string status;
+            public string deadline;
+            public DeployedUnitList attacker_deployment_json;
+            public DeployedUnitList defender_deployment_json;
+        }
+        [Serializable] private class SiegeRowQueryResult { public SiegeRowDto[] items; }
+
+        private const string SiegeRowSelect = "id,tile_x,tile_y,zoom,attacker_user_id,defender_user_id,status,deadline,attacker_deployment_json,defender_deployment_json";
+
+        private IEnumerator FetchSiegeRow(long siegeId, Action<SiegeRowDto> onResult)
+        {
+            string url = $"{GameServerBootstrap.RestUrl}/zone_sieges?id=eq.{siegeId}&select={SiegeRowSelect}";
+            using var req = UnityWebRequest.Get(url);
+            req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
+            req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+            yield return req.SendWebRequest();
+            if (req.result != UnityWebRequest.Result.Success) { onResult(null); yield break; }
+
+            try
+            {
+                string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                var parsed = JsonUtility.FromJson<SiegeRowQueryResult>(wrapped);
+                onResult(parsed?.items != null && parsed.items.Length > 0 ? parsed.items[0] : null);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Siège] Parsing du siège #{siegeId} échoué : {ex.Message}");
+                onResult(null);
+            }
+        }
+
+        private static string SerializeDeployedUnits(List<DeployedUnit> units)
+        {
+            // {"units":[...]} directement — jamais un tableau JSON nu au premier niveau (limitation
+            // de JsonUtility), même choix déjà fait pour matches.paused_roster_json, voir
+            // MatchSessionManager_AsyncPause.cs.
+            return JsonUtility.ToJson(new DeployedUnitList { units = units.ToArray() });
+        }
+
+        // =====================================================================
+        // 1. Déploiement de l'ATTAQUANT — mode="siege_attack_deploy"
+        // =====================================================================
+
+        private void HandleSiegeAttackDeployMessage(PlayerConnection conn, NetMessage msg)
+        {
+            if (matchInProgress)
+            {
+                conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "server_busy" });
+                conn.Close();
+                return;
+            }
+            matchInProgress = true;
+            StartCoroutine(ReportInstanceStatus());
+            StartCoroutine(RunSiegeAttackDeployGuarded(conn, msg.siege_id, msg.zone_tile_x, msg.zone_tile_y));
+        }
+
+        /// <summary>Même principe que RunConquestRequestGuarded : une exception non prévue ne doit
+        /// jamais laisser matchInProgress bloqué à "true" pour toujours.</summary>
+        private IEnumerator RunSiegeAttackDeployGuarded(PlayerConnection conn, long siegeId, int tileX, int tileY)
+        {
+            IEnumerator inner = RunSiegeAttackDeploy(conn, siegeId, tileX, tileY);
+            while (true)
+            {
+                bool moved = false, crashed = false;
+                try { moved = inner.MoveNext(); }
+                catch (Exception e)
+                {
+                    Debug.LogError($"[Siège] Exception pendant le déploiement de l'attaquant (#{siegeId}) : {e}");
+                    crashed = true;
+                }
+                if (crashed)
+                {
+                    try { if (!conn.IsDisconnected) conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "server_error" }); } catch { }
+                    try { conn.Close(); } catch { }
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                    yield break;
+                }
+                if (!moved)
+                {
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                    yield break;
+                }
+                yield return inner.Current;
+            }
+        }
+
+        private IEnumerator RunSiegeAttackDeploy(PlayerConnection conn, long siegeId, int tileX, int tileY)
+        {
+            SiegeRowDto siege = null;
+            yield return FetchSiegeRow(siegeId, s => siege = s);
+            if (siege == null || siege.status != "pending" || siege.attacker_user_id != conn.UserId)
+            {
+                conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "siege_invalid" });
+                conn.Close();
+                yield break;
+            }
+
+            UnitSpawnerUI.Instance.ClearAllUnits();
+            yield return null;
+            yield return LoadZoneOnServer(tileX, tileY);
+
+            CityGenerator.TryReadZoneCacheFromDisk(tileX, tileY, out string cityDataJson);
+            conn.Send(new NetMessage
+            {
+                type = "match_found",
+                match_id = Guid.NewGuid().ToString(),
+                team_id = 1,
+                opponent_username = "Siège",
+                mode = "siege_attack_deploy",
+                zone_tile_x = tileX,
+                zone_tile_y = tileY,
+                city_data_json = cityDataJson
+            });
+
+            yield return RunSiegeDeploymentPhase(conn);
+
+            var attackerUnits = ResolveDeployment(conn, 1, out bool trimmed);
+            string unitsJson = SerializeDeployedUnits(attackerUnits);
+            yield return PostgrestPatch($"/zone_sieges?id=eq.{siegeId}", "{\"attacker_deployment_json\":" + unitsJson + "}");
+
+            UnitSpawnerUI.Instance.ClearAllUnits();
+
+            if (!conn.IsDisconnected)
+                conn.Send(new NetMessage { type = "siege_deploy_ack", success = true, reason = trimmed ? "roster_trimmed" : null });
+            conn.Close();
+
+            // Le défenseur avait peut-être déjà répondu avant nous (rare, mais possible si les deux
+            // joueurs sont en ligne au même moment) — dans ce cas, résout tout de suite plutôt que
+            // d'attendre le prochain passage de SiegeResolutionLoop (jusqu'à 60s).
+            SiegeRowDto refreshed = null;
+            yield return FetchSiegeRow(siegeId, s => refreshed = s);
+            if (refreshed != null && refreshed.status == "pending"
+                && refreshed.defender_deployment_json?.units != null && refreshed.defender_deployment_json.units.Length > 0)
+            {
+                yield return ResolveSiegeNow(siegeId);
+            }
+        }
+
+        // =====================================================================
+        // 2. Déploiement du DÉFENSEUR — mode="siege_defend_deploy"
+        // =====================================================================
+
+        private void HandleSiegeDefendDeployMessage(PlayerConnection conn, NetMessage msg)
+        {
+            if (matchInProgress)
+            {
+                conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "server_busy" });
+                conn.Close();
+                return;
+            }
+            matchInProgress = true;
+            StartCoroutine(ReportInstanceStatus());
+            StartCoroutine(RunSiegeDefendDeployGuarded(conn, msg.siege_id, msg.zone_tile_x, msg.zone_tile_y));
+        }
+
+        private IEnumerator RunSiegeDefendDeployGuarded(PlayerConnection conn, long siegeId, int tileX, int tileY)
+        {
+            IEnumerator inner = RunSiegeDefendDeploy(conn, siegeId, tileX, tileY);
+            while (true)
+            {
+                bool moved = false, crashed = false;
+                try { moved = inner.MoveNext(); }
+                catch (Exception e)
+                {
+                    Debug.LogError($"[Siège] Exception pendant le déploiement du défenseur (#{siegeId}) : {e}");
+                    crashed = true;
+                }
+                if (crashed)
+                {
+                    try { if (!conn.IsDisconnected) conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "server_error" }); } catch { }
+                    try { conn.Close(); } catch { }
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                    yield break;
+                }
+                if (!moved)
+                {
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                    yield break;
+                }
+                yield return inner.Current;
+            }
+        }
+
+        private IEnumerator RunSiegeDefendDeploy(PlayerConnection conn, long siegeId, int tileX, int tileY)
+        {
+            SiegeRowDto siege = null;
+            yield return FetchSiegeRow(siegeId, s => siege = s);
+            if (siege == null || siege.status != "pending" || siege.defender_user_id != conn.UserId)
+            {
+                conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "siege_invalid" });
+                conn.Close();
+                yield break;
+            }
+
+            UnitSpawnerUI.Instance.ClearAllUnits();
+            yield return null;
+            yield return LoadZoneOnServer(tileX, tileY);
+
+            CityGenerator.TryReadZoneCacheFromDisk(tileX, tileY, out string cityDataJson);
+            conn.Send(new NetMessage
+            {
+                type = "match_found",
+                match_id = Guid.NewGuid().ToString(),
+                team_id = 2,
+                opponent_username = "Siège",
+                mode = "siege_defend_deploy",
+                zone_tile_x = tileX,
+                zone_tile_y = tileY,
+                city_data_json = cityDataJson
+            });
+
+            yield return RunSiegeDeploymentPhase(conn);
+
+            var defenderUnits = ResolveDeployment(conn, 2, out bool trimmed);
+            string unitsJson = SerializeDeployedUnits(defenderUnits);
+            yield return PostgrestPatch($"/zone_sieges?id=eq.{siegeId}", "{\"defender_deployment_json\":" + unitsJson + "}");
+
+            UnitSpawnerUI.Instance.ClearAllUnits();
+
+            if (!conn.IsDisconnected)
+                conn.Send(new NetMessage { type = "siege_deploy_ack", success = true, reason = trimmed ? "roster_trimmed" : null });
+            conn.Close();
+
+            SiegeRowDto refreshed = null;
+            yield return FetchSiegeRow(siegeId, s => refreshed = s);
+            if (refreshed != null && refreshed.status == "pending"
+                && refreshed.attacker_deployment_json?.units != null && refreshed.attacker_deployment_json.units.Length > 0)
+            {
+                yield return ResolveSiegeNow(siegeId);
+            }
+        }
+
+        /// <summary>Comme RunConquestDeploymentPhase, mais pour UN SEUL camp (l'autre n'existe pas
+        /// encore à ce stade — ni combat, ni auto-déploiement adverse ici, voir tête de fichier) :
+        /// attend jusqu'à DeploymentSeconds que ce joueur soumette "submit_deployment".</summary>
+        private IEnumerator RunSiegeDeploymentPhase(PlayerConnection conn)
+        {
+            conn.HasSubmittedDeployment = false;
+            conn.PendingDeployment = null;
+            conn.MapReady = false;
+
+            float mapWait = MapReadyMaxWaitSeconds;
+            while (mapWait > 0f && !conn.MapReady)
+            {
+                DrainMessages(conn, 0);
+                if (conn.IsDisconnected) yield break;
+                mapWait -= Time.deltaTime;
+                yield return null;
+            }
+
+            float remaining = DeploymentSeconds;
+            int lastTick = -1;
+            while (remaining > 0f && !conn.HasSubmittedDeployment)
+            {
+                DrainMessages(conn, 0);
+                if (conn.IsDisconnected) yield break;
+
+                int secondsLeft = Mathf.CeilToInt(remaining);
+                if (secondsLeft != lastTick)
+                {
+                    lastTick = secondsLeft;
+                    conn.Send(new NetMessage { type = "turn_timer", seconds_remaining = secondsLeft });
+                }
+                remaining -= Time.deltaTime;
+                yield return null;
+            }
+        }
+
+        // =====================================================================
+        // 3. Résolution automatique (échéance dépassée) — boucle de fond
+        // =====================================================================
+
+        private const float SiegeResolutionPollSeconds = 60f;
+
+        private IEnumerator SiegeResolutionLoop()
+        {
+            while (true)
+            {
+                yield return new WaitForSeconds(SiegeResolutionPollSeconds);
+                // Un déploiement en cours (attaquant OU défenseur) ou une résolution déjà en cours
+                // tient déjà matchInProgress — réessaie simplement au prochain passage plutôt que de
+                // faire la queue : au pire un siège échu attend une minute de plus, sans conséquence.
+                if (matchInProgress) continue;
+
+                long dueSiegeId = 0;
+                yield return FetchDueSiegeId(id => dueSiegeId = id);
+                if (dueSiegeId <= 0) continue;
+
+                matchInProgress = true;
+                StartCoroutine(ReportInstanceStatus());
+                StartCoroutine(ResolveSiegeNowGuarded(dueSiegeId));
+            }
+        }
+
+        [Serializable] private class DueSiegeEntry { public long id; }
+        [Serializable] private class DueSiegeQueryResult { public DueSiegeEntry[] items; }
+
+        private IEnumerator FetchDueSiegeId(Action<long> onResult)
+        {
+            string nowIso = UnityWebRequest.EscapeURL(DateTime.UtcNow.ToString("o"));
+            string url = $"{GameServerBootstrap.RestUrl}/zone_sieges?status=eq.pending&deadline=lt.{nowIso}&select=id&order=deadline.asc&limit=1";
+            using var req = UnityWebRequest.Get(url);
+            req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
+            req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+            yield return req.SendWebRequest();
+            if (req.result != UnityWebRequest.Result.Success) { onResult(0); yield break; }
+
+            try
+            {
+                string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                var parsed = JsonUtility.FromJson<DueSiegeQueryResult>(wrapped);
+                onResult(parsed?.items != null && parsed.items.Length > 0 ? parsed.items[0].id : 0);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Siège] Parsing des sièges échus échoué : {ex.Message}");
+                onResult(0);
+            }
+        }
+
+        private IEnumerator ResolveSiegeNowGuarded(long siegeId)
+        {
+            IEnumerator inner = ResolveSiegeNow(siegeId);
+            while (true)
+            {
+                bool moved = false, crashed = false;
+                try { moved = inner.MoveNext(); }
+                catch (Exception e)
+                {
+                    Debug.LogError($"[Siège] Exception pendant la résolution du siège #{siegeId} : {e}");
+                    crashed = true;
+                }
+                if (crashed || !moved)
+                {
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                    yield break;
+                }
+                yield return inner.Current;
+            }
+        }
+
+        // =====================================================================
+        // 4. Résolution du combat — HEADLESS, aucune connexion live des deux côtés
+        // =====================================================================
+
+        // Formation de choc : les deux forces sont volontairement spawnées à ~12m l'une de l'autre
+        // (pas aux zones de déploiement PvP habituelles, ~70m d'écart) — voir tête de fichier pour
+        // pourquoi (aucun ordre de mouvement n'existe côté serveur pendant une résolution headless).
+        private static readonly Vector3 SiegeClashAnchorAttacker = new Vector3(-6f, 0f, 0f);
+        private static readonly Vector3 SiegeClashAnchorDefender = new Vector3(6f, 0f, 0f);
+
+        private void SpawnClashForce(int team, DeployedUnit[] units, Vector3 anchor)
+        {
+            if (units == null) return;
+            int i = 0;
+            foreach (var u in units)
+            {
+                if (!Enum.IsDefined(typeof(UnitSpawnerUI.UnitType), u.unit_type)) continue;
+                var type = (UnitSpawnerUI.UnitType)u.unit_type;
+                if (type == UnitSpawnerUI.UnitType.BarricadeRoutiere) continue; // immobile, inutile dans un choc frontal
+                float angle = i * 47f;
+                float radius = 2f + i * 0.6f;
+                Vector3 offset = Quaternion.Euler(0f, angle, 0f) * new Vector3(radius, 0f, 0f);
+                UnitSpawnerUI.Instance.SpawnUnitAt(type, anchor + offset, team);
+                i++;
+            }
+        }
+
+        private static List<DeployedUnit> ExpandRosterToDeployedUnits(Novgov.Auth.PlayerRosterItem[] roster)
+        {
+            var list = new List<DeployedUnit>();
+            if (roster == null) return list;
+            foreach (var item in roster)
+            {
+                if (item.quantity <= 0) continue;
+                UnitSpawnerUI.UnitType ut = UnitSpawnerUI.UnitType.Fantassin;
+                if (item.unit_type.Equals("CharLeopard", StringComparison.OrdinalIgnoreCase)) ut = UnitSpawnerUI.UnitType.CharLeopard;
+                else if (item.unit_type.Equals("VehiculeCanon", StringComparison.OrdinalIgnoreCase)) ut = UnitSpawnerUI.UnitType.VehiculeCanon;
+                else if (item.unit_type.Equals("Mortier", StringComparison.OrdinalIgnoreCase)) ut = UnitSpawnerUI.UnitType.Mortier;
+                for (int i = 0; i < item.quantity; i++) list.Add(new DeployedUnit { unit_type = (int)ut, team_id = 2 });
+            }
+            return list;
+        }
+
+        private IEnumerator FetchPlayerRoster(string userId, Action<Novgov.Auth.PlayerRosterItem[]> onResult)
+        {
+            string url = $"{GameServerBootstrap.RestUrl}/player_roster?user_id=eq.{userId}";
+            using var req = UnityWebRequest.Get(url);
+            req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
+            req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+            yield return req.SendWebRequest();
+
+            Novgov.Auth.PlayerRosterItem[] roster = null;
+            if (req.result == UnityWebRequest.Result.Success)
+            {
+                try { roster = Novgov.Auth.JsonHelper.FromJson<Novgov.Auth.PlayerRosterItem>(req.downloadHandler.text); }
+                catch (Exception ex) { Debug.LogWarning($"[Siège] Parsing roster ({userId}) échoué : {ex.Message}"); }
+            }
+            onResult(roster ?? Array.Empty<Novgov.Auth.PlayerRosterItem>());
+        }
+
+        [Serializable] private class ZoneLevelEntry { public int building_level; }
+        [Serializable] private class ZoneLevelQueryResult { public ZoneLevelEntry[] items; }
+
+        private IEnumerator FetchZoneBuildingLevel(int tileX, int tileY, int zoom, Action<int> onResult)
+        {
+            string url = $"{GameServerBootstrap.RestUrl}/zones?tile_x=eq.{tileX}&tile_y=eq.{tileY}&zoom=eq.{zoom}&select=building_level";
+            using var req = UnityWebRequest.Get(url);
+            req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
+            req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+            yield return req.SendWebRequest();
+
+            int level = 1;
+            if (req.result == UnityWebRequest.Result.Success)
+            {
+                try
+                {
+                    string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                    var parsed = JsonUtility.FromJson<ZoneLevelQueryResult>(wrapped);
+                    if (parsed?.items != null && parsed.items.Length > 0) level = Mathf.Max(1, parsed.items[0].building_level);
+                }
+                catch (Exception ex) { Debug.LogWarning($"[Siège] Parsing building_level ({tileX},{tileY}) échoué : {ex.Message}"); }
+            }
+            onResult(level);
+        }
+
+        private IEnumerator FetchUsernameById(string userId, Action<string> onResult)
+        {
+            string url = $"{GameServerBootstrap.RestUrl}/profiles?id=eq.{userId}&select=username";
+            using var req = UnityWebRequest.Get(url);
+            req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
+            req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+            yield return req.SendWebRequest();
+
+            string username = null;
+            if (req.result == UnityWebRequest.Result.Success)
+            {
+                try
+                {
+                    string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                    var parsed = JsonUtility.FromJson<UsernameQueryResult>(wrapped);
+                    if (parsed?.items != null && parsed.items.Length > 0) username = parsed.items[0].username;
+                }
+                catch (Exception ex) { Debug.LogWarning($"[Siège] Parsing username ({userId}) échoué : {ex.Message}"); }
+            }
+            onResult(username);
+        }
+
+        private IEnumerator WriteSiegeNotification(string userId, string type, string message)
+        {
+            string json = "{\"user_id\":\"" + userId + "\",\"type\":\"" + type + "\",\"message\":\"" + EscapeJsonString(message) + "\"}";
+            yield return PostgrestPost("/notifications", json);
+        }
+
+        /// <summary>Résout ENTIÈREMENT un siège : charge la Zone, spawn les deux forces en formation de
+        /// choc, lance UN vrai tour de combat (vrai moteur Unity), détermine le vainqueur, met à jour
+        /// zones/zone_sieges, notifie les deux joueurs. Appelable aussi bien juste après le second
+        /// déploiement soumis (résolution immédiate) que par SiegeResolutionLoop (échéance dépassée,
+        /// défense auto-générée depuis le roster actuel du défenseur).</summary>
+        private IEnumerator ResolveSiegeNow(long siegeId)
+        {
+            SiegeRowDto siege = null;
+            yield return FetchSiegeRow(siegeId, s => siege = s);
+            if (siege == null || siege.status != "pending") yield break; // déjà résolu ailleurs (course improbable) ou disparu
+
+            yield return LoadZoneOnServer(siege.tile_x, siege.tile_y);
+            UnitSpawnerUI.Instance.ClearAllUnits();
+            yield return null;
+
+            DeployedUnit[] attackerUnits = siege.attacker_deployment_json?.units;
+            DeployedUnit[] defenderUnits = siege.defender_deployment_json?.units;
+
+            if (defenderUnits == null || defenderUnits.Length == 0)
+            {
+                // Défenseur jamais venu répondre avant l'échéance : garnison auto-générée à partir de
+                // SON roster ACTUEL, renforcée selon le niveau de bâtiment de la Zone (schema.sql §11,
+                // "renforcer son économie" rend concrètement la défense plus dure).
+                Novgov.Auth.PlayerRosterItem[] roster = null;
+                yield return FetchPlayerRoster(siege.defender_user_id, r => roster = r);
+                int buildingLevel = 1;
+                yield return FetchZoneBuildingLevel(siege.tile_x, siege.tile_y, siege.zoom, lvl => buildingLevel = lvl);
+
+                var expanded = ExpandRosterToDeployedUnits(roster);
+                for (int i = 0; i < buildingLevel - 1; i++)
+                    expanded.Add(new DeployedUnit { unit_type = (int)UnitSpawnerUI.UnitType.Fantassin, team_id = 2 });
+                defenderUnits = expanded.ToArray();
+            }
+
+            Vector3 attackerAnchor = UnitSpawnerUI.FindGroundLevelNavPoint(SiegeClashAnchorAttacker, 40f);
+            Vector3 defenderAnchor = UnitSpawnerUI.FindGroundLevelNavPoint(SiegeClashAnchorDefender, 40f);
+            SpawnClashForce(1, attackerUnits, attackerAnchor);
+            SpawnClashForce(2, defenderUnits, defenderAnchor);
+
+            bool attackerHasUnits = UnitAI.AllLivingUnits.Any(u => u.teamID == 1);
+            bool defenderHasUnits = UnitAI.AllLivingUnits.Any(u => u.teamID == 2);
+            if (attackerHasUnits && defenderHasUnits)
+            {
+                // Voir la doc de RunExecutionPhaseRealEngine : aucune UnitAI des deux camps ne doit
+                // rester isPlayerControlled=false ici — ni l'un ni l'autre n'a de planification IA
+                // (TacticalAIPlanner) à ce stade, le combat auto-engage tout seul (portée/ligne de vue).
+                foreach (var unit in UnitAI.AllLivingUnits) unit.isPlayerControlled = true;
+                yield return RunExecutionPhaseRealEngine(1, null, null);
+            }
+
+            int attackerAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 1);
+            int defenderAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 2);
+            int winnerTeam;
+            if (defenderAlive == 0 && attackerAlive > 0) winnerTeam = 1;
+            else if (attackerAlive == 0) winnerTeam = 2; // anéantissement mutuel OU défenseur seul survivant -> il garde sa Zone
+            else
+            {
+                int attackerHealth = UnitAI.AllLivingUnits.Where(u => u.teamID == 1).Sum(u => u.health);
+                int defenderHealth = UnitAI.AllLivingUnits.Where(u => u.teamID == 2).Sum(u => u.health);
+                winnerTeam = attackerHealth > defenderHealth ? 1 : 2; // égalité -> avantage défenseur
+            }
+
+            bool attackerWins = winnerTeam == 1;
+            bool captureConfirmed = false;
+            if (attackerWins)
+            {
+                yield return CaptureZoneInDb(siege.tile_x, siege.tile_y, siege.attacker_user_id, siege.defender_user_id, ok => captureConfirmed = ok);
+                if (captureConfirmed)
+                    yield return LootActionPoints(siege.attacker_user_id, siege.defender_user_id);
+            }
+            attackerWins = attackerWins && captureConfirmed;
+
+            string nowIso = DateTime.UtcNow.ToString("o");
+            string shieldUntilIso = DateTime.UtcNow.AddHours(6).ToString("o");
+            yield return PostgrestPatch($"/zones?tile_x=eq.{siege.tile_x}&tile_y=eq.{siege.tile_y}&zoom=eq.{siege.zoom}", "{\"shield_until\":\"" + shieldUntilIso + "\"}");
+
+            string winnerUserId = attackerWins ? siege.attacker_user_id : siege.defender_user_id;
+            yield return PostgrestPatch($"/zone_sieges?id=eq.{siegeId}", "{\"status\":\"resolved\",\"winner_user_id\":\"" + winnerUserId + "\",\"resolved_at\":\"" + nowIso + "\"}");
+
+            string attackerName = null, defenderName = null;
+            yield return FetchUsernameById(siege.attacker_user_id, n => attackerName = n);
+            yield return FetchUsernameById(siege.defender_user_id, n => defenderName = n);
+            attackerName = attackerName ?? "Un joueur";
+            defenderName = defenderName ?? "Un joueur";
+
+            if (attackerWins)
+            {
+                yield return WriteSiegeNotification(siege.attacker_user_id, "siege_won", $"Vous avez remporté votre siège sur la Zone ({siege.tile_x},{siege.tile_y}) — elle est à vous !");
+                yield return WriteSiegeNotification(siege.defender_user_id, "siege_lost", $"{attackerName} a pris votre territoire ({siege.tile_x},{siege.tile_y}) lors d'un siège.");
+            }
+            else
+            {
+                yield return WriteSiegeNotification(siege.attacker_user_id, "siege_lost", $"Votre siège sur la Zone ({siege.tile_x},{siege.tile_y}) a échoué face à la garnison de {defenderName}.");
+                yield return WriteSiegeNotification(siege.defender_user_id, "siege_won", $"Vous avez défendu avec succès votre territoire ({siege.tile_x},{siege.tile_y}) contre {attackerName}.");
+            }
+
+            UnitSpawnerUI.Instance.ClearAllUnits();
+            Debug.Log($"[Siège] #{siegeId} résolu : {(attackerWins ? "attaquant vainqueur" : "défenseur tient")} — Zone ({siege.tile_x},{siege.tile_y}).");
+        }
+    }
+}
