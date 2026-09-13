@@ -2,27 +2,31 @@
 
 Ce dossier contient toute la documentation et les fichiers de configuration nécessaires pour
 transformer Novgov (un jeu solo Joueur vs IA, **toujours disponible tel quel** — le multijoueur
-est un mode additionnel, pas un remplacement) en un jeu **multijoueur PvP asynchrone à tour par
-tour**, hébergé sur un VPS Hetzner via Docker.
+est un mode additionnel, pas un remplacement) en un jeu multijoueur PvP hébergé sur un VPS Hetzner
+via Docker.
 
-**État (2026-09-08 soir) : audit complet de jouabilité §19 REBUILD ET REDÉPLOYÉ SUR LE VPS,
-confirmé en direct.** Serveur Linux reconstruit (fraîcheur vérifiée par réflexion .NET, pas
-seulement l'horodatage), sauvegarde de l'ancienne image prise avant toute modification
-(`novgov-game-server:backup_20260908_204728`), copié sur `novgov.com`, conteneur reconstruit et
-redémarré, vérifié stable (aucune exception/crash-loop) et joignable en TCP depuis l'extérieur.
-APK Android reconstruit avec succès (`build/Android/Novgov-Test.apk`, même arbre source que le
-serveur) mais **pas encore installé sur un appareil physique** — c'est la prochaine étape. Voir
-[08-known-issues-and-todo.md](08-known-issues-and-todo.md) section **19** (§19.1 à §19.13) pour le
-détail complet : cartographie des 8 sous-systèmes multijoueur, 19 correctifs de jouabilité +
-revue adversariale, puis un retour joueur réel (§19.11/§19.12) qui a trouvé deux bugs
-supplémentaires — dont un très concret : la bannière affichait littéralement "une IA de secours a
-joué vos unités" dans Deathmatch/Zone de Contrôle alors qu'AUCUNE IA n'y tourne jamais.
+**⚠️ LIRE [00-current-architecture-2026-09-13.md](00-current-architecture-2026-09-13.md) EN
+PREMIER.** Ce document décrit l'état RÉEL du calcul de combat aujourd'hui (vrai moteur Unity pour
+tous les modes, deux rythmes de jeu 5 min/6h, notifications) — il fait foi en cas de contradiction
+avec le résumé "Décisions d'architecture" plus bas dans cette page ou avec le document 04, tous les
+deux écrits pour l'architecture précédente (résolveur pur/déterministe, remplacée le 2026-09-13).
 
-**Cause la plus probable de "je n'arrive pas à lancer/tester le multijoueur" (signalé le
-2026-09-06)** : §19.1 — un joueur seul en file d'attente Deathmatch/Zone de Contrôle était
-systématiquement déconnecté après 25 s de silence serveur. Corrigé (keepalive au niveau de la
-connexion) et maintenant EN PRODUCTION — reste à confirmer par un vrai test à 2 joueurs une fois
-l'APK installé.
+**État (2026-09-13) : bascule complète vers le vrai moteur Unity + déploiement réel sur
+novgov.com**, à la demande explicite de l'utilisateur. Voir
+[12-production-deployment-2026-09-13.md](12-production-deployment-2026-09-13.md) pour ce qui a été
+vérifié en production (et ce qui ne l'a pas été — le gameplay réel à 2 joueurs, toujours pas testé).
+
+<details>
+<summary>État précédent (2026-09-08), avant la bascule du 2026-09-13 — historique, plus à jour</summary>
+
+Audit complet de jouabilité §19 rebuild et redéployé sur le VPS, confirmé en direct. Serveur Linux
+reconstruit (fraîcheur vérifiée par réflexion .NET, pas seulement l'horodatage), sauvegarde de
+l'ancienne image prise avant toute modification (`novgov-game-server:backup_20260908_204728`),
+copié sur `novgov.com`, conteneur reconstruit et redémarré, vérifié stable (aucune exception/
+crash-loop) et joignable en TCP depuis l'extérieur. Voir
+[08-known-issues-and-todo.md](08-known-issues-and-todo.md) section **19** (§19.1 à §19.13).
+
+</details>
 
 ## Outillage — lancer les tests sans ouvrir l'Éditeur
 
@@ -62,9 +66,11 @@ fichiers de config serveur (yml, sql, conf) — Unity les ignore au build.
    (GameManagerUI, TacticalPathManager, UnitSpawnerUI) pour brancher le réseau.
 9. [06-security-checklist.md](06-security-checklist.md) — UFW/Docker, secrets, RLS.
 10. [07-test-plan-2-phones.md](07-test-plan-2-phones.md) — plan de test final avec 2 téléphones.
-11. [08-known-issues-and-todo.md](08-known-issues-and-todo.md) — **à lire en premier en reprenant
-    ce chantier, en partant de la fin** (section 19 = la plus récente) : état exact de ce qui est
-    fait/pas fait, et tout le travail restant jusqu'au test sur matériel physique.
+11. [08-known-issues-and-todo.md](08-known-issues-and-todo.md) — historique détaillé 2026-08/début
+    09, y compris la construction de l'architecture "résolveur pur" remplacée le 2026-09-13.
+12. [00-current-architecture-2026-09-13.md](00-current-architecture-2026-09-13.md) — **document de
+    référence pour l'état actuel** du calcul de combat/déploiement/rythmes de jeu.
+13. [09-real-unity-combat-investigation-2026-09-13.md](09-real-unity-combat-investigation-2026-09-13.md), [10-deathmatch-zonecontrol-switched-to-live-2026-09-13.md](10-deathmatch-zonecontrol-switched-to-live-2026-09-13.md), [11-real-engine-async-pace-notifications-2026-09-13.md](11-real-engine-async-pace-notifications-2026-09-13.md), [12-production-deployment-2026-09-13.md](12-production-deployment-2026-09-13.md) — la bascule du 2026-09-13, dans l'ordre chronologique.
 
 ## Identifiants
 
@@ -74,7 +80,11 @@ Tous les identifiants (SSH, Supabase, VPS) sont dans `CREDENTIALS.md` à la raci
 
 ## Décisions d'architecture (résumé)
 
-Ces choix sont expliqués en détail dans les documents dédiés, mais voici le résumé :
+**Le tableau ci-dessous décrit l'architecture PRÉCÉDENTE (résolveur pur/déterministe) — remplacée le
+2026-09-13, voir [00-current-architecture-2026-09-13.md](00-current-architecture-2026-09-13.md).**
+Gardé tel quel pour l'historique du raisonnement (pourquoi un résolveur pur avait été choisi), mais
+ne décrit plus ce qui tourne aujourd'hui. Ces choix sont expliqués en détail dans les documents
+dédiés, mais voici le résumé :
 
 | Sujet | Décision | Pourquoi |
 |---|---|---|
