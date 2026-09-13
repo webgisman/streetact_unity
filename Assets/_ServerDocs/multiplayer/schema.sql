@@ -332,6 +332,15 @@ create policy "Un joueur voit son propre roster"
     to authenticated
     using (auth.uid() = user_id);
 
+-- Grant SELECT explicite (ne pas se fier uniquement à l'ALTER DEFAULT PRIVILEGES de §"zones" :
+-- constaté en migrant novgov.com le 2026-09-13, `player_roster` existait déjà d'un essai précédent,
+-- créée sans passer par supabase_admin/hors de ce script — le `create table if not exists`
+-- ci-dessus était donc un no-op qui n'a PAS déclenché l'auto-grant, et la table n'avait alors AUCUN
+-- privilège pour "authenticated", RLS ou pas — la lecture du roster aurait échoué côté client. D'où
+-- ce grant explicite, sûr dans tous les cas — qu'il s'agisse d'une création fraîche ou d'une table
+-- déjà là).
+grant select on public.player_roster to authenticated;
+
 -- Pas de policy insert/update/delete pour "authenticated" : RLS default-deny + revoke explicite en
 -- défense en profondeur (même schéma que "profiles"/"zones"/"notifications" plus haut) — seule la
 -- fonction buy_unit() (SECURITY DEFINER, ci-dessous) peut y écrire, jamais un PATCH/POST direct du
