@@ -270,13 +270,15 @@ namespace Novgov.Server
             waitingDeathmatch.RemoveAll(c => c.IsDisconnected);
             waitingZoneControl.RemoveAll(c => c.IsDisconnected);
 
-            // Depuis l'Option B (2026-08-30, voir MatchState.cs) : PLUS de garde matchInProgress ici
-            // — de nouvelles parties Deathmatch/Zone de Contrôle peuvent démarrer à tout instant,
-            // même pendant que d'autres tournent déjà (elles ne partagent plus aucun état mutable
-            // entre elles). matchInProgress protège seulement, à l'intérieur de RunMatch, l'instant
-            // bref où une partie fige sa géométrie de départ contre un combat de Conquête concurrent.
-            TryStartMatch(waitingDeathmatch);
-            TryStartMatch(waitingZoneControl);
+            // 2026-09-13 : bascule vers TryStartMatchLive (voir MatchSessionManager_MatchLive.cs) —
+            // Deathmatch/Zone de Contrôle utilisent maintenant de vraies UnitAI/BuildingStructure de
+            // scène comme la Conquête, donc matchInProgress redevient un vrai verrou "un seul match à
+            // la fois, tous modes confondus" pour toute la durée du match (pas seulement l'instant de
+            // capture de géométrie comme avant l'Option B). TryStartMatchLive gère lui-même ce garde
+            // en tête — rien à vérifier ici, les deux files patientent simplement si un match tourne
+            // déjà (Deathmatch, Zone de Contrôle ou Conquête).
+            TryStartMatchLive(waitingDeathmatch);
+            TryStartMatchLive(waitingZoneControl);
         }
     }
 }

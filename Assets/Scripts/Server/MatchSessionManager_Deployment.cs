@@ -243,13 +243,129 @@ namespace Novgov.Server
         // "Option B" (2026-08-30) — équivalents en donnée pure des méthodes ci-dessus, pour les
         // parties Deathmatch/Zone de Contrôle (voir MatchState.cs). Les méthodes ci-dessus
         // (RunPlanningPhase, RunExecutionPhase, ApplyForPlayer, ApplyOrdersToUnits, BuildUnitOrders,
-        // BuildSnapshotsFromEvents, CaptureTacticalSnapshot, ResolveDeployment) restent INTACTES et
-        // continuent de servir EXCLUSIVEMENT le mode Conquête (RunConquestSkirmish, toujours basé sur
-        // de vraies UnitAI/BuildingStructure, hors scope de ce chantier) — aucune des deux familles
-        // de méthodes n'appelle jamais l'autre. (RunDeploymentPhase, l'équivalent "vivant" de
+        // BuildSnapshotsFromEvents, CaptureTacticalSnapshot, ResolveDeployment) servaient jusqu'au
+        // 2026-09-13 EXCLUSIVEMENT le mode Conquête (RunConquestSkirmish, toujours basé sur de vraies
+        // UnitAI/BuildingStructure). (RunDeploymentPhase, l'équivalent "vivant" de
         // RunDeploymentPhasePure ci-dessous, n'avait plus aucun appelant nulle part dans le projet —
-        // reliquat d'avant "Option B" — et a été supprimée le 2026-09-06.)
+        // reliquat d'avant "Option B" — et avait été supprimée le 2026-09-06.)
+        //
+        // 2026-09-13 : bascule demandée par l'utilisateur — Deathmatch/Zone de Contrôle utilisent
+        // maintenant EUX AUSSI la famille "vivante" (RunDeploymentPhaseLive ci-dessous, RunMatchLive
+        // dans MatchSessionManager_MatchLive.cs) au lieu de la famille "Pure". Voir
+        // 09-real-unity-combat-investigation-2026-09-13.md pour le contexte complet : le calcul de
+        // combat sous-jacent (TacticalResolver.Resolve()) reste IDENTIQUE dans les deux familles — ce
+        // qui change ici, c'est uniquement que Deathmatch/Zone de Contrôle utilisent maintenant de
+        // vraies UnitAI/BuildingStructure de scène comme la Conquête, ce qui réintroduit la contrainte
+        // "un seul match à la fois par processus" que l'Option B avait supprimée pour ces deux modes.
+        // La famille "Pure" (RunDeploymentPhasePure, RunPlanningPhasePure, RunExecutionPhasePure,
+        // ResolveDeploymentPure, etc.) est laissée INTACTE ci-dessous, plus appelée par aucun chemin
+        // de code actif — conservée pour permettre un retour en arrière simple si besoin.
         // =====================================================================
+
+        /// <summary>Équivalent "vivant" de RunDeploymentPhasePure — même logique d'attente (MapReady
+        /// puis compte à rebours par joueur), mais résout via ResolveDeployment (vraies UnitAI/
+        /// RoadBarrier, voir plus haut) au lieu de ResolveDeploymentPure. <paramref name="matchId"/>
+        /// sert uniquement à la journalisation (pas de MatchState ici, contrairement à la version
+        /// Pure) — voir RunMatchLive dans MatchSessionManager_MatchLive.cs pour l'appelant.
+        ///
+        /// LIMITATION CONNUE (2026-09-13) : contrairement à RunDeploymentPhasePure, cette version ne
+        /// répond pas encore à "city_verify" (2ème étage d'équité géométrique, voir HandleCityVerify)
+        /// — DrainMessages est appelé avec msForCityVerify=null. Comme pour la Conquête (qui a le même
+        /// manque), le premier étage d'équité (même JSON Overpass envoyé aux deux clients via
+        /// city_data_json dans match_found) reste actif ; seul le resynchronisation de secours en cas
+        /// de divergence est absente pour l'instant.</summary>
+        private IEnumerator RunDeploymentPhaseLive(string matchId, PlayerConnection p1, PlayerConnection p2)
+        {
+            p1.HasSubmittedDeployment = false;
+            p2.HasSubmittedDeployment = false;
+            p1.PendingDeployment = null;
+            p2.PendingDeployment = null;
+            p1.MapReady = false;
+            p2.MapReady = false;
+
+            DateTime deploymentPhaseStartUtc = DateTime.UtcNow;
+            Debug.Log($"[Timing] [{matchId}] RunDeploymentPhaseLive démarré à {deploymentPhaseStartUtc:O} — attente MapReady (max {MapReadyMaxWaitSeconds}s) puis déploiement (max {DeploymentSeconds}s).");
+
+            DateTime? p1ReadyAtUtc = p1.MapReady ? deploymentPhaseStartUtc : (DateTime?)null;
+            DateTime? p2ReadyAtUtc = p2.MapReady ? deploymentPhaseStartUtc : (DateTime?)null;
+
+            float mapWait = MapReadyMaxWaitSeconds;
+            while (mapWait > 0f && !(p1.MapReady && p2.MapReady))
+            {
+                DrainMessages(p1, 0);
+                DrainMessages(p2, 0);
+                if (p1.IsDisconnected && p2.IsDisconnected) yield break;
+
+                if (p1ReadyAtUtc == null && p1.MapReady) p1ReadyAtUtc = DateTime.UtcNow;
+                if (p2ReadyAtUtc == null && p2.MapReady) p2ReadyAtUtc = DateTime.UtcNow;
+
+                mapWait -= Time.deltaTime;
+                yield return null;
+            }
+
+            DateTime deploymentCountdownStartUtc = DateTime.UtcNow;
+            bool p1Done = p1ReadyAtUtc == null;
+            bool p2Done = p2ReadyAtUtc == null;
+            int lastTickP1 = -1, lastTickP2 = -1;
+            while (!(p1Done && p2Done))
+            {
+                DrainMessages(p1, 0);
+                DrainMessages(p2, 0);
+                if (p1.IsDisconnected && p2.IsDisconnected) yield break;
+
+                if (!p1Done)
+                {
+                    if (p1.HasSubmittedDeployment) p1Done = true;
+                    else
+                    {
+                        float p1Remaining = DeploymentSeconds - (float)(DateTime.UtcNow - p1ReadyAtUtc.Value).TotalSeconds;
+                        if (p1Remaining <= 0f) p1Done = true;
+                        else
+                        {
+                            int secondsLeft = Mathf.CeilToInt(p1Remaining);
+                            if (secondsLeft != lastTickP1 && !p1.IsDisconnected)
+                            {
+                                lastTickP1 = secondsLeft;
+                                p1.Send(new NetMessage { type = "turn_timer", seconds_remaining = secondsLeft });
+                            }
+                        }
+                    }
+                }
+
+                if (!p2Done)
+                {
+                    if (p2.HasSubmittedDeployment) p2Done = true;
+                    else
+                    {
+                        float p2Remaining = DeploymentSeconds - (float)(DateTime.UtcNow - p2ReadyAtUtc.Value).TotalSeconds;
+                        if (p2Remaining <= 0f) p2Done = true;
+                        else
+                        {
+                            int secondsLeft = Mathf.CeilToInt(p2Remaining);
+                            if (secondsLeft != lastTickP2 && !p2.IsDisconnected)
+                            {
+                                lastTickP2 = secondsLeft;
+                                p2.Send(new NetMessage { type = "turn_timer", seconds_remaining = secondsLeft });
+                            }
+                        }
+                    }
+                }
+
+                yield return null;
+            }
+
+            double deploymentElapsedSec = (DateTime.UtcNow - deploymentCountdownStartUtc).TotalSeconds;
+            Debug.Log($"[Timing] [{matchId}] (Live) Compte à rebours de déploiement terminé après {deploymentElapsedSec:F1}s réelles (attendu {DeploymentSeconds}s).");
+
+            var team1Units = ResolveDeployment(p1, 1, out bool team1Trimmed);
+            var team2Units = ResolveDeployment(p2, 2, out bool team2Trimmed);
+            Debug.Log($"[Trajectoire] [{matchId}] (Live) Déploiement résolu : équipe1={team1Units.Count} unité(s), équipe2={team2Units.Count} unité(s).");
+
+            var team1Barricades = team1Units.Where(u => u.unit_type == (int)UnitSpawnerUI.UnitType.BarricadeRoutiere);
+            var team2Barricades = team2Units.Where(u => u.unit_type == (int)UnitSpawnerUI.UnitType.BarricadeRoutiere);
+            if (!p1.IsDisconnected) p1.Send(new NetMessage { type = "deployment_result", deployed_units = team1Units.Concat(team2Barricades).ToArray(), reason = team1Trimmed ? "roster_trimmed" : null });
+            if (!p2.IsDisconnected) p2.Send(new NetMessage { type = "deployment_result", deployed_units = team2Units.Concat(team1Barricades).ToArray(), reason = team2Trimmed ? "roster_trimmed" : null });
+        }
 
         /// <summary>Attend jusqu'à DeploymentSeconds que les DEUX joueurs soumettent
         /// "submit_deployment", puis construit les unités/barricades des deux camps directement en
