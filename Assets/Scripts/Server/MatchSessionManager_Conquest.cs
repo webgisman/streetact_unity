@@ -271,7 +271,13 @@ namespace Novgov.Server
                     break;
                 }
 
-                yield return RunExecutionPhase(turnNumber, attacker, null);
+                // 2026-09-13 : RunExecutionPhaseRealEngine (vrai moteur, MatchSessionManager_
+                // CombatRealEngine.cs) remplace RunExecutionPhase (TacticalResolver.Resolve()) pour
+                // tous les modes serveur — demande explicite de l'utilisateur. Sans risque pour la
+                // garnison IA : RunConquestPlanningPhase appelle déjà u.PlanifierTourIA() pour elle
+                // PENDANT la planification (ligne ~535 plus bas dans ce fichier), son tacticalPath est
+                // donc déjà rempli avant cet appel, exactement comme un ordre humain.
+                yield return RunExecutionPhaseRealEngine(turnNumber, attacker, null);
 
                 int attackerAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 1);
                 int garrisonAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 2);
@@ -717,7 +723,8 @@ namespace Novgov.Server
                     break;
                 }
 
-                yield return RunExecutionPhase(turnNumber, player, null);
+                // 2026-09-13 : voir le même changement dans RunConquestSkirmish ci-dessus.
+                yield return RunExecutionPhaseRealEngine(turnNumber, player, null);
 
                 int playerAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 1);
                 int garrisonAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 2);

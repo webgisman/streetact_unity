@@ -169,6 +169,17 @@ namespace Novgov.Server
 
             yield return RunDeploymentPhaseLive(matchId, p1, p2);
 
+            // CRITIQUE (2026-09-13, moteur réel) : ResolveDeployment/UnitSpawnerUI.SpawnUnitAt ne
+            // marque isPlayerControlled=true que pour l'équipe 1 côté serveur (repli hérité de la
+            // Conquête, où l'équipe 2 est TOUJOURS une garnison IA — voir UnitSpawnerUI.SpawnUnitAt,
+            // branche UNITY_SERVER). Ici les DEUX équipes sont de vrais joueurs : sans cette ligne,
+            // TacticalAIPlanner n'aurait jamais pris le relais pour l'équipe 2 (isPlayerControlled y
+            // reste à sa valeur de spawn), mais ExecuterOrdres() sur une unité isPlayerControlled=
+            // false peut emprunter des branches pensées pour un ennemi IA (voir UnitAI_Movement) —
+            // jamais exercées ni voulues ici. Même correctif que RunConquestSkirmish fait pour son
+            // équipe 1 (ligne 236 de MatchSessionManager_Conquest.cs), étendu aux deux équipes.
+            foreach (var unit in UnitAI.AllLivingUnits) unit.isPlayerControlled = true;
+
             int turnNumber = 1;
             bool matchOver = false;
             int winnerTeam = 0;
@@ -184,7 +195,10 @@ namespace Novgov.Server
                     break;
                 }
 
-                yield return RunExecutionPhase(turnNumber, p1, p2);
+                // 2026-09-13 : RunExecutionPhaseRealEngine (vrai moteur, MatchSessionManager_
+                // CombatRealEngine.cs) remplace RunExecutionPhase (TacticalResolver.Resolve(), laissée
+                // intacte mais plus appelée par ce chemin) — demande explicite de l'utilisateur.
+                yield return RunExecutionPhaseRealEngine(turnNumber, p1, p2);
 
                 int team1Alive = UnitAI.AllLivingUnits.Count(u => u.teamID == 1 && !u.isDead);
                 int team2Alive = UnitAI.AllLivingUnits.Count(u => u.teamID == 2 && !u.isDead);
