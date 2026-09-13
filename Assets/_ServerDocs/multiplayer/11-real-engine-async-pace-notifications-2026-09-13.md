@@ -82,16 +82,27 @@ entre deux tours :
    différent au respawn les aurait rendus silencieusement inapplicables), puis application des ordres
    normalement.
 
-**Simplifications assumées, documentées ici pour ne pas les découvrir en testant** :
-- Seuls position/rotation/PV/type/équipe survivent à une pause. L'état de garnison (fenêtre occupée),
-  embuscade, camouflage d'une unité est PERDU si une pause a lieu pendant qu'elle l'utilisait.
-- Zone de Contrôle : la progression de capture ne survit PAS à une pause (une `CaptureZone` neuve est
-  recréée à chaque reprise, progression à 0%). Pour un tour "async" de plusieurs heures, ça veut dire
-  qu'une Zone de Contrôle async ne peut progresser QUE pendant la brève fenêtre d'exécution réelle
-  (~quelques dizaines de secondes par tour), jamais entre deux tours — un déséquilibre de règles du
-  jeu à surveiller si ce mode est vraiment joué en Zone de Contrôle.
+**MISE À JOUR (même session, suite à demande explicite "c'est critique")** : garnison de
+fenêtre/intérieur de bâtiment/guet/camouflage/perché sur toit survivent maintenant à une pause —
+`PausedUnitDto` porte `is_garrisoned`/`garrison_building_id`/`garrison_window_id`/
+`current_building_id`/`is_guarding`/`is_camouflaged`/`is_rooftop_sniper`, identifiés par INDEX dans
+`BuildingStructure.AllBuildings`/`BuildingWindow.id` (les seules références stables qui survivent à
+la destruction des GameObjects), reconstruits après le rechargement de la carte au réveil. La
+progression de Zone de Contrôle survit aussi (`CaptureZone.RestoreProgress`, nouveau setter — les
+champs avaient un setter privé). Voir `MatchSessionManager_AsyncPause.cs`.
+
+**Simplifications restantes, assumées** :
+- Le chemin tactique en cours n'est pas persisté — sans conséquence, il est déjà vide au moment
+  précis où une pause a lieu (juste après `ResetOrderState()` en fin d'exécution).
+- Les cooldowns d'arme repartent à zéro après une reprise — avantage mineur et temporaire pour
+  l'unité concernée, jugé hors de portée.
 - Le déploiement initial garde son délai de 5 minutes (`DeploymentSeconds`) même en rythme async — pas
   de rythme séparé pour cette phase, jugé hors de portée de la demande initiale.
+- La restauration bâtiment/fenêtre suppose que `BuildingStructure.AllBuildings` se reconstruit dans
+  le MÊME ordre après rechargement de la carte (génération déterministe à partir des mêmes données —
+  déjà l'hypothèse retenue ailleurs pour `city_verify`). Si jamais un bâtiment/une fenêtre reste
+  introuvable au réveil (ne devrait structurellement pas arriver), repli sûr : l'unité perd sa
+  garnison plutôt que de pointer vers une référence incohérente (avertissement journalisé).
 
 **Migration base de données requise** (pas encore appliquée sur le VPS réel — voir §3) :
 `alter table public.matches add column if not exists paused_roster_json jsonb;` (dans `schema.sql`
