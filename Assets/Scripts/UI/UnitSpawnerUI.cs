@@ -436,55 +436,21 @@ public class UnitSpawnerUI : MonoBehaviour
             ShowMessage($"Limite atteinte pour l'équipe {teamName} ({maxUnitsPerTeam} unités max par camp) !", 3.0f);
             return;
         }
-        // 2026-09-06 : "selectedTeam == 1" en dur ci-dessous ne vérifiait la caserne QUE pour
-        // l'équipe 1 — quel que soit le camp local réel. En multijoueur, chaque compte est TOUJOURS
-        // son PROPRE camp local (jamais littéralement "1"), donc ce garde ne s'appliquait qu'à
-        // celui des deux joueurs qui se trouvait être équipe 1 pour cette partie, tandis que l'autre
-        // (équipe 2) déployait n'importe quel type SANS AUCUNE vérification de caserne — d'où
-        // "quand un camp choisit mortier l'autre ne peut pas" : le mortier vaut 0 par défaut
-        // (SupabaseDatabaseClient.GetRoster), donc le joueur réellement soumis au contrôle (équipe 1)
-        // était bloqué tant qu'il n'en avait pas acheté, pendant que son adversaire (équipe 2) ne
-        // l'était jamais.
-        if (Novgov.Network.MultiplayerMatchController.IsFlowActive && type != UnitType.BarricadeRoutiere)
-        {
-            var roster = Novgov.Auth.SupabaseDatabaseClient.CurrentRoster;
-
-            // FAIL-OPEN tant que la caserne n'est pas encore chargée (correctif 2026-09-06) :
-            // CurrentRoster reste null tant qu'aucun appel réseau à GetRoster() n'a abouti (voir
-            // MultiplayerMatchController.OpenDeploymentDock, qui le déclenche maintenant en arrivant
-            // en déploiement — mais un aléa réseau/latence peut toujours faire arriver ce tap AVANT
-            // la réponse). Sans ce garde, "roster == null" faisait rester `owned` à 0 pour TOUS les
-            // types, et `deployed(0) >= owned(0)` bloquait ALORS LE TOUT PREMIER placement de
-            // N'IMPORTE QUELLE unité en multijoueur — le joueur ne pouvait plus rien déployer du tout.
-            if (roster == null)
-            {
-                _ = Novgov.Auth.SupabaseDatabaseClient.GetRoster(); // relance une tentative en tâche de fond, au cas où
-            }
-            else
-            {
-                int owned = 0;
-                foreach (var item in roster)
-                {
-                    if (item.unit_type.Equals(type.ToString(), System.StringComparison.OrdinalIgnoreCase))
-                    {
-                        owned = item.quantity;
-                        break;
-                    }
-                }
-
-                int deployed = 0;
-                foreach (var u in FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude))
-                {
-                    if (u.teamID == selectedTeam && u.sourceUnitType == type.ToString()) deployed++;
-                }
-
-                if (deployed >= owned)
-                {
-                    ShowMessage($"Vous ne possédez pas d'unité {FriendlyUnitName(type)} supplémentaire dans votre caserne !", 3.0f);
-                    return;
-                }
-            }
-        }
+        // 2026-09-13 (demande explicite, "laisse-moi déployer tout") : le garde de "caserne" qui
+        // vivait ici (SupabaseDatabaseClient.GetRoster/CurrentRoster) est SUPPRIMÉ pour le
+        // déploiement multijoueur — ce n'était pas un vrai stock partagé : GetRoster/UpsertRosterItem
+        // ne lisent/écrivent que du PlayerPrefs LOCAL à cet appareil (jamais Supabase malgré le nom
+        // de la classe), avec des quantités de départ minuscules (Fantassin=4, VehiculeCanon=1,
+        // CharLeopard=1, Mortier=0) et un vrai mécanisme de perte définitive
+        // (ProcessLostUnitsAsync, MultiplayerMatchController.cs) qui décrémente une unité morte au
+        // combat DE FAÇON PERMANENTE. Un compte de test qui avait déjà perdu son unique Char/Canon
+        // lors d'un match précédent se retrouvait donc bloqué au seul Fantassin pour toujours —
+        // symptôme "je n'arrive plus à déployer autre chose que du Fantassin", qui n'avait rien à
+        // voir avec un bug d'affichage/de bouton : chaque type restait bien sélectionnable, seule
+        // cette vérification de quantité possédée le bloquait silencieusement. Les vrais garde-fous
+        // d'équilibrage (plafond d'unités par camp ci-dessus, budget en points/plafond de mortiers/
+        // stock de barricades juste en dessous) restent tous actifs — seule la couche "inventaire
+        // persistant" est retirée.
         if (type == UnitType.BarricadeRoutiere && RemainingBarricadeStock(selectedTeam) <= 0)
         {
             ShowMessage($"Stock de barricades épuisé ({maxBarricadesPerTeam} max par camp) !", 3.0f);
