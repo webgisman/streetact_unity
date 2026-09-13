@@ -5,7 +5,7 @@
         <ui:VisualElement style="position: absolute; left: 20px; top: 20px; background-color: rgba(20,25,30,0.9); padding: 12px; border-radius: 8px; border-width: 2px; border-color: var(--color-accent);">
             <ui:Label name="lbl-username" text="Commandant..." style="color: white; font-size: 24px; -unity-font-style: bold; margin-bottom: 4px;" />
             <ui:VisualElement style="flex-direction: row; align-items: center;">
-                <ui:VisualElement style="width: 24px; height: 24px; background-image: url('/Assets/UI/Icons/star.png'); -unity-background-image-tint-color: gold; margin-right: 8px;" />
+                <ui:VisualElement style="width: 24px; height: 24px; background-image: url('/Assets/UI/Icons/lightning.png'); -unity-background-image-tint-color: gold; margin-right: 8px;" />
                 <ui:Label name="lbl-action-points" text="Points d'Action : 0" style="color: gold; font-size: 20px;" />
             </ui:VisualElement>
         </ui:VisualElement>
@@ -57,7 +57,7 @@
             </ui:Button>
 
             <ui:Button name="btn-roster" class="btn-secondary btn-with-icon" style="margin-bottom: 16px; min-height: 80px;">
-                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/soldiers.png');" />
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/crate.png');" />
                 <ui:VisualElement class="btn-text-col">
                     <ui:Label text="CASERNE (UNITÉS)" />
                     <ui:Label text="Recruter et gérer votre armée" class="btn-subtitle" />

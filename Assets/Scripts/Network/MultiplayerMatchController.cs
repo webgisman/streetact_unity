@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -1402,6 +1403,79 @@ namespace Novgov.Network
             }
         }
 
+        // =====================================================================
+        // Petits éléments réutilisables pour les listes dynamiques (Notifications/Sièges/Bâtiments/
+        // Caserne) — voir Theme.tss ".hub-card"/".hub-pip"/etc, 2026-09-13, demande explicite
+        // "intuitif et gamefiable". Centralisés ici pour que les 4 écrans se ressemblent (même
+        // carte, même badge), au lieu de 4 mises en page ad hoc légèrement différentes.
+        // =====================================================================
+
+        private static VisualElement MakeHubCard()
+        {
+            var row = new VisualElement();
+            row.AddToClassList("hub-card");
+            return row;
+        }
+
+        private static VisualElement MakeTextColumn(string title, string subtitle = null)
+        {
+            var col = new VisualElement();
+            col.style.flexShrink = 1;
+            col.style.flexDirection = FlexDirection.Column;
+            var lblTitle = new Label(title);
+            lblTitle.AddToClassList("hub-card-title");
+            col.Add(lblTitle);
+            if (!string.IsNullOrEmpty(subtitle))
+            {
+                var lblSub = new Label(subtitle);
+                lblSub.AddToClassList("hub-card-subtitle");
+                col.Add(lblSub);
+            }
+            return col;
+        }
+
+        private static Label MakeCountBadge(string text)
+        {
+            var badge = new Label(text);
+            badge.AddToClassList("hub-count-badge");
+            return badge;
+        }
+
+        /// <summary>Jauge de "pips" (1 par niveau, plein = déjà atteint) — remplace un texte brut
+        /// "Niveau: X/max" par une jauge lisible d'un coup d'oeil, sans dépendre d'aucune texture
+        /// chargée à l'exécution (voir le commentaire de ".hub-card" dans Theme.tss).</summary>
+        private static VisualElement MakePipRow(int filled, int max)
+        {
+            var rowEl = new VisualElement();
+            rowEl.AddToClassList("hub-pip-row");
+            for (int i = 0; i < max; i++)
+            {
+                var pip = new VisualElement();
+                pip.AddToClassList(i < filled ? "hub-pip--filled" : "hub-pip--empty");
+                pip.AddToClassList("hub-pip");
+                rowEl.Add(pip);
+            }
+            return rowEl;
+        }
+
+        /// <summary>"3h42" / "18min" restant(es) avant l'échéance ISO 8601 donnée — jamais négatif
+        /// affiché (une échéance déjà expirée montre "résolution imminente", le siège attend juste
+        /// le prochain passage de SiegeResolutionLoop côté serveur, voir MatchSessionManager_Siege.cs).</summary>
+        private static string FormatCountdown(string deadlineIso, out bool urgent)
+        {
+            urgent = false;
+            if (!DateTime.TryParse(deadlineIso, null, System.Globalization.DateTimeStyles.RoundtripKind, out DateTime deadline))
+                return "échéance inconnue";
+
+            TimeSpan remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero) return "résolution imminente";
+
+            urgent = remaining.TotalHours < 1;
+            return remaining.TotalHours >= 1
+                ? $"{(int)remaining.TotalHours}h{remaining.Minutes:D2} restant(es)"
+                : $"{remaining.Minutes}min restantes";
+        }
+
         /// <summary>2026-09-13 : première lecture/affichage client de public.notifications (schema.sql
         /// §9) — jusqu'ici le serveur écrivait (WriteNotification) mais rien ne les lisait jamais.
         /// Pas de push : lues à l'ouverture du HUB (RefreshModeSelectScreen) et sur ce bouton dédié,
@@ -1431,21 +1505,8 @@ namespace Novgov.Network
 
             foreach (var n in list)
             {
-                var row = new VisualElement();
-                row.style.flexDirection = FlexDirection.Row;
-                row.style.justifyContent = Justify.SpaceBetween;
-                row.style.alignItems = Align.Center;
-                row.style.paddingTop = 8;
-                row.style.paddingBottom = 8;
-                row.style.borderBottomWidth = 1;
-                row.style.borderBottomColor = new Color(1, 1, 1, 0.2f);
-
-                var lblMsg = new Label(n.message);
-                lblMsg.style.color = Color.white;
-                lblMsg.style.fontSize = 16;
-                lblMsg.style.whiteSpace = WhiteSpace.Normal;
-                lblMsg.style.flexShrink = 1;
-                row.Add(lblMsg);
+                var row = MakeHubCard();
+                row.Add(MakeTextColumn(n.message));
 
                 var btnRead = new Button();
                 btnRead.text = "Marquer comme lue";
@@ -1465,7 +1526,9 @@ namespace Novgov.Network
 
         /// <summary>2026-09-13 : liste les sièges "pending" où le joueur est attaquant (statut
         /// "en attente de résolution") ou défenseur ("Défendre maintenant" ouvre le même dock de
-        /// déploiement que l'attaquant, côté équipe 2 — voir MultiplayerMatchController.DefendSiege).</summary>
+        /// déploiement que l'attaquant, côté équipe 2 — voir MultiplayerMatchController.DefendSiege).
+        /// Compte à rebours en direct (FormatCountdown) : rend l'urgence VISIBLE plutôt qu'un simple
+        /// "répondez avant l'échéance" statique — au coeur du "gamefiable" demandé.</summary>
         private async void RefreshSiegesScreen()
         {
             var root = UIScreenManager.Instance.GetScreen("Sieges");
@@ -1492,23 +1555,20 @@ namespace Novgov.Network
             foreach (var s in list)
             {
                 bool isDefender = s.defender_user_id == myUserId;
-                var row = new VisualElement();
-                row.style.flexDirection = FlexDirection.Row;
-                row.style.justifyContent = Justify.SpaceBetween;
-                row.style.alignItems = Align.Center;
-                row.style.paddingTop = 8;
-                row.style.paddingBottom = 8;
-                row.style.borderBottomWidth = 1;
-                row.style.borderBottomColor = new Color(1, 1, 1, 0.2f);
+                string countdown = FormatCountdown(s.deadline, out bool urgent);
 
-                var lblInfo = new Label(isDefender
-                    ? $"Zone ({s.tile_x},{s.tile_y}) assiégée — répondez avant l'échéance !"
-                    : $"Zone ({s.tile_x},{s.tile_y}) — siège en attente de résolution (vous êtes l'attaquant).");
-                lblInfo.style.color = Color.white;
-                lblInfo.style.fontSize = 15;
-                lblInfo.style.whiteSpace = WhiteSpace.Normal;
-                lblInfo.style.flexShrink = 1;
-                row.Add(lblInfo);
+                var row = MakeHubCard();
+                // Pas d'émoji ici (🛡/🏰 etc.) : plage Unicode "pictographes" sans glyphe de repli
+                // fiable une fois une police custom assignée (voir Theme.tss, même bug déjà corrigé
+                // pour les boutons d'icône) — seul "⚔" (symbole, pas pictographe) est déjà utilisé
+                // avec succès ailleurs dans ce projet (ZoneMapController, mini-carte des Zones).
+                var col = MakeTextColumn(
+                    isDefender ? $"⚔ Zone ({s.tile_x},{s.tile_y}) assiégée !" : $"Siège sur ({s.tile_x},{s.tile_y})",
+                    isDefender ? "Vous êtes le défenseur — organisez votre garnison." : "Vous êtes l'attaquant — en attente du défenseur.");
+                var lblCountdown = new Label(countdown);
+                lblCountdown.AddToClassList(urgent ? "hub-badge-urgent" : "hub-badge-ok");
+                col.Add(lblCountdown);
+                row.Add(col);
 
                 if (isDefender)
                 {
@@ -1550,21 +1610,22 @@ namespace Novgov.Network
 
             foreach(var z in list)
             {
-                var row = new VisualElement();
-                row.style.flexDirection = FlexDirection.Row;
-                row.style.justifyContent = Justify.SpaceBetween;
-                row.style.alignItems = Align.Center;
-                row.style.paddingTop = 8;
-                row.style.paddingBottom = 8;
-                row.style.borderBottomWidth = 1;
-                row.style.borderBottomColor = new Color(1,1,1,0.2f);
+                var row = MakeHubCard();
 
-                var lblInfo = new Label($"Zone: {z.tile_x},{z.tile_y} | Bâtiment HQ: {z.hq_building_index} | Niveau: {z.building_level}/3");
-                lblInfo.style.color = Color.white;
-                lblInfo.style.fontSize = 16;
-                lblInfo.style.whiteSpace = WhiteSpace.Normal;
-                lblInfo.style.flexShrink = 1;
-                row.Add(lblInfo);
+                bool shielded = DateTime.TryParse(z.shield_until, null, System.Globalization.DateTimeStyles.RoundtripKind, out DateTime shieldUntil) && shieldUntil > DateTime.UtcNow;
+                int incomePerCycle = z.building_level * 10; // voir MatchSessionManager.ZoneIncomePerZone (10 AP/niveau/5min)
+
+                var col = MakeTextColumn(
+                    $"Zone ({z.tile_x},{z.tile_y})",
+                    $"Bâtiment HQ #{z.hq_building_index} — +{incomePerCycle} AP / 5 min");
+                col.Add(MakePipRow(z.building_level, 3));
+                if (shielded)
+                {
+                    var lblShield = new Label($"Protégée encore {FormatCountdown(z.shield_until, out _)}");
+                    lblShield.AddToClassList("hub-badge-shielded");
+                    col.Add(lblShield);
+                }
+                row.Add(col);
 
                 // 2026-09-13 : "renforcer son économie" (demande explicite) — investir des AP dans SA
                 // Zone augmente à la fois le revenu passif (ZoneIncomeLoop) ET la force de la
@@ -1587,8 +1648,8 @@ namespace Novgov.Network
                 }
                 else
                 {
-                    var lblMax = new Label("Niveau maximum");
-                    lblMax.style.color = Color.gray;
+                    var lblMax = new Label("NIVEAU MAX");
+                    lblMax.AddToClassList("hub-badge-ok");
                     row.Add(lblMax);
                 }
 
@@ -1604,7 +1665,7 @@ namespace Novgov.Network
             var lblPoints = root.Q<Label>("lbl-action-points");
             if (scroll == null) return;
             scroll.Clear();
-            
+
             var (okProf, prof) = await Novgov.Auth.SupabaseDatabaseClient.GetProfile();
             int currentAp = prof?.action_points ?? 0;
             if (lblPoints != null) lblPoints.text = $"Solde : {currentAp} AP";
@@ -1617,6 +1678,15 @@ namespace Novgov.Network
             // causait (Canon/Char indéfiniment indéployables après achat).
             string[] unitTypes = Novgov.Auth.SupabaseDatabaseClient.KnownUnitTypes;
             int[] unitCosts = Novgov.Auth.SupabaseDatabaseClient.KnownUnitCosts;
+            // Un mot court par type pour que la carte se lise sans avoir à connaître le jeu par
+            // coeur — jamais une icône chargée à l'exécution (voir Theme.tss ".hub-card").
+            string[] unitBlurbs = {
+                "Polyvalente, peu coûteuse — la base de toute escouade.",
+                "Lourdement blindé, dégâts élevés — le poing de votre armée.",
+                "Rapide, bon compromis mobilité/puissance de feu.",
+                "Tir de zone à longue portée — ne s'engage jamais directement.",
+                "Reconnaissance (pas encore déployable en combat).",
+            };
 
             for (int i = 0; i < unitTypes.Length; i++)
             {
@@ -1624,25 +1694,20 @@ namespace Novgov.Network
                 int cost = unitCosts[i];
                 var item = roster != null ? System.Linq.Enumerable.FirstOrDefault(roster, r => r.unit_type.Equals(uType, System.StringComparison.OrdinalIgnoreCase)) : null;
                 int qty = item != null ? item.quantity : 0;
+                bool canAfford = currentAp >= cost;
 
-                var row = new VisualElement();
-                row.style.flexDirection = FlexDirection.Row;
-                row.style.justifyContent = Justify.SpaceBetween;
-                row.style.paddingTop = 8;
-                row.style.paddingBottom = 8;
-                row.style.borderBottomWidth = 1;
-                row.style.borderBottomColor = new Color(1,1,1,0.2f);
-                
-                var lblName = new Label($"{uType} (Possédé: {qty})");
-                lblName.style.color = Color.white;
-                lblName.style.fontSize = 16;
-                row.Add(lblName);
+                var row = MakeHubCard();
+                var col = MakeTextColumn(uType, i < unitBlurbs.Length ? unitBlurbs[i] : null);
+                row.Add(col);
+
+                row.Add(MakeCountBadge($"×{qty}"));
 
                 var btnBuy = new Button();
                 btnBuy.text = $"Recruter ({cost} AP)";
-                btnBuy.style.backgroundColor = currentAp >= cost ? new Color(0.2f, 0.6f, 0.2f) : new Color(0.5f, 0.5f, 0.5f);
-                
-                if (currentAp >= cost)
+                btnBuy.AddToClassList(canAfford ? "btn-primary" : "btn-secondary");
+                btnBuy.SetEnabled(canAfford);
+
+                if (canAfford)
                 {
                     // 2026-09-13 : passe par la fonction Postgres buy_unit() (schema.sql §10) — le
                     // coût est vérifié et déduit ATOMIQUEMENT côté serveur (jamais ce "cost" client,
@@ -1659,11 +1724,7 @@ namespace Novgov.Network
                         RefreshRosterScreen();
                     };
                 }
-                else
-                {
-                    btnBuy.SetEnabled(false);
-                }
-                
+
                 row.Add(btnBuy);
                 scroll.Add(row);
             }

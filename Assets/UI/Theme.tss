@@ -58,6 +58,114 @@
     --font-body: url("/Assets/Fonts/Oswald-Variable.ttf");
 }
 
+/* Transition d'apparition des écrans plein-cadre (2026-09-13, demande explicite : "il faut que
+   tout soit intuitif et gamefiable") — UIScreenManager applique cette classe UNE FOIS à chaque
+   écran instancié (voir Awake()) et pilote opacity/scale depuis Show()/SetVisible() : display
+   (none<->flex) n'est PAS transformable par UI Toolkit, donc c'est le VRAI mécanisme (contrairement
+   à .slide-in ci-dessous sur DeploymentDockScreen, jamais réellement déclenché par du code — right/
+   opacity n'y sont modifiés nulle part, transition purement déclarative sans effet visible). Centralisé
+   ICI (thème global, hérité par tout écran sans le moindre import) plutôt que dupliqué par écran :
+   un seul endroit à ajuster si la sensation doit changer un jour. */
+.screen-fade {
+    transition-property: opacity, scale;
+    transition-duration: 0.22s;
+    transition-timing-function: ease-out;
+}
+
+/* "Cartes" de liste réutilisables (Caserne/Bâtiments/Sièges, 2026-09-13, demande explicite
+   "intuitif et gamefiable") — remplace les lignes texte brut sans relief d'avant (juste un
+   séparateur horizontal) par un vrai panneau avec profondeur/survol, dans le même langage visuel
+   que .panel/Button plutôt qu'une palette indépendante. Construites dynamiquement en C#
+   (MultiplayerMatchController.Refresh*Screen) — pas de PNG chargée à l'exécution ici
+   (Resources.Load ne verrait pas Assets/UI/Icons/*, hors d'un dossier Resources) : la richesse
+   visuelle vient de la couleur/mise en page, pas d'icônes par ligne. */
+.hub-card {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    background-color: var(--color-panel-2);
+    border-width: 1px;
+    border-top-color: var(--bevel-light-soft);
+    border-left-color: var(--bevel-light-soft);
+    border-right-color: var(--bevel-dark-soft);
+    border-bottom-color: var(--bevel-dark-soft);
+    border-radius: 2px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    transition-property: background-color, translate;
+    transition-duration: 0.12s;
+}
+.hub-card:hover {
+    background-color: var(--color-glass-fill-hover);
+    translate: 3px 0;
+}
+
+.hub-card-title {
+    color: var(--color-text);
+    font-size: 18px;
+    -unity-font-style: bold;
+    white-space: normal;
+}
+
+.hub-card-subtitle {
+    color: var(--color-text-dim);
+    font-size: 14px;
+    white-space: normal;
+    margin-top: 2px;
+}
+
+/* Pastille numérique (quantité possédée, ex: Caserne) — même traitement que .notif-badge, jamais
+   du texte nu sans fond (illisible selon ce qu'il y a derrière, déjà corrigé ailleurs pour
+   .squad-count-badge). */
+.hub-count-badge {
+    background-color: var(--color-glass-fill);
+    border-width: 1px;
+    border-color: var(--color-panel-border-dim);
+    border-radius: 10px;
+    padding: 2px 10px;
+    color: var(--color-text);
+    font-size: 14px;
+    -unity-font-style: bold;
+    -unity-text-align: middle-center;
+}
+
+/* Barre de "pips" (niveau de bâtiment 1-3, etc.) — remplit visuellement au lieu d'un simple
+   texte "Niveau: 2/3", plus lisible d'un coup d'oeil (jauge de jeu classique). */
+.hub-pip-row {
+    flex-direction: row;
+    margin-top: 4px;
+}
+.hub-pip {
+    width: 16px;
+    height: 8px;
+    margin-right: 3px;
+    border-radius: 1px;
+    border-width: 1px;
+    border-color: var(--color-panel-border-dim);
+}
+.hub-pip--filled {
+    background-color: var(--color-accent);
+    border-color: var(--color-accent-hover);
+}
+.hub-pip--empty {
+    background-color: var(--color-glass-fill);
+}
+
+.hub-badge-shielded {
+    color: rgb(120, 168, 210);
+    font-size: 13px;
+    -unity-font-style: bold;
+}
+.hub-badge-urgent {
+    color: rgb(224, 110, 96);
+    font-size: 14px;
+    -unity-font-style: bold;
+}
+.hub-badge-ok {
+    color: var(--color-text-dim);
+    font-size: 14px;
+}
+
 /* white-space: normal en base, ici et sur Button ci-dessous : par défaut, UI Toolkit NE fait PAS
    passer le texte à la ligne (nowrap) et le laisse déborder de son conteneur silencieusement. En
    le forçant une fois ici plutôt que par écran (ce qui s'oubliait), aucun texte ne peut plus

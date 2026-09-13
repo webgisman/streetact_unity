@@ -88,6 +88,14 @@ public class UIScreenManager : MonoBehaviour
             VisualElement innerRoot = instance.Q<VisualElement>("root");
             if (innerRoot != null) innerRoot.pickingMode = PickingMode.Ignore;
 
+            // Transition d'apparition (2026-09-13) — voir Theme.tss ".screen-fade" pour le pourquoi.
+            // État de départ "invisible/légèrement réduit" : Show()/SetVisible() l'amènent à
+            // opacity:1/scale:1 sur UNE FRAME PLUS TARD (jamais la même frame que display:Flex),
+            // sans quoi la transition USS n'a rien à animer.
+            instance.AddToClassList("screen-fade");
+            instance.style.opacity = 0f;
+            instance.style.scale = new StyleScale(new Scale(new Vector3(0.97f, 0.97f, 1f)));
+
             root.Add(instance);
             screens[name] = instance;
         }
@@ -179,21 +187,59 @@ public class UIScreenManager : MonoBehaviour
     /// <summary>Renvoie la racine d'un écran pour que son contrôleur y fasse ses Query&lt;T&gt;() et bindings d'événements.</summary>
     public VisualElement GetScreen(string name) => screens.TryGetValue(name, out var el) ? el : null;
 
-    /// <summary>Affiche un seul écran, masque tous les autres écrans "plein cadre" gérés ici.</summary>
+    private static readonly Scale ScreenScaleHidden = new Scale(new Vector3(0.97f, 0.97f, 1f));
+    private static readonly Scale ScreenScaleShown = new Scale(Vector3.one);
+
+    /// <summary>Rend un écran instantanément invisible (pas d'animation de sortie — voir FadeIn pour
+    /// pourquoi seule l'ENTRÉE est animée) et réinitialise son opacity/scale à l'état "caché" pour la
+    /// prochaine fois qu'il sera montré.</summary>
+    private static void HideInstant(VisualElement el)
+    {
+        el.style.display = DisplayStyle.None;
+        el.style.opacity = 0f;
+        el.style.scale = new StyleScale(ScreenScaleHidden);
+    }
+
+    /// <summary>Anime l'apparition (opacity+scale, voir Theme.tss ".screen-fade") — display:Flex est
+    /// posé IMMÉDIATEMENT (sinon l'écran ne fait rien du tout), mais opacity/scale ne passent à leur
+    /// valeur finale qu'un tick plus tard : UI Toolkit n'anime jamais un changement de style appliqué
+    /// dans le même passage que la valeur de départ, il faut que la valeur de départ ait été rendue au
+    /// moins une fois avant que la cible ne change (même contrainte qu'en CSS web).</summary>
+    private static void FadeIn(VisualElement el)
+    {
+        el.style.display = DisplayStyle.Flex;
+        el.style.opacity = 0f;
+        el.style.scale = new StyleScale(ScreenScaleHidden);
+        el.schedule.Execute(() =>
+        {
+            el.style.opacity = 1f;
+            el.style.scale = new StyleScale(ScreenScaleShown);
+        }).ExecuteLater(1);
+    }
+
+    /// <summary>Affiche un seul écran (avec une animation d'apparition, voir FadeIn), masque tous les
+    /// autres écrans "plein cadre" gérés ici (instantanément — seule l'ENTRÉE est animée, une sortie
+    /// animée obligerait à retarder display:None après la fin de la transition pour chaque écran
+    /// qu'on quitte, complexité non justifiée ici puisqu'un nouvel écran plein cadre le recouvre de
+    /// toute façon immédiatement).</summary>
     public void Show(string name)
     {
-        foreach (var kv in screens) kv.Value.style.display = DisplayStyle.None;
-        if (screens.TryGetValue(name, out var el)) el.style.display = DisplayStyle.Flex;
+        foreach (var kv in screens)
+        {
+            if (kv.Key != name) HideInstant(kv.Value);
+        }
+        if (screens.TryGetValue(name, out var el)) FadeIn(el);
     }
 
     /// <summary>Affiche/masque un écran indépendamment des autres (ex: superposer une bannière sur le HUD).</summary>
     public void SetVisible(string name, bool visible)
     {
-        if (screens.TryGetValue(name, out var el)) el.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
+        if (!screens.TryGetValue(name, out var el)) return;
+        if (visible) FadeIn(el); else HideInstant(el);
     }
 
     public void HideAll()
     {
-        foreach (var kv in screens) kv.Value.style.display = DisplayStyle.None;
+        foreach (var kv in screens) HideInstant(kv.Value);
     }
 }
