@@ -247,5 +247,54 @@ namespace Novgov.Auth
 
             return (true, JsonHelper.FromJson<ZoneInfo>(req.downloadHandler.text));
         }
+
+        // --- NOTIFICATIONS (schema.sql §9) — écrites UNIQUEMENT par le serveur de jeu (connexion
+        // Postgres directe) ; ce client ne fait que lire les siennes et marquer read_at (seule
+        // colonne grantée en écriture, voir revoke/grant ci-dessus côté schema.sql). Pas de push
+        // mobile : lu à l'ouverture de l'application, comme demandé explicitement ("le joueur qui
+        // lance de temps en temps son appli pour voir la notif").
+        [Serializable]
+        public class NotificationInfo
+        {
+            public long id;
+            public string match_id;
+            public string type;
+            public string message;
+            public string read_at;
+            public string created_at;
+        }
+
+        /// <summary>Notifications non lues du joueur connecté, les plus récentes d'abord.</summary>
+        public static async Task<(bool ok, NotificationInfo[] notifications)> GetUnreadNotifications()
+        {
+            if (SupabaseAuthClient.CurrentSession == null || SupabaseAuthClient.CurrentSession.user == null)
+                return (false, new NotificationInfo[0]);
+
+            string userId = SupabaseAuthClient.CurrentSession.user.id;
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/notifications?user_id=eq.{userId}&read_at=is.null&order=created_at.desc&select=id,match_id,type,message,read_at,created_at";
+            using var req = UnityWebRequest.Get(url);
+            SetupHeaders(req);
+            await req.SendWebRequest();
+            if (req.result != UnityWebRequest.Result.Success) return (false, new NotificationInfo[0]);
+
+            return (true, JsonHelper.FromJson<NotificationInfo>(req.downloadHandler.text));
+        }
+
+        /// <summary>Marque une notification comme lue (seule écriture permise sur cette table côté
+        /// client — voir "grant update (read_at)" dans schema.sql).</summary>
+        public static async Task<bool> MarkNotificationRead(long notificationId)
+        {
+            if (SupabaseAuthClient.CurrentSession == null) return false;
+
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/notifications?id=eq.{notificationId}";
+            string json = "{\"read_at\":\"" + DateTime.UtcNow.ToString("o") + "\"}";
+            using var req = new UnityWebRequest(url, "PATCH");
+            req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
+            req.downloadHandler = new DownloadHandlerBuffer();
+            SetupHeaders(req);
+            req.SetRequestHeader("Content-Type", "application/json");
+            await req.SendWebRequest();
+            return req.result == UnityWebRequest.Result.Success;
+        }
     }
 }

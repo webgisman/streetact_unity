@@ -10,6 +10,12 @@
             </ui:VisualElement>
         </ui:VisualElement>
 
+        <!-- NOTIFICATIONS (Haut Droite) -->
+        <ui:Button name="btn-notifications" class="btn-secondary" style="position: absolute; right: 20px; top: 20px; flex-direction: row; align-items: center; padding: 10px 14px; min-height: 0;">
+            <ui:VisualElement style="width: 24px; height: 24px; background-image: url('/Assets/UI/Icons/bell.png'); margin-right: 8px;" />
+            <ui:Label name="lbl-notifications-badge" text="Notifications" style="color: white; font-size: 18px;" />
+        </ui:Button>
+
         <!-- MENU CENTRAL -->
         <ui:VisualElement name="panel" class="panel" style="width: 65%; max-width: 640px; align-self: center; margin-top: 100px;">
             <ui:Label text="HUB COMMANDEMENT" class="title" style="margin-bottom: 32px;" />

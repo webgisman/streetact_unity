@@ -1328,6 +1328,75 @@ namespace Novgov.Network
                 if (lblUser != null) lblUser.text = $"Commandant {prof.username}";
                 if (lblAP != null) lblAP.text = $"Points d'Action : {prof.action_points}";
             }
+
+            var lblNotifBadge = root.Q<Label>("lbl-notifications-badge");
+            if (lblNotifBadge != null)
+            {
+                var (okNotif, notifs) = await Novgov.Auth.SupabaseDatabaseClient.GetUnreadNotifications();
+                int unread = okNotif && notifs != null ? notifs.Length : 0;
+                lblNotifBadge.text = unread > 0 ? $"Notifications ({unread})" : "Notifications";
+            }
+        }
+
+        /// <summary>2026-09-13 : première lecture/affichage client de public.notifications (schema.sql
+        /// §9) — jusqu'ici le serveur écrivait (WriteNotification) mais rien ne les lisait jamais.
+        /// Pas de push : lues à l'ouverture du HUB (RefreshModeSelectScreen) et sur ce bouton dédié,
+        /// exactement comme demandé ("le joueur qui lance de temps en temps son appli pour voir la
+        /// notif").</summary>
+        private async void RefreshNotificationsScreen()
+        {
+            var root = UIScreenManager.Instance.GetScreen("Notifications");
+            if (root == null) return;
+            var scroll = root.Q<ScrollView>("notifications-scroll");
+            if (scroll == null) return;
+            scroll.Clear();
+            var lblLoading = new Label("Chargement des notifications...");
+            lblLoading.style.color = Color.white;
+            scroll.Add(lblLoading);
+
+            var (ok, list) = await Novgov.Auth.SupabaseDatabaseClient.GetUnreadNotifications();
+            scroll.Clear();
+            if (!ok || list == null || list.Length == 0)
+            {
+                var lbl = new Label("Aucune notification non lue.");
+                lbl.style.color = Color.white;
+                lbl.style.whiteSpace = WhiteSpace.Normal;
+                scroll.Add(lbl);
+                return;
+            }
+
+            foreach (var n in list)
+            {
+                var row = new VisualElement();
+                row.style.flexDirection = FlexDirection.Row;
+                row.style.justifyContent = Justify.SpaceBetween;
+                row.style.alignItems = Align.Center;
+                row.style.paddingTop = 8;
+                row.style.paddingBottom = 8;
+                row.style.borderBottomWidth = 1;
+                row.style.borderBottomColor = new Color(1, 1, 1, 0.2f);
+
+                var lblMsg = new Label(n.message);
+                lblMsg.style.color = Color.white;
+                lblMsg.style.fontSize = 16;
+                lblMsg.style.whiteSpace = WhiteSpace.Normal;
+                lblMsg.style.flexShrink = 1;
+                row.Add(lblMsg);
+
+                var btnRead = new Button();
+                btnRead.text = "Marquer comme lue";
+                long notifId = n.id;
+                btnRead.clicked += async () =>
+                {
+                    btnRead.SetEnabled(false);
+                    await Novgov.Auth.SupabaseDatabaseClient.MarkNotificationRead(notifId);
+                    RefreshNotificationsScreen();
+                    RefreshModeSelectScreen();
+                };
+                row.Add(btnRead);
+
+                scroll.Add(row);
+            }
         }
 
         private async void RefreshBuildingsScreen()
@@ -1487,6 +1556,12 @@ namespace Novgov.Network
                 RefreshBuildingsScreen();
             };
 
+            Button notificationsBtn = modeSelectRoot?.Q<Button>("btn-notifications");
+            if (notificationsBtn != null) notificationsBtn.clicked += () => {
+                UIScreenManager.Instance.Show("Notifications");
+                RefreshNotificationsScreen();
+            };
+
             Button backToStartupBtn = modeSelectRoot?.Q<Button>("btn-back-startup");
             if (backToStartupBtn != null)
             {
@@ -1502,6 +1577,9 @@ namespace Novgov.Network
 
             var bldgRoot = UIScreenManager.Instance.GetScreen("Buildings");
             bldgRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.ModeSelect));
+
+            var notifRoot = UIScreenManager.Instance.GetScreen("Notifications");
+            notifRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.ModeSelect));
 
             authRoot = UIScreenManager.Instance.GetScreen("Auth");
             authTitleLabel = authRoot.Q<Label>("title-label");
