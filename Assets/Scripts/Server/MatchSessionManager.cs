@@ -8,18 +8,20 @@ using UnityEngine;
 namespace Novgov.Server
 {
     /// <summary>
-    /// Orchestre les parties Deathmatch/Zone de Contrôle (concurrentes, en donnée pure — voir
-    /// MatchState.cs et 04-unity-headless-server.md, "Option B" 2026-08-30 — un seul processus en
-    /// fait tourner des centaines/milliers en parallèle) ET les combats de Conquête (INCHANGÉS,
-    /// toujours 1 combat à la fois, basés sur de vraies UnitAI/BuildingStructure — voir
-    /// RunConquestSkirmish). "Portée V1" mentionnée par endroits ci-dessous dans le code réfère à
-    /// l'ancienne contrainte "un seul match total sur le processus" — dépassée pour Deathmatch/
-    /// Zone de Contrôle, toujours vraie pour la Conquête seule.
+    /// Orchestre TOUS les modes de jeu serveur — Deathmatch/Zone de Contrôle (MatchSessionManager_
+    /// MatchLive.cs), Conquête et entraînement contre l'IA (MatchSessionManager_Conquest.cs) — sur de
+    /// vraies UnitAI/BuildingStructure de scène, résolues par le vrai moteur Unity
+    /// (MatchSessionManager_CombatRealEngine.cs, voir 09/10/11-*.md dans _ServerDocs/multiplayer/ pour
+    /// l'historique complet de cette bascule, 2026-09-13). Un seul match (tous modes confondus) peut
+    /// tourner à la fois par processus SAUF en rythme "async" (NetMessage.turn_pace, jusqu'à 6h/tour),
+    /// qui libère la scène entre deux tours — voir MatchSessionManager_AsyncPause.cs.
     ///
-    /// Limitation connue, toujours vraie : pas de reprise de partie après coupure TCP complète — un
-    /// joueur qui se déconnecte puis se reconnecte rejoint la file d'attente pour un NOUVEAU match,
-    /// il ne réintègre pas la partie en cours (qui continue avec son camp en mode Ghost jusqu'à la
-    /// victoire/défaite).
+    /// Limitation connue, toujours vraie : pas de reprise de partie après coupure TCP complète en
+    /// rythme "fast" — un joueur qui se déconnecte puis se reconnecte rejoint la file d'attente pour
+    /// un NOUVEAU match, il ne réintègre pas la partie en cours (qui continue avec son camp en mode
+    /// Ghost jusqu'à la victoire/défaite). En rythme "async", la partie survit déjà à une déconnexion
+    /// courte (l'effectif est persisté en base entre les tours) mais ce n'a pas non plus de vraie
+    /// reprise de session pour l'instant.
     /// </summary>
     public partial class MatchSessionManager : MonoBehaviour
     {
@@ -165,47 +167,14 @@ namespace Novgov.Server
             // cache donnerait des murs au mauvais endroit sur la nouvelle carte.
             TacticalGridBuilder.InvalidateCache();
 
-            MeasureBarricadeHalfWidth();
-
             Debug.Log("[MatchSessionManager] Carte par défaut (hors-ligne) chargée pour le serveur.");
         }
 
-        /// <summary>Mesure UNE SEULE FOIS, au démarrage du serveur, la demi-largeur réelle d'une
-        /// barricade (Road_barrier) — nécessaire car les parties Deathmatch/Zone de Contrôle (voir
-        /// MatchState, "Option B" 2026-08-30) ne créent plus jamais de vrai RoadBarrier/BoxCollider :
-        /// une barricade y est un segment Barricade{p1,p2} en donnée pure (voir
-        /// ResolveDeploymentPure), qui doit occuper exactement le même espace au sol que la version
-        /// Conquête/Solo (RoadBarrier.Start(), dimensions dérivées du mesh réel) pour un blocage de
-        /// ligne de vue/déplacement cohérent — jamais une valeur devinée.</summary>
-        private void MeasureBarricadeHalfWidth()
-        {
-            GameObject prefab = Resources.Load<GameObject>("Road_barrier");
-            if (prefab == null) return; // repli sur MatchState.BarricadeHalfWidthMeters par défaut (2f)
-
-            // Recalcule directement les bornes depuis les Renderers (même math que RoadBarrier.
-            // Start(), lignes 32-48) SANS passer par le cycle de vie MonoBehaviour normal (Start() ne
-            // s'exécuterait qu'à la frame SUIVANTE pour un objet fraîchement instancié — inutilisable
-            // ici, cette méthode doit renvoyer un résultat immédiatement, en plein milieu d'une frame
-            // de démarrage serveur).
-            GameObject probe = Instantiate(prefab, new Vector3(0f, -9999f, 0f), Quaternion.identity);
-            probe.transform.localScale = Vector3.one * 1.3f; // même échelle que UnitSpawnerUI.SpawnUnitAt
-
-            Bounds bounds = new Bounds(probe.transform.position, Vector3.zero);
-            bool hasBounds = false;
-            foreach (Renderer r in probe.GetComponentsInChildren<Renderer>())
-            {
-                if (r.gameObject.name.Contains("Health")) continue;
-                if (!hasBounds) { bounds = r.bounds; hasBounds = true; }
-                else bounds.Encapsulate(r.bounds);
-            }
-
-            if (hasBounds)
-            {
-                float sizeX = Mathf.Max(2.0f, bounds.size.x / Mathf.Max(0.01f, probe.transform.lossyScale.x));
-                MatchState.BarricadeHalfWidthMeters = (sizeX * probe.transform.lossyScale.x) * 0.5f;
-            }
-            Destroy(probe);
-        }
+        // 2026-09-13 : MeasureBarricadeHalfWidth() supprimée — ne servait qu'à alimenter
+        // MatchState.BarricadeHalfWidthMeters pour le placement de barricades en donnée pure
+        // (ResolveDeploymentPure, famille "Pure" supprimée). Les barricades sont maintenant TOUJOURS
+        // de vrais RoadBarrier (voir ResolveDeployment), qui connaissent déjà leur propre largeur
+        // réelle via leur mesh — plus besoin de la deviner/mesurer à l'avance.
 
         private void Update()
         {
