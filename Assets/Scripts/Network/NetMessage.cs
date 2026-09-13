@@ -48,6 +48,14 @@ namespace Novgov.Network
         // que Deathmatch/Zone de Contrôle l'utilisent réellement (voir PlayerConnection.HasHomeTile).
         public bool has_home_tile;
 
+        // join_matchmaking / match_found (2026-09-13, deathmatch/zone_control uniquement) : rythme de
+        // tour choisi par le joueur — "fast" (5 min max par tour, comportement d'origine, connexion
+        // TCP maintenue ouverte) ou "async" (6h max par tour, pensé pour un joueur qui relance son
+        // appli de temps en temps). Absent/vide = "fast" (rétrocompatibilité avec un client plus
+        // ancien). Les deux joueurs appariés partagent TOUJOURS le même rythme — voir les files
+        // d'attente séparées dans MatchSessionManager.cs.
+        public string turn_pace;
+
         // zone_captured / zone_attack_result : résultat de la demande d'attaque/capture d'une Zone.
         public bool success;
 

@@ -79,6 +79,16 @@ namespace Novgov.Server
         private readonly List<PlayerConnection> waitingDeathmatch = new List<PlayerConnection>();
         private readonly List<PlayerConnection> waitingZoneControl = new List<PlayerConnection>();
 
+        // 2026-09-13 : files séparées pour le rythme "async" (6h max/tour, voir NetMessage.turn_pace)
+        // — deux joueurs ne sont appariés que s'ils veulent le MÊME rythme, en plus du même mode.
+        // Un match async LIBÈRE la scène/matchInProgress entre chaque tour (voir RunMatchLive/
+        // PauseMatchForAsyncWait) au lieu de la tenir en continu comme un match "fast" — sans ça, un
+        // seul match dont le tour peut durer 6h bloquerait TOUS les autres matchs (fast ET async, tous
+        // modes confondus) pendant potentiellement des heures, matchInProgress étant désormais un
+        // verrou global unique depuis la bascule vers le vrai moteur.
+        private readonly List<PlayerConnection> waitingDeathmatchAsync = new List<PlayerConnection>();
+        private readonly List<PlayerConnection> waitingZoneControlAsync = new List<PlayerConnection>();
+
         // Portée du verrou réduite le 2026-08-30 ("Option B", voir MatchState.cs) : ne protège plus
         // qu'un combat de Conquête (RunConquestSkirmish, toujours 1-à-la-fois, hors scope de ce
         // chantier) contre l'instant bref où une NOUVELLE partie Deathmatch/Zone de Contrôle fige sa
@@ -228,6 +238,7 @@ namespace Novgov.Server
                     conn.HasHomeTile = msg.has_home_tile;
                     conn.HomeTileX = msg.zone_tile_x;
                     conn.HomeTileY = msg.zone_tile_y;
+                    conn.TurnPace = msg.turn_pace == "async" ? "async" : "fast";
                     pendingMode.RemoveAt(i);
 
                     // La conquête n'est PAS un appariement aléatoire entre deux joueurs en file
@@ -254,9 +265,12 @@ namespace Novgov.Server
                         break;
                     }
 
-                    var targetList = conn.Mode == "zone_control" ? waitingZoneControl : waitingDeathmatch;
+                    bool isAsync = conn.TurnPace == "async";
+                    var targetList = conn.Mode == "zone_control"
+                        ? (isAsync ? waitingZoneControlAsync : waitingZoneControl)
+                        : (isAsync ? waitingDeathmatchAsync : waitingDeathmatch);
                     targetList.Add(conn);
-                    Debug.Log($"[MatchSessionManager] Joueur en file d'attente ({conn.Mode}) : {conn.UserId} ({targetList.Count} en attente)");
+                    Debug.Log($"[MatchSessionManager] Joueur en file d'attente ({conn.Mode}, {conn.TurnPace}) : {conn.UserId} ({targetList.Count} en attente)");
                     // Rapport immédiat (pas d'attente du prochain heartbeat) : un second joueur qui
                     // choisit une instance dans la seconde qui suit doit voir qu'il y a déjà
                     // quelqu'un en attente ici pour le même mode, voir ReportInstanceStatus.
@@ -269,6 +283,8 @@ namespace Novgov.Server
             pendingMode.RemoveAll(c => c.IsDisconnected);
             waitingDeathmatch.RemoveAll(c => c.IsDisconnected);
             waitingZoneControl.RemoveAll(c => c.IsDisconnected);
+            waitingDeathmatchAsync.RemoveAll(c => c.IsDisconnected);
+            waitingZoneControlAsync.RemoveAll(c => c.IsDisconnected);
 
             // 2026-09-13 : bascule vers TryStartMatchLive (voir MatchSessionManager_MatchLive.cs) —
             // Deathmatch/Zone de Contrôle utilisent maintenant de vraies UnitAI/BuildingStructure de
@@ -279,6 +295,8 @@ namespace Novgov.Server
             // déjà (Deathmatch, Zone de Contrôle ou Conquête).
             TryStartMatchLive(waitingDeathmatch);
             TryStartMatchLive(waitingZoneControl);
+            TryStartMatchLive(waitingDeathmatchAsync);
+            TryStartMatchLive(waitingZoneControlAsync);
         }
     }
 }

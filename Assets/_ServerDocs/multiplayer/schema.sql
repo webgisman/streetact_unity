@@ -246,6 +246,55 @@ create policy "Le registre d'instances est visible par tous les joueurs authenti
 revoke insert, update, delete on public.server_instances from authenticated;
 
 -- =========================================================================
+-- 8. Rythme "async" (5 min / 6h, 2026-09-13) — colonne de pause du match vivant
+-- Un match "async" (voir NetMessage.turn_pace) libère la scène/matchInProgress entre deux tours
+-- (attente jusqu'à 6h possible) au lieu de la garder occupée comme un match "fast" — sinon un seul
+-- match async bloquerait TOUS les autres matchs (tous rythmes/modes confondus) pendant potentiellement
+-- des heures, matchInProgress étant un verrou global unique depuis la bascule vers le vrai moteur
+-- (voir MatchSessionManager_MatchLive.cs). L'état des vraies UnitAI (position/rotation/PV/type/équipe)
+-- est donc sérialisé ici avant destruction des GameObjects, puis relu pour les respawn au tour suivant.
+-- =========================================================================
+alter table public.matches add column if not exists paused_roster_json jsonb;
+
+-- =========================================================================
+-- 9. Notifications (2026-09-13) — "c'est ton tour" pour le rythme async, lu par le client à
+-- l'ouverture de l'application (pas de push mobile, voir 11-real-engine-switch-2026-09-13.md) : une
+-- notification normale au sens Supabase, une simple ligne dans une table protégée par RLS, jamais un
+-- service tiers.
+-- =========================================================================
+create table public.notifications (
+    id bigint generated always as identity primary key,
+    user_id uuid not null references auth.users(id) on delete cascade,
+    match_id uuid references public.matches(id) on delete cascade,
+    type text not null,          -- 'your_turn' | 'match_over' | 'opponent_ghosted'
+    message text not null,
+    read_at timestamptz,
+    created_at timestamptz not null default now()
+);
+
+create index on public.notifications (user_id, read_at);
+
+alter table public.notifications enable row level security;
+
+create policy "Un joueur voit ses propres notifications"
+    on public.notifications for select
+    to authenticated
+    using (auth.uid() = user_id);
+
+create policy "Un joueur peut marquer ses propres notifications comme lues"
+    on public.notifications for update
+    to authenticated
+    using (auth.uid() = user_id)
+    with check (auth.uid() = user_id);
+
+-- Seul le serveur de jeu (connexion Postgres directe, rôle "postgres") écrit une notification —
+-- jamais le client, qui ne fait que lire/marquer comme lue les siennes. Même schéma que
+-- "profiles" (§1) : revoke le grant large de bootstrap-db.sh, puis regrant colonne par colonne.
+revoke insert, delete on public.notifications from authenticated;
+revoke update on public.notifications from authenticated;
+grant update (read_at) on public.notifications to authenticated;
+
+-- =========================================================================
 -- Note sur les écritures : le serveur de jeu Unity headless se connecte à Postgres
 -- avec sa propre chaîne de connexion (rôle "postgres", réseau Docker interne, jamais
 -- exposé publiquement) et contourne volontairement RLS/PostgREST pour ces écritures

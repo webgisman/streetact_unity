@@ -180,13 +180,59 @@ namespace Novgov.Server
             // équipe 1 (ligne 236 de MatchSessionManager_Conquest.cs), étendu aux deux équipes.
             foreach (var unit in UnitAI.AllLivingUnits) unit.isPlayerControlled = true;
 
+            // 2026-09-13, rythme "async" (voir MatchSessionManager_AsyncPause.cs) : dès le tour 1,
+            // sérialise l'effectif et libère la scène/matchInProgress AVANT la première attente de
+            // planification — un tour 1 peut, comme n'importe quel autre, durer jusqu'à 6h, il n'y a
+            // aucune raison de le traiter différemment des tours suivants.
+            bool isAsync = p1.TurnPace == "async";
+            if (isAsync)
+            {
+                yield return PersistPausedRoster(matchId);
+                UnitSpawnerUI.Instance.ClearAllUnits();
+                if (CaptureZone.Instance != null) UnityEngine.Object.Destroy(CaptureZone.Instance.gameObject);
+                matchInProgress = false;
+            }
+
             int turnNumber = 1;
             bool matchOver = false;
             int winnerTeam = 0;
 
             while (!matchOver)
             {
-                yield return RunPlanningPhaseLiveNoAI(p1, p2, turnNumber);
+                if (isAsync)
+                {
+                    yield return WaitForBothOrdersAsync(p1, p2, turnNumber, matchId);
+
+                    if (p1.IsDisconnected && p2.IsDisconnected)
+                    {
+                        matchOver = true;
+                        winnerTeam = 0;
+                        break;
+                    }
+
+                    // Reprend la main sur la scène partagée — peut attendre si un autre match (fast,
+                    // async ou Conquête) est en train de l'utiliser à cet instant précis.
+                    while (matchInProgress) yield return null;
+                    matchInProgress = true;
+
+                    if (hasRealTile) yield return LoadZoneOnServer(tileX, tileY);
+                    else if (!defaultMapLoaded) yield return RestoreDefaultMapOnServer();
+
+                    PausedRosterDto roster = null;
+                    yield return FetchPausedRoster(matchId, r => roster = r);
+                    RespawnPausedRoster(roster);
+                    // Zone de Contrôle : la progression de capture NE SURVIT PAS à une pause
+                    // (simplification assumée, voir MatchSessionManager_AsyncPause.cs) — une Zone
+                    // fraîche est recréée à chaque reprise.
+                    if (mode == "zone_control") CaptureZone.CreateAtMapCenter();
+
+                    ApplyForPlayerLiveNoAI(p1, p2);
+                    ApplyForPlayerLiveNoAI(p2, p1);
+                }
+                else
+                {
+                    yield return RunPlanningPhaseLiveNoAI(p1, p2, turnNumber);
+                }
 
                 if (p1.IsDisconnected && p2.IsDisconnected)
                 {

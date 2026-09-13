@@ -21,6 +21,9 @@ namespace Novgov.Server
 
         public int TeamId; // assigné par MatchSessionManager au début d'un match
         public string Mode; // "deathmatch" ou "zone_control", lu depuis join_matchmaking
+        // "fast" (5 min max/tour) ou "async" (6h max/tour) — voir NetMessage.turn_pace. Lu depuis
+        // join_matchmaking, jamais modifié ensuite. Par défaut "fast" (rétrocompatibilité).
+        public string TurnPace = "fast";
         // Tuile Slippy Map "domicile" du joueur (voir Novgov.Generation.ZoneManager côté client,
         // calculée UNE FOIS via GPS puis jamais réinterrogée) — lue depuis join_matchmaking
         // (NetMessage.has_home_tile/zone_tile_x/y) pour Deathmatch/Zone de Contrôle, 2026-08-30
