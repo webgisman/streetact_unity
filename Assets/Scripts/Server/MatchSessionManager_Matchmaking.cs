@@ -1,4 +1,5 @@
 using Novgov.Network;
+using Novgov.TacticalCore;
 
 namespace Novgov.Server
 {
