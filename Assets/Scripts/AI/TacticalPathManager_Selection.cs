@@ -9,46 +9,57 @@ public partial class TacticalPathManager
 
     private void SelectionnerUnite(GameObject unite)
     {
-        // Désélectionner l'ancienne unité si nécessaire
-        if (uniteSelectionnee != null && uniteSelectionnee != unite)
-        {
-            UnitAI ancienneUnitAI = uniteSelectionnee.GetComponent<UnitAI>();
-            if (ancienneUnitAI != null) ancienneUnitAI.SetSelected(false);
-        }
-
-        // Toute sélection (ou désélection) d'unité invalide de fait un menu contextuel en attente —
-        // centralisé via FermerMenuContextuel pour que TOUS les appelants (clic direct sur une
-        // unité, sélection depuis la squad-bar, désélection à la fin du tour...) bénéficient de la
-        // même remise à zéro complète (y compris currentMenuCancelAction/ConfirmAction et le masquage
-        // du ContextMenu), sans avoir à dupliquer ce reset à chaque site d'appel.
-        FermerMenuContextuel(invokeCancelAction: true);
-
-        uniteSelectionnee = unite;
-
-        if (uniteSelectionnee != null)
+        if (unite != null)
         {
             UnitAI unitAI = unite.GetComponent<UnitAI>();
 
-            // On ne peut sélectionner que les unités du joueur
-            if (unitAI != null && unitAI.isPlayerControlled)
+            // On ne peut sélectionner que les unités du joueur. Tous les appelants actuels
+            // (ResolveClosestPlayerUnit, RefreshSquadBar/CycleSelectGroup, la cloche "blessés")
+            // filtrent déjà isPlayerControlled avant d'arriver ici, mais ce garde reste la SEULE
+            // protection si l'un d'eux rate ce filtre un jour — et jusqu'ici, en cas d'échec,
+            // `uniteSelectionnee = unite` était affecté INCONDITIONNELLEMENT plus haut (avant ce
+            // test), qu'il soit valide ou pas : la cible rejetée devenait quand même "la sélection
+            // courante" en interne (aucun cercle, aucun son, mais isGivingOrderToSelectedUnit
+            // passait quand même à vrai dans HandlePointerInput, rétrécissant le rayon de tap
+            // tolérant à 60px). Vu du joueur : ce clic ne faisait RIEN, et tant qu'aucune sélection
+            // VALIDE n'avait eu lieu depuis, TOUTE autre unité tolérait moins l'imprécision du tap
+            // suivant — donnant l'impression qu'il fallait d'abord réussir à sélectionner UNE unité
+            // pour que "la sélection des autres" se débloque. On ne touche donc plus du tout à
+            // uniteSelectionnee ni à l'ancienne sélection tant que la cible n'est pas validée.
+            if (unitAI == null || !unitAI.isPlayerControlled)
             {
-                unitAI.SetSelected(true); // Activer le cercle visuel
-
-                // Si l'unité est à l'intérieur d'un bâtiment, ouvrir le toit en preview immédiate !
-                if (unitAI.currentBuilding != null && !unitAI.isRooftopSniper)
-                {
-                    if (unitAI.currentBuilding.tacticalVisibility != null)
-                    {
-                        unitAI.currentBuilding.tacticalVisibility.SetPlanificationPreview(true);
-                    }
-                }
-
-                // Son de sélection
-                AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateHoverSound(), Camera.main.transform.position);
-                PlayUnitVoiceLine(unitAI, isSelection: true);
-                Debug.Log("Unité sélectionnée : " + unite.name);
-                isPathsDirty = true;
+                Debug.LogWarning($"[TacticalPathManager] Sélection rejetée sur '{unite.name}' " +
+                    $"(unitAI={(unitAI != null)}, isPlayerControlled={(unitAI != null && unitAI.isPlayerControlled)}).");
+                return;
             }
+
+            // Désélectionner l'ancienne unité si nécessaire (seulement maintenant que la nouvelle
+            // cible est confirmée valide).
+            if (uniteSelectionnee != null && uniteSelectionnee != unite)
+            {
+                UnitAI ancienneUnitAI = uniteSelectionnee.GetComponent<UnitAI>();
+                if (ancienneUnitAI != null) ancienneUnitAI.SetSelected(false);
+            }
+
+            FermerMenuContextuel(invokeCancelAction: true);
+
+            uniteSelectionnee = unite;
+            unitAI.SetSelected(true); // Activer le cercle visuel
+
+            // Si l'unité est à l'intérieur d'un bâtiment, ouvrir le toit en preview immédiate !
+            if (unitAI.currentBuilding != null && !unitAI.isRooftopSniper)
+            {
+                if (unitAI.currentBuilding.tacticalVisibility != null)
+                {
+                    unitAI.currentBuilding.tacticalVisibility.SetPlanificationPreview(true);
+                }
+            }
+
+            // Son de sélection
+            AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateHoverSound(), Camera.main.transform.position);
+            PlayUnitVoiceLine(unitAI, isSelection: true);
+            Debug.Log("Unité sélectionnée : " + unite.name);
+            isPathsDirty = true;
         }
         else
         {
@@ -57,6 +68,13 @@ public partial class TacticalPathManager
                 UnitAI ancienneUnitAI = uniteSelectionnee.GetComponent<UnitAI>();
                 if (ancienneUnitAI != null) ancienneUnitAI.SetSelected(false);
             }
+
+            // Toute désélection invalide de fait un menu contextuel en attente — centralisé via
+            // FermerMenuContextuel pour que TOUS les appelants (clic sur le vide, fin de tour...)
+            // bénéficient de la même remise à zéro complète (y compris currentMenuCancelAction/
+            // ConfirmAction et le masquage du ContextMenu), sans dupliquer ce reset ici.
+            FermerMenuContextuel(invokeCancelAction: true);
+
             uniteSelectionnee = null;
             isPathsDirty = true;
 
