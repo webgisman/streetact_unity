@@ -295,6 +295,142 @@ revoke update on public.notifications from authenticated;
 grant update (read_at) on public.notifications to authenticated;
 
 -- =========================================================================
+-- 10. Économie de Conquête (2026-09-13, demande explicite) — un bâtiment HQ par carte (Zone),
+-- des Points d'Action (AP) qui financent l'achat d'unités. Remplace l'ancienne "SupabaseDatabaseClient"
+-- qui, malgré son nom, ne lisait/écrivait QUE du PlayerPrefs local à chaque appareil — d'où le bug
+-- signalé ("bâtiment jaune chez un joueur, pas chez l'autre") : chaque appareil avait sa propre
+-- vérité, jamais partagée. Tout ce qui suit est réellement lu/écrit en base, partagé entre les deux
+-- joueurs d'un même match.
+-- =========================================================================
+
+-- Un seul bâtiment "HQ" par Zone (tuile), désigné UNE FOIS par le serveur (le plus grand bâtiment
+-- de la tuile, voir MatchSessionManager_Conquest.EnsureHqBuildingIndex) au lieu d'un index choisi au
+-- hasard côté client (UnityEngine.Random.Range) et jamais partagé. Même valeur lue par les deux
+-- clients d'un même match — c'est ce qui corrige l'incohérence visuelle.
+alter table public.zones add column if not exists hq_building_index integer;
+
+-- Points d'Action (AP) — la monnaie qui finance l'achat d'unités. Remplace
+-- SupabaseDatabaseClient.GetActionPoints/SetActionPoints (PlayerPrefs local). Hérite AUTOMATIQUEMENT
+-- du verrou déjà en place sur public.profiles (revoke update + grant(username) seul, voir §1) :
+-- une colonne ajoutée après coup sur une table existante ne reçoit PAS de nouveau grant, donc
+-- "authenticated" ne peut PAS l'écrire directement par PostgREST — seule la fonction buy_unit()
+-- plus bas (SECURITY DEFINER) ou service_role (serveur) peuvent la modifier.
+alter table public.profiles add column if not exists action_points integer not null default 100;
+
+-- Caserne réelle (remplace SupabaseDatabaseClient.GetRoster/UpsertRosterItem, PlayerPrefs local).
+create table if not exists public.player_roster (
+    user_id uuid not null references auth.users(id) on delete cascade,
+    unit_type text not null,
+    quantity integer not null default 0,
+    primary key (user_id, unit_type)
+);
+
+alter table public.player_roster enable row level security;
+
+create policy "Un joueur voit son propre roster"
+    on public.player_roster for select
+    to authenticated
+    using (auth.uid() = user_id);
+
+-- Pas de policy insert/update/delete pour "authenticated" : RLS default-deny + revoke explicite en
+-- défense en profondeur (même schéma que "profiles"/"zones"/"notifications" plus haut) — seule la
+-- fonction buy_unit() (SECURITY DEFINER, ci-dessous) peut y écrire, jamais un PATCH/POST direct du
+-- client.
+revoke insert, update, delete on public.player_roster from authenticated;
+
+-- Achat d'unité — transaction ATOMIQUE (verrou de ligne "for update" + une seule transaction SQL) :
+-- vérifie le coût (fixé ICI, jamais envoyé par le client — un client modifié ne peut donc jamais
+-- payer moins cher), déduit les AP, incrémente la caserne. SECURITY DEFINER : s'exécute avec les
+-- droits du propriétaire de la fonction (peut écrire profiles.action_points/player_roster même si
+-- "authenticated" n'a lui-même aucun grant d'écriture dessus), mais ne fait jamais que CE calcul
+-- précis — pas une porte dérobée générale.
+create or replace function public.buy_unit(p_unit_type text)
+returns table(new_action_points integer, new_quantity integer)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_user_id uuid := auth.uid();
+    v_current_ap integer;
+    v_cost integer;
+begin
+    if v_user_id is null then
+        raise exception 'Non authentifié';
+    end if;
+
+    v_cost := case p_unit_type
+        when 'Fantassin' then 50
+        when 'VehiculeCanon' then 150
+        when 'CharLeopard' then 300
+        when 'Mortier' then 400
+        when 'Drone' then 200
+        else null
+    end;
+    if v_cost is null then
+        raise exception 'Type d''unité inconnu : %', p_unit_type;
+    end if;
+
+    select action_points into v_current_ap from public.profiles where id = v_user_id for update;
+    if v_current_ap is null or v_current_ap < v_cost then
+        raise exception 'Points d''action insuffisants (% disponibles, % requis)', coalesce(v_current_ap, 0), v_cost;
+    end if;
+
+    update public.profiles set action_points = action_points - v_cost where id = v_user_id;
+
+    insert into public.player_roster (user_id, unit_type, quantity)
+    values (v_user_id, p_unit_type, 1)
+    on conflict (user_id, unit_type) do update set quantity = public.player_roster.quantity + 1;
+
+    return query
+        select p.action_points, r.quantity
+        from public.profiles p
+        join public.player_roster r on r.user_id = p.id and r.unit_type = p_unit_type
+        where p.id = v_user_id;
+end;
+$$;
+
+grant execute on function public.buy_unit(text) to authenticated;
+
+-- Bonus quotidien de connexion (déjà existant côté client, MultiplayerMatchController.
+-- GrantDailyActionPoints — cassé par ce chantier puisqu'il écrivait auparavant action_points en
+-- PlayerPrefs local ; ne peut plus écrire cette colonne directement une fois verrouillée ci-dessus).
+-- Un vrai horodatage serveur (pas un PlayerPrefs local, qu'un joueur pourrait remettre à zéro en
+-- réinstallant l'app) empêche un abus trivial de "réclamer plusieurs fois par jour".
+alter table public.profiles add column if not exists last_daily_bonus_at timestamptz;
+
+create or replace function public.claim_daily_bonus()
+returns table(new_action_points integer, already_claimed boolean)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_user_id uuid := auth.uid();
+    v_last timestamptz;
+begin
+    if v_user_id is null then
+        raise exception 'Non authentifié';
+    end if;
+
+    select last_daily_bonus_at into v_last from public.profiles where id = v_user_id for update;
+
+    if v_last is not null and v_last::date = now()::date then
+        return query select action_points, true from public.profiles where id = v_user_id;
+        return;
+    end if;
+
+    update public.profiles
+    set action_points = action_points + 50, last_daily_bonus_at = now()
+    where id = v_user_id;
+
+    return query select action_points, false from public.profiles where id = v_user_id;
+end;
+$$;
+
+grant execute on function public.claim_daily_bonus() to authenticated;
+
+-- =========================================================================
 -- Note sur les écritures : le serveur de jeu Unity headless se connecte à Postgres
 -- avec sa propre chaîne de connexion (rôle "postgres", réseau Docker interne, jamais
 -- exposé publiquement) et contourne volontairement RLS/PostgREST pour ces écritures

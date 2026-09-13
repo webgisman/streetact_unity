@@ -115,6 +115,76 @@ namespace Novgov.Server
         {
             StartCoroutine(SetupWorldOnce());
             StartCoroutine(InstanceHeartbeatLoop());
+            StartCoroutine(ZoneIncomeLoop());
+        }
+
+        // =====================================================================
+        // Revenu passif de territoire (2026-09-13, demande explicite : "chaque bâtiment... doit
+        // ramener de l'argent pour qu'il puisse acheter d'autres unités") — chaque Zone possédée
+        // (public.zones.owner_user_id) rapporte des Points d'Action à son propriétaire à intervalle
+        // régulier, tant qu'il la garde. Tourne sur CHAQUE instance du pool (game-server-1/2/3) —
+        // sans conséquence : elles lisent/écrivent toutes la même table partagée, un intervalle assez
+        // large (voir ZoneIncomeIntervalSeconds) rend le risque de double-versement lors d'un
+        // chevauchement improbable négligeable pour ce qui reste un revenu cosmétique, pas un calcul
+        // de combat qui doit être exact au tour près.
+        // =====================================================================
+        private const float ZoneIncomeIntervalSeconds = 300f; // 5 minutes
+        private const int ZoneIncomePerZone = 10;
+
+        private IEnumerator ZoneIncomeLoop()
+        {
+            while (true)
+            {
+                yield return new WaitForSeconds(ZoneIncomeIntervalSeconds);
+                yield return GrantZoneIncome();
+            }
+        }
+
+        [Serializable] private class ZoneOwnerEntry { public string owner_user_id; }
+        [Serializable] private class ZoneOwnerQueryResult { public ZoneOwnerEntry[] items; }
+
+        private IEnumerator GrantZoneIncome()
+        {
+            string url = $"{GameServerBootstrap.RestUrl}/zones?owner_user_id=not.is.null&select=owner_user_id";
+            using var req = UnityEngine.Networking.UnityWebRequest.Get(url);
+            req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
+            req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+            yield return req.SendWebRequest();
+            if (req.result != UnityEngine.Networking.UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning($"[ZoneIncome] Lecture des Zones possédées échouée : {req.error}");
+                yield break;
+            }
+
+            var ownedCounts = new Dictionary<string, int>();
+            try
+            {
+                string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                var parsed = JsonUtility.FromJson<ZoneOwnerQueryResult>(wrapped);
+                if (parsed?.items != null)
+                {
+                    foreach (var e in parsed.items)
+                    {
+                        if (string.IsNullOrEmpty(e.owner_user_id)) continue;
+                        ownedCounts.TryGetValue(e.owner_user_id, out int cur);
+                        ownedCounts[e.owner_user_id] = cur + 1;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[ZoneIncome] Parsing des Zones possédées échoué : {ex.Message}");
+                yield break;
+            }
+
+            foreach (var kv in ownedCounts)
+            {
+                int currentAp = 0;
+                yield return FetchActionPoints(kv.Key, ap => currentAp = ap);
+                int income = kv.Value * ZoneIncomePerZone;
+                yield return PostgrestPatch($"/profiles?id=eq.{kv.Key}", "{\"action_points\":" + (currentAp + income) + "}");
+                Debug.Log($"[ZoneIncome] {kv.Key} : +{income} AP pour {kv.Value} Zone(s) possédée(s).");
+            }
         }
 
         // =====================================================================

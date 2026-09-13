@@ -348,68 +348,53 @@ namespace Novgov.Server
             attacker.Close();
         }
 
+        [Serializable] private class ActionPointsEntry { public int action_points; }
+        [Serializable] private class ActionPointsQueryResult { public ActionPointsEntry[] items; }
+
+        /// <summary>Pille les Points d'Action du défenseur (ramené à 0) vers l'attaquant, lors d'une
+        /// capture de Zone déjà possédée par un vrai joueur. CORRECTIF 2026-09-13 : filtrait par
+        /// "username=eq." alors que defenderOwnerId/attacker.UserId sont de vrais UUID (colonne
+        /// "id") — ne correspondait donc JAMAIS à une ligne réelle, et la colonne action_points
+        /// elle-même n'existait pas encore avant cette même session (voir schema.sql §10) : ce
+        /// pillage n'avait donc jamais pu fonctionner ne serait-ce qu'une fois en production.</summary>
         private IEnumerator LootActionPoints(PlayerConnection attacker, string defenderOwnerId)
         {
-            string urlDefender = $"{GameServerBootstrap.RestUrl}/profiles?username=eq.{defenderOwnerId}&select=action_points";
             int stolenAP = 0;
-            using (UnityWebRequest req = UnityWebRequest.Get(urlDefender))
+            yield return FetchActionPoints(defenderOwnerId, ap => stolenAP = ap);
+            if (stolenAP <= 0) yield break;
+
+            yield return PostgrestPatch($"/profiles?id=eq.{defenderOwnerId}", "{\"action_points\":0}");
+
+            int attackerAP = 0;
+            yield return FetchActionPoints(attacker.UserId, ap => attackerAP = ap);
+            yield return PostgrestPatch($"/profiles?id=eq.{attacker.UserId}", "{\"action_points\":" + (attackerAP + stolenAP) + "}");
+
+            Debug.Log($"[Conquête] {attacker.UserId} a pillé {stolenAP} AP au joueur {defenderOwnerId} !");
+        }
+
+        private IEnumerator FetchActionPoints(string userId, Action<int> onResult)
+        {
+            string url = $"{GameServerBootstrap.RestUrl}/profiles?id=eq.{userId}&select=action_points";
+            using var req = UnityWebRequest.Get(url);
+            req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
+            req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+            yield return req.SendWebRequest();
+
+            int ap = 0;
+            if (req.result == UnityWebRequest.Result.Success)
             {
-                req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
-                req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
-                yield return req.SendWebRequest();
-                if (req.result == UnityWebRequest.Result.Success)
+                try
                 {
-                    string json = req.downloadHandler.text;
-                    if (json.Contains("\"action_points\":"))
-                    {
-                        var match = System.Text.RegularExpressions.Regex.Match(json, "\"action_points\":\\s*(\\d+)");
-                        if (match.Success) int.TryParse(match.Groups[1].Value, out stolenAP);
-                    }
+                    string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                    var parsed = JsonUtility.FromJson<ActionPointsQueryResult>(wrapped);
+                    if (parsed?.items != null && parsed.items.Length > 0) ap = parsed.items[0].action_points;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[MatchSessionManager] Parsing action_points échoué ({userId}) : {ex.Message}");
                 }
             }
-
-            if (stolenAP > 0)
-            {
-                // Update defender to 0
-                string updateDef = "{\"action_points\": 0}";
-                using (UnityWebRequest req = UnityWebRequest.Put($"{GameServerBootstrap.RestUrl}/profiles?username=eq.{defenderOwnerId}", updateDef))
-                {
-                    req.method = "PATCH";
-                    req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
-                    req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
-                    req.SetRequestHeader("Content-Type", "application/json");
-                    yield return req.SendWebRequest();
-                }
-
-                // Get attacker current AP
-                int attackerAP = 0;
-                string urlAttacker = $"{GameServerBootstrap.RestUrl}/profiles?username=eq.{attacker.UserId}&select=action_points";
-                using (UnityWebRequest reqA = UnityWebRequest.Get(urlAttacker))
-                {
-                    reqA.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
-                    reqA.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
-                    yield return reqA.SendWebRequest();
-                    if (reqA.result == UnityWebRequest.Result.Success)
-                    {
-                        string jsonA = reqA.downloadHandler.text;
-                        var matchA = System.Text.RegularExpressions.Regex.Match(jsonA, "\"action_points\":\\s*(\\d+)");
-                        if (matchA.Success) int.TryParse(matchA.Groups[1].Value, out attackerAP);
-                    }
-                }
-
-                int newAp = attackerAP + stolenAP;
-                string updateAttacker = $"{{\"action_points\": {newAp}}}";
-                using (UnityWebRequest req = UnityWebRequest.Put($"{GameServerBootstrap.RestUrl}/profiles?username=eq.{attacker.UserId}", updateAttacker))
-                {
-                    req.method = "PATCH";
-                    req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
-                    req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
-                    req.SetRequestHeader("Content-Type", "application/json");
-                    yield return req.SendWebRequest();
-                }
-
-                Debug.Log($"[Conquête] {attacker.UserId} a pillé {stolenAP} AP au joueur {defenderOwnerId} !");
-            }
+            onResult(ap);
         }
 
         // Renfort de garnison IA en fonction de la taille du territoire du défenseur (NOUVEAU,
@@ -788,6 +773,61 @@ namespace Novgov.Server
             {
                 Debug.LogWarning($"[MatchSessionManager] Chargement de la Zone ({tileX},{tileY}) trop long (>60s) — poursuite avec l'état actuel.");
             }
+
+            yield return EnsureHqBuildingIndex(tileX, tileY);
+        }
+
+        /// <summary>Désigne UNE FOIS, en base (public.zones.hq_building_index), le bâtiment "HQ" de
+        /// cette Zone — le plus grand par emprise au sol, un choix déterministe qui donne le MÊME
+        /// résultat à chaque appel tant que la géométrie de la tuile ne change pas. Remplace
+        /// l'ancien MultiplayerMatchController.ClaimBuildingAsync (index tiré au hasard côté client,
+        /// écrit uniquement dans le PlayerPrefs local de CET appareil — jamais partagé, d'où le
+        /// bâtiment jaune incohérent entre les deux joueurs d'un même match). L'index utilisé est
+        /// la position du bâtiment dans BuildingStructure.AllBuildings au moment de la génération —
+        /// la MÊME numérotation que CityGenerator.lotIndex côté rendu (les deux parcourent les
+        /// mêmes données OSM dans le même ordre, déjà l'hypothèse retenue ailleurs pour la
+        /// vérification de hash de géométrie, voir city_verify) et que TacticalBuilding.id côté
+        /// TacticalGridBuilder.
+        ///
+        /// Toujours réécrit (pas seulement "si absent") : le calcul est déterministe à partir de la
+        /// géométrie de la tuile, donc idempotent — appeler ceci plusieurs fois sur la même tuile
+        /// redonne toujours le même index, un upsert répété est donc sans risque et plus simple qu'un
+        /// aller-retour de lecture préalable.</summary>
+        private IEnumerator EnsureHqBuildingIndex(int tileX, int tileY)
+        {
+            var buildings = BuildingStructure.AllBuildings;
+            if (buildings == null || buildings.Count == 0) yield break;
+
+            int bestIndex = -1;
+            float bestArea = -1f;
+            for (int i = 0; i < buildings.Count; i++)
+            {
+                var b = buildings[i];
+                if (b == null || b.polygonFootprint == null || b.polygonFootprint.Count < 3) continue;
+                float area = PolygonArea(b.polygonFootprint);
+                if (area > bestArea) { bestArea = area; bestIndex = i; }
+            }
+            if (bestIndex < 0) yield break;
+
+            string json = "{\"tile_x\":" + tileX + ",\"tile_y\":" + tileY + ",\"zoom\":" + CityGenerator.ZONE_ZOOM +
+                          ",\"hq_building_index\":" + bestIndex + "}";
+            yield return PostgrestUpsert("/zones", json);
+            Debug.Log($"[HQ] Zone ({tileX},{tileY}) : bâtiment HQ désigné = index {bestIndex} (emprise {bestArea:F1} m²).");
+        }
+
+        /// <summary>Aire d'un polygone 2D par la formule du lacet (shoelace) — valeur absolue, peu
+        /// importe le sens de parcours du contour.</summary>
+        private static float PolygonArea(List<Vector2> polygon)
+        {
+            float sum = 0f;
+            int n = polygon.Count;
+            for (int i = 0; i < n; i++)
+            {
+                Vector2 a = polygon[i];
+                Vector2 b = polygon[(i + 1) % n];
+                sum += a.x * b.y - b.x * a.y;
+            }
+            return Mathf.Abs(sum) * 0.5f;
         }
 
         /// <summary>Recharge la carte par défaut hors-ligne (deathmatch/zone_control) après qu'un
