@@ -26,16 +26,6 @@ namespace Novgov.Auth
         public int quantity;
     }
 
-    [Serializable]
-    public class PlayerBuilding
-    {
-        public string zone_id;
-        public string user_id;
-        public int building_index;
-        public string captured_at;
-        public string last_collection_at;
-    }
-
     // Wrap list arrays for JsonUtility (JsonUtility cannot deserialize raw arrays directly if not wrapped)
     public static class JsonHelper
     {
@@ -67,6 +57,12 @@ namespace Novgov.Auth
         }
 
         // --- PROFILES ---
+        // 2026-09-13 : action_points est maintenant une VRAIE colonne (schema.sql §10), plus jamais
+        // écrasée par une valeur locale (PlayerPrefs) — voir "Que reste-t-il de faux ?" en bas de ce
+        // fichier pour l'historique de ce qui a changé. profiles.action_points est verrouillée en
+        // écriture directe (le grant large de bootstrap-db.sh a été retiré par le même revoke que
+        // "username"/"rating") : seules les fonctions buy_unit()/claim_daily_bonus() (SECURITY
+        // DEFINER, voir schema.sql) peuvent la modifier, jamais un PATCH direct du client.
         public static async Task<(bool ok, PlayerProfile profile)> GetProfile()
         {
             if (SupabaseAuthClient.CurrentSession == null || SupabaseAuthClient.CurrentSession.user == null)
@@ -81,68 +77,66 @@ namespace Novgov.Auth
             if (req.result == UnityWebRequest.Result.Success)
             {
                 var arr = JsonHelper.FromJson<PlayerProfile>(req.downloadHandler.text);
-                if (arr != null && arr.Length > 0)
-                {
-                    var p = arr[0];
-                    p.action_points = GetActionPoints(userId);
-                    return (true, p);
-                }
+                if (arr != null && arr.Length > 0) return (true, arr[0]);
             }
 
-            // Fallback profil local si réseau instable
+            // Repli MINIMAL si le réseau est instable (jamais un vrai substitut à la ligne réelle) :
+            // ne PAS inventer un solde d'AP ici (200/150 arbitraires comme avant) — 0 est le seul
+            // repli honnête tant que la vraie valeur serveur n'a pas pu être lue.
             var fallback = new PlayerProfile
             {
                 id = userId,
                 username = SupabaseAuthClient.CurrentSession.user.email?.Split('@')[0] ?? "Commandant",
                 rating = 1000,
-                action_points = GetActionPoints(userId)
+                action_points = 0
             };
             return (true, fallback);
         }
 
-        public static async Task<bool> UpdateProfile(string username, int ap)
+        public static async Task<bool> UpdateProfile(string username)
         {
             if (SupabaseAuthClient.CurrentSession == null || SupabaseAuthClient.CurrentSession.user == null) return false;
+            if (string.IsNullOrEmpty(username)) return true;
+
             string userId = SupabaseAuthClient.CurrentSession.user.id;
-            SetActionPoints(userId, ap);
-
-            if (!string.IsNullOrEmpty(username))
-            {
-                string url = $"{SupabaseAuthClient.RestBaseUrl}/profiles?id=eq.{userId}";
-                string escapedUsername = username.Replace("\"", "\\\"");
-                string json = $"{{\"username\": \"{escapedUsername}\"}}";
-                using var req = new UnityWebRequest(url, "PATCH");
-                req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
-                req.downloadHandler = new DownloadHandlerBuffer();
-                SetupHeaders(req);
-                req.SetRequestHeader("Content-Type", "application/json");
-                await req.SendWebRequest();
-                return req.result == UnityWebRequest.Result.Success;
-            }
-            return true;
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/profiles?id=eq.{userId}";
+            string escapedUsername = username.Replace("\"", "\\\"");
+            string json = $"{{\"username\": \"{escapedUsername}\"}}";
+            using var req = new UnityWebRequest(url, "PATCH");
+            req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
+            req.downloadHandler = new DownloadHandlerBuffer();
+            SetupHeaders(req);
+            req.SetRequestHeader("Content-Type", "application/json");
+            await req.SendWebRequest();
+            return req.result == UnityWebRequest.Result.Success;
         }
 
-        // --- ACTION POINTS (Gestion robuste locale persistée) ---
-        public static int GetActionPoints(string userId)
+        [Serializable] private class DailyBonusEntry { public int new_action_points; public bool already_claimed; }
+
+        /// <summary>Appelle la fonction Postgres claim_daily_bonus() (schema.sql §10) — +50 AP une
+        /// fois par jour UTC, suivi par un vrai horodatage serveur (profiles.last_daily_bonus_at),
+        /// pas un PlayerPrefs local qu'une réinstallation remettrait à zéro.</summary>
+        public static async Task<(bool ok, int newActionPoints, bool alreadyClaimed)> ClaimDailyBonus()
         {
-            if (string.IsNullOrEmpty(userId)) return 100;
-            return PlayerPrefs.GetInt($"Novgov_AP_{userId}", 150);
+            if (SupabaseAuthClient.CurrentSession == null) return (false, 0, false);
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/rpc/claim_daily_bonus";
+            using var req = new UnityWebRequest(url, "POST");
+            req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes("{}"));
+            req.downloadHandler = new DownloadHandlerBuffer();
+            SetupHeaders(req);
+            req.SetRequestHeader("Content-Type", "application/json");
+            await req.SendWebRequest();
+            if (req.result != UnityWebRequest.Result.Success) return (false, 0, false);
+
+            var arr = JsonHelper.FromJson<DailyBonusEntry>(req.downloadHandler.text);
+            if (arr == null || arr.Length == 0) return (false, 0, false);
+            return (true, arr[0].new_action_points, arr[0].already_claimed);
         }
 
-        public static void SetActionPoints(string userId, int ap)
-        {
-            if (string.IsNullOrEmpty(userId)) return;
-            PlayerPrefs.SetInt($"Novgov_AP_{userId}", Mathf.Max(0, ap));
-            PlayerPrefs.Save();
-        }
-
-        public static void AddActionPoints(string userId, int delta)
-        {
-            int current = GetActionPoints(userId);
-            SetActionPoints(userId, current + delta);
-        }
-
-        // --- ROSTER (Caserne d'unités) ---
+        // --- ROSTER (Caserne d'unités) — VRAIE table partagée (schema.sql §10, public.player_roster),
+        // remplace l'ancienne version PlayerPrefs locale (2026-09-13). Le client ne peut plus écrire
+        // directement dedans (RLS default-deny) — un achat passe par BuyUnit()/la fonction buy_unit(),
+        // jamais un PATCH/POST direct.
         public static PlayerRosterItem[] CurrentRoster { get; private set; }
 
         // Source UNIQUE des types d'unité connus de la caserne (correctif 2026-09-06) : ce tableau
@@ -160,91 +154,98 @@ namespace Novgov.Auth
         public static readonly string[] KnownUnitTypes = { "Fantassin", "VehiculeCanon", "CharLeopard", "Mortier", "Drone" };
         public static readonly int[] KnownUnitCosts = { 50, 150, 300, 400, 200 }; // même ordre que KnownUnitTypes
 
-        public static Task<(bool ok, PlayerRosterItem[] roster)> GetRoster()
+        public static async Task<(bool ok, PlayerRosterItem[] roster)> GetRoster()
         {
             if (SupabaseAuthClient.CurrentSession == null || SupabaseAuthClient.CurrentSession.user == null)
-                return Task.FromResult((false, new PlayerRosterItem[0]));
+                return (false, new PlayerRosterItem[0]);
 
             string userId = SupabaseAuthClient.CurrentSession.user.id;
-            var list = new List<PlayerRosterItem>();
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/player_roster?user_id=eq.{userId}&select=user_id,unit_type,quantity";
+            using var req = UnityWebRequest.Get(url);
+            SetupHeaders(req);
+            await req.SendWebRequest();
 
-            foreach (var u in KnownUnitTypes)
+            if (req.result != UnityWebRequest.Result.Success)
+                return (false, CurrentRoster ?? new PlayerRosterItem[0]);
+
+            CurrentRoster = JsonHelper.FromJson<PlayerRosterItem>(req.downloadHandler.text);
+            return (true, CurrentRoster);
+        }
+
+        [Serializable] private class BuyUnitEntry { public int new_action_points; public int new_quantity; }
+
+        /// <summary>Achète UNE unité de <paramref name="unitType"/> via la fonction Postgres
+        /// buy_unit() (schema.sql §10) — remplace UpsertRosterItem (PlayerPrefs local, 2026-09-13).
+        /// Le coût est déterminé SERVEUR (jamais envoyé par ce client) ; échoue proprement (ok=false)
+        /// si les Points d'Action sont insuffisants ou le type inconnu.</summary>
+        public static async Task<(bool ok, int newActionPoints, int newQuantity, string error)> BuyUnit(string unitType)
+        {
+            if (SupabaseAuthClient.CurrentSession == null) return (false, 0, 0, "Non connecté");
+
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/rpc/buy_unit";
+            string json = "{\"p_unit_type\":\"" + unitType.Replace("\"", "\\\"") + "\"}";
+            using var req = new UnityWebRequest(url, "POST");
+            req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
+            req.downloadHandler = new DownloadHandlerBuffer();
+            SetupHeaders(req);
+            req.SetRequestHeader("Content-Type", "application/json");
+            await req.SendWebRequest();
+
+            if (req.result != UnityWebRequest.Result.Success)
             {
-                int defaultQty = (u == "Fantassin") ? 4 : (u == "VehiculeCanon" || u == "CharLeopard") ? 1 : 0;
-                int qty = PlayerPrefs.GetInt($"Novgov_Roster_{userId}_{u}", defaultQty);
-                list.Add(new PlayerRosterItem { user_id = userId, unit_type = u, quantity = qty });
+                // PostgREST renvoie le message de la fonction (raise exception) dans le corps —
+                // c'est ce message ("Points d'action insuffisants...") qu'on veut montrer au joueur,
+                // pas un code HTTP brut.
+                string body = req.downloadHandler.text;
+                return (false, 0, 0, string.IsNullOrEmpty(body) ? req.error : body);
             }
 
-            CurrentRoster = list.ToArray();
-            return Task.FromResult((true, CurrentRoster));
+            var arr = JsonHelper.FromJson<BuyUnitEntry>(req.downloadHandler.text);
+            if (arr == null || arr.Length == 0) return (false, 0, 0, "Réponse inattendue");
+            return (true, arr[0].new_action_points, arr[0].new_quantity, null);
         }
 
-        public static Task<bool> UpsertRosterItem(string unitType, int quantity)
-        {
-            if (SupabaseAuthClient.CurrentSession == null || SupabaseAuthClient.CurrentSession.user == null)
-                return Task.FromResult(false);
-
-            string userId = SupabaseAuthClient.CurrentSession.user.id;
-            PlayerPrefs.SetInt($"Novgov_Roster_{userId}_{unitType}", quantity);
-            PlayerPrefs.Save();
-            return Task.FromResult(true);
-        }
-
-        // --- BUILDINGS (Territoires & Conquête) ---
-        public static Task<(bool ok, PlayerBuilding[] buildings)> GetBuildings()
-        {
-            if (SupabaseAuthClient.CurrentSession == null || SupabaseAuthClient.CurrentSession.user == null)
-                return Task.FromResult((false, new PlayerBuilding[0]));
-
-            string userId = SupabaseAuthClient.CurrentSession.user.id;
-            string json = PlayerPrefs.GetString($"Novgov_Buildings_{userId}", "[]");
-            var arr = JsonHelper.FromJson<PlayerBuilding>(json);
-            return Task.FromResult((true, arr));
-        }
-
-        public static Task<bool> ClaimBuilding(string zoneId, int buildingIndex)
-        {
-            if (SupabaseAuthClient.CurrentSession == null || SupabaseAuthClient.CurrentSession.user == null)
-                return Task.FromResult(false);
-
-            string userId = SupabaseAuthClient.CurrentSession.user.id;
-            string json = PlayerPrefs.GetString($"Novgov_Buildings_{userId}", "[]");
-            var current = new List<PlayerBuilding>(JsonHelper.FromJson<PlayerBuilding>(json));
-
-            if (!current.Exists(b => b.zone_id == zoneId && b.building_index == buildingIndex))
-            {
-                current.Add(new PlayerBuilding
-                {
-                    zone_id = zoneId,
-                    user_id = userId,
-                    building_index = buildingIndex,
-                    captured_at = DateTime.UtcNow.ToString("o")
-                });
-                string updatedJson = JsonUtility.ToJson(new BuildingListWrapper { items = current.ToArray() });
-                // Extraire le tableau interne
-                int arrayStart = updatedJson.IndexOf('[');
-                int arrayEnd = updatedJson.LastIndexOf(']');
-                if (arrayStart >= 0 && arrayEnd >= arrayStart)
-                {
-                    PlayerPrefs.SetString($"Novgov_Buildings_{userId}", updatedJson.Substring(arrayStart, arrayEnd - arrayStart + 1));
-                    PlayerPrefs.Save();
-                }
-            }
-            return Task.FromResult(true);
-        }
-
-        public static async Task<(bool ok, PlayerBuilding building)> GetBuilding(string zoneId)
-        {
-            var (ok, list) = await GetBuildings();
-            if (ok && list != null)
-            {
-                var found = Array.Find(list, b => b.zone_id == zoneId);
-                if (found != null) return (true, found);
-            }
-            return (false, null);
-        }
-
+        // --- ZONES (territoires de Conquête) — VRAIE table partagée (schema.sql §6/§10), déjà
+        // utilisée par le serveur (MatchSessionManager_Conquest.CaptureZoneInDb/EnsureHqBuildingIndex) ;
+        // ce client la lit directement (policy SELECT "visible par tous les joueurs authentifiés").
+        // Remplace l'ancien PlayerBuilding/GetBuildings/ClaimBuilding (PlayerPrefs local, 2026-09-13) —
+        // il n'y a plus besoin de "réclamer" un bâtiment séparément : la Zone EST déjà la source de
+        // vérité de propriété, et son bâtiment HQ est désigné une fois par le serveur.
         [Serializable]
-        private class BuildingListWrapper { public PlayerBuilding[] items; }
+        public class ZoneInfo
+        {
+            public int tile_x;
+            public int tile_y;
+            public string owner_user_id;
+            public int hq_building_index = -1;
+        }
+
+        public static async Task<(bool ok, ZoneInfo zone)> GetZoneInfo(int tileX, int tileY, int zoom)
+        {
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/zones?tile_x=eq.{tileX}&tile_y=eq.{tileY}&zoom=eq.{zoom}&select=tile_x,tile_y,owner_user_id,hq_building_index";
+            using var req = UnityWebRequest.Get(url);
+            SetupHeaders(req);
+            await req.SendWebRequest();
+            if (req.result != UnityWebRequest.Result.Success) return (false, null);
+
+            var arr = JsonHelper.FromJson<ZoneInfo>(req.downloadHandler.text);
+            return (arr != null && arr.Length > 0) ? (true, arr[0]) : (false, null);
+        }
+
+        /// <summary>Toutes les Zones possédées par le joueur connecté — pour l'écran "Territoires".</summary>
+        public static async Task<(bool ok, ZoneInfo[] zones)> GetOwnedZones()
+        {
+            if (SupabaseAuthClient.CurrentSession == null || SupabaseAuthClient.CurrentSession.user == null)
+                return (false, new ZoneInfo[0]);
+
+            string userId = SupabaseAuthClient.CurrentSession.user.id;
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/zones?owner_user_id=eq.{userId}&select=tile_x,tile_y,owner_user_id,hq_building_index";
+            using var req = UnityWebRequest.Get(url);
+            SetupHeaders(req);
+            await req.SendWebRequest();
+            if (req.result != UnityWebRequest.Result.Success) return (false, new ZoneInfo[0]);
+
+            return (true, JsonHelper.FromJson<ZoneInfo>(req.downloadHandler.text));
+        }
     }
 }

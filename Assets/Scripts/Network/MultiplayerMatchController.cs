@@ -543,15 +543,16 @@ namespace Novgov.Network
         /// MatchSessionManager.GenerateAndCacheTile). Échec EXPLICITE si la carte n'est jamais prête,
         /// plutôt que d'enchaîner quand même sur le déploiement avec l'ancienne ville encore affichée
         /// (lacune de l'ancien code, plus probable désormais avec une vraie dépendance réseau).</summary>
+        /// <summary>Lit le bâtiment HQ RÉEL de cette Zone depuis public.zones.hq_building_index
+        /// (désigné une fois par le serveur, voir MatchSessionManager_Conquest.EnsureHqBuildingIndex)
+        /// — remplace l'ancien SupabaseDatabaseClient.GetBuilding (PlayerPrefs LOCAL à cet appareil,
+        /// jamais partagé, 2026-09-13) qui causait le bug "bâtiment jaune chez un joueur, pas chez
+        /// l'autre" : les deux clients d'un même match lisent maintenant la MÊME ligne en base.</summary>
         private async System.Threading.Tasks.Task LoadZoneWithHqAsync(int tileX, int tileY, string json)
         {
-            string zoneId = $"{tileX},{tileY}";
-            var (ok, building) = await Novgov.Auth.SupabaseDatabaseClient.GetBuilding(zoneId);
-            if (ok && building != null)
-            {
-                var cityGen = FindAnyObjectByType<CityGenerator>();
-                if (cityGen != null) cityGen.HQBuildingIndex = building.building_index;
-            }
+            var (ok, zone) = await Novgov.Auth.SupabaseDatabaseClient.GetZoneInfo(tileX, tileY, CityGenerator.ZONE_ZOOM);
+            var cityGen = FindAnyObjectByType<CityGenerator>();
+            if (cityGen != null) cityGen.HQBuildingIndex = (ok && zone != null) ? zone.hq_building_index : -1;
             Novgov.Generation.ZoneManager.EnsureInstance().LoadZoneFromServerData(tileX, tileY, json);
         }
 
@@ -957,29 +958,15 @@ namespace Novgov.Network
             }
         }
 
-        private async System.Threading.Tasks.Task ProcessLostUnitsAsync()
-        {
-            if (LostUnits.Count == 0) return;
-            var (ok, roster) = await Novgov.Auth.SupabaseDatabaseClient.GetRoster();
-            if (ok && roster != null)
-            {
-                foreach (var loss in LostUnits)
-                {
-                    var item = System.Linq.Enumerable.FirstOrDefault(roster, r => r.unit_type.Equals(loss.Key, System.StringComparison.OrdinalIgnoreCase));
-                    if (item != null)
-                    {
-                        int newQty = System.Math.Max(0, item.quantity - loss.Value);
-                        await Novgov.Auth.SupabaseDatabaseClient.UpsertRosterItem(loss.Key, newQty);
-                    }
-                }
-            }
-        }
-
-        private async System.Threading.Tasks.Task ClaimBuildingAsync(string zoneId)
-        {
-            int rndIndex = UnityEngine.Random.Range(1, 10);
-            await Novgov.Auth.SupabaseDatabaseClient.ClaimBuilding(zoneId, rndIndex);
-        }
+        /// <summary>2026-09-13 : décrémentait auparavant la caserne locale via UpsertRosterItem
+        /// (PlayerPrefs, supprimé — voir SupabaseDatabaseClient.cs, la caserne est maintenant une
+        /// vraie table serveur, public.player_roster, verrouillée en écriture directe). Ne fait plus
+        /// rien : le déploiement ne dépend plus d'un stock d'unités possédées (voir
+        /// UnitSpawnerUI.StartPlacingUnit, demande explicite "laisse-moi déployer tout"), donc la
+        /// perte définitive d'une unité au combat n'a plus de conséquence à répercuter ici. LostUnits/
+        /// ComputeLostUnitsFromDeployedVsAlive restent calculés (inoffensif) au cas où une vraie
+        /// conséquence de perte serait réintroduite plus tard.</summary>
+        private System.Threading.Tasks.Task ProcessLostUnitsAsync() => System.Threading.Tasks.Task.CompletedTask;
 
         private IEnumerator DeferredMatchOver(NetMessage msg)
         {
@@ -1020,13 +1007,12 @@ namespace Novgov.Network
 
             bool isVictory = msg.winner_team == localTeamId;
 
-            ComputeLostUnitsFromDeployedVsAlive();
-            _ = ProcessLostUnitsAsync();
-            if (isVictory && Novgov.Generation.ZoneManager.Instance != null)
-            {
-                string zoneId = $"{Novgov.Generation.ZoneManager.Instance.CurrentTileX},{Novgov.Generation.ZoneManager.Instance.CurrentTileY}";
-                _ = ClaimBuildingAsync(zoneId);
-            }
+            // 2026-09-13 : plus de ClaimBuildingAsync ici — la propriété de la Zone (donc de son
+            // bâtiment HQ) est déjà écrite en base côté serveur (MatchSessionManager_Conquest.
+            // CaptureZoneInDb, appelée pour un vrai combat/une capture neutre), et l'index du
+            // bâtiment HQ est désigné une seule fois par EnsureHqBuildingIndex — ce client n'a plus
+            // rien à "réclamer" séparément (l'ancien mécanisme n'écrivait de toute façon que dans son
+            // propre PlayerPrefs local, jamais partagé).
 
             IsActive = false;
             string resultText;
@@ -1316,22 +1302,16 @@ namespace Novgov.Network
         // UI Toolkit — câblage une fois, puis mise à jour ciblée des champs qui changent.
         // =====================================================================
 
+        /// <summary>2026-09-13 : passe par la fonction Postgres claim_daily_bonus() (schema.sql §10,
+        /// +50 AP une fois par jour UTC, suivi par profiles.last_daily_bonus_at — un vrai horodatage
+        /// serveur, pas le PlayerPrefs local d'avant, remis à zéro par une simple réinstallation).
+        /// Le bonus "+10 par bâtiment possédé" a été retiré : la possession d'une Zone rapporte
+        /// maintenant un vrai revenu passif régulier côté serveur (MatchSessionManager.
+        /// ZoneIncomeLoop), cumuler les deux aurait été redondant.</summary>
         private async System.Threading.Tasks.Task GrantDailyActionPoints()
         {
-            if (Novgov.Auth.SupabaseAuthClient.CurrentSession == null || Novgov.Auth.SupabaseAuthClient.CurrentSession.user == null) return;
-            string userId = Novgov.Auth.SupabaseAuthClient.CurrentSession.user.id;
-            string lastClaimStr = UnityEngine.PlayerPrefs.GetString($"LastDailyAPClaim_{userId}", "");
-            string todayStr = System.DateTime.UtcNow.ToString("yyyyMMdd");
-            if (lastClaimStr != todayStr)
-            {
-                var (okBuildings, bList) = await Novgov.Auth.SupabaseDatabaseClient.GetBuildings();
-                int bonus = 50; 
-                if (okBuildings && bList != null) bonus += bList.Length * 10;
-
-                Novgov.Auth.SupabaseDatabaseClient.AddActionPoints(userId, bonus);
-                UnityEngine.PlayerPrefs.SetString($"LastDailyAPClaim_{userId}", todayStr);
-                UnityEngine.PlayerPrefs.Save();
-            }
+            if (Novgov.Auth.SupabaseAuthClient.CurrentSession == null) return;
+            await Novgov.Auth.SupabaseDatabaseClient.ClaimDailyBonus();
             RefreshModeSelectScreen();
         }
 
@@ -1361,7 +1341,9 @@ namespace Novgov.Network
             lblLoading.style.color = Color.white;
             scroll.Add(lblLoading);
 
-            var (ok, list) = await Novgov.Auth.SupabaseDatabaseClient.GetBuildings();
+            // 2026-09-13 : lit les VRAIES Zones possédées (public.zones.owner_user_id, partagé —
+            // remplace SupabaseDatabaseClient.GetBuildings, PlayerPrefs local à cet appareil).
+            var (ok, list) = await Novgov.Auth.SupabaseDatabaseClient.GetOwnedZones();
             scroll.Clear();
             if (!ok || list == null || list.Length == 0)
             {
@@ -1372,7 +1354,7 @@ namespace Novgov.Network
                 return;
             }
 
-            foreach(var b in list)
+            foreach(var z in list)
             {
                 var row = new VisualElement();
                 row.style.flexDirection = FlexDirection.Row;
@@ -1381,8 +1363,8 @@ namespace Novgov.Network
                 row.style.paddingBottom = 8;
                 row.style.borderBottomWidth = 1;
                 row.style.borderBottomColor = new Color(1,1,1,0.2f);
-                
-                var lblInfo = new Label($"Zone: {b.zone_id} | Index: {b.building_index}");
+
+                var lblInfo = new Label($"Zone: {z.tile_x},{z.tile_y} | Bâtiment HQ: {z.hq_building_index}");
                 lblInfo.style.color = Color.white;
                 lblInfo.style.fontSize = 16;
                 row.Add(lblInfo);
@@ -1439,12 +1421,18 @@ namespace Novgov.Network
                 
                 if (currentAp >= cost)
                 {
+                    // 2026-09-13 : passe par la fonction Postgres buy_unit() (schema.sql §10) — le
+                    // coût est vérifié et déduit ATOMIQUEMENT côté serveur (jamais ce "cost" client,
+                    // qui ne sert plus qu'à l'AFFICHAGE) ; remplace le PATCH direct
+                    // UpdateProfile+UpsertRosterItem (PlayerPrefs local, 2026-09-13).
                     btnBuy.clicked += async () =>
                     {
                         btnBuy.SetEnabled(false);
-                        int newAp = currentAp - cost;
-                        await Novgov.Auth.SupabaseDatabaseClient.UpdateProfile(prof.username, newAp);
-                        await Novgov.Auth.SupabaseDatabaseClient.UpsertRosterItem(uType, qty + 1);
+                        var (bought, newAp, newQty, error) = await Novgov.Auth.SupabaseDatabaseClient.BuyUnit(uType);
+                        if (!bought)
+                        {
+                            Debug.LogWarning($"[MultiplayerMatchController] Achat de {uType} refusé : {error}");
+                        }
                         RefreshRosterScreen();
                     };
                 }
