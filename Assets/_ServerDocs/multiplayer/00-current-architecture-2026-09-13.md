@@ -100,11 +100,51 @@ ces notifications** — seule l'écriture serveur existe pour l'instant.
   réduits à ce qui ne dépendait pas du résolveur (A*/`TacticalGrid`, hash déterministe, sentinelles
   client, plafonds de déploiement) — re-vérifié par un compile Editor et un build serveur réels.
 - **Aucun test réel à 2 joueurs** depuis la bascule du 2026-09-13 — ni pour le vrai moteur, ni pour
-  le cycle pause/reprise async, ni pour le choix élargi de types d'unité au déploiement.
-- **Notifications** : écriture serveur seule, aucune lecture/affichage côté client.
+  le cycle pause/reprise async, ni pour le choix élargi de types d'unité au déploiement. **Toujours
+  vrai au 2026-09-16** malgré les correctifs ci-dessous.
+- **Notifications** : écriture serveur seule, aucune lecture/affichage côté client. **Toujours vrai
+  au 2026-09-16.**
 - **Migration base de données appliquée en production** (`novgov.com`) le 2026-09-13 — voir
   [12-production-deployment-2026-09-13.md](12-production-deployment-2026-09-13.md) pour le détail
   de ce qui a été vérifié (et ce qui ne l'a pas été : la correction du gameplay lui-même).
+- **L'attribution "qui tire sur qui" affichée au client reste une approximation** (voir
+  `MatchSessionManager_CombatRealEngine.CaptureRealEngineSnapshot`, `shooting`/`shoot_target_id`) :
+  ces champs reflètent "cet ennemi est visible et à portée ce tick", pas nécessairement l'unité
+  exacte qui inflige les dégâts observés ce tick-là. Le tracé/flash rejoué côté client (voir
+  correctif du 2026-09-16 ci-dessous) peut donc occasionnellement pointer vers la mauvaise unité —
+  connu et accepté comme simplification cosmétique, pas encore résolu à la racine (demanderait de
+  faire remonter le VRAI événement de tir depuis `UnitAI_Combat` au lieu d'une reconstruction
+  après coup).
+
+## Correctifs du 2026-09-16 — clarté du combat + régression de posture
+
+Retour utilisateur : *"lors de l'action les joueurs ne comprennent rien, il y a des morts sans
+savoir pourquoi"*. Audit + corrections :
+
+- **Tir de mortier invisible en rejeu réseau** : `UnitAI_Visuals.PlayNetworkShotEffects` ignorait
+  purement et simplement tout tir de mortier (`if (isMortar) return;`, commentaire historique
+  évoquant un "faux tireur mortar" — décrivait en réalité l'ANCIEN résolveur "Pure", supprimé la
+  veille de l'écriture de ce commentaire). Une unité tuée par un obus mourait donc sans la moindre
+  explosion/tremblement de caméra visibles. Corrigé : `PlayNetworkMortarImpactEffects` rejoue une
+  explosion cosmétique au point d'impact (même son/flash que `MortarShell.Detonate`), sans prétendre
+  reconstruire la trajectoire réelle de l'obus (position du mortier tireur non transmise).
+- **Aucun fil de combat** : ajout de `CombatFeedUI.cs` + l'élément `combat-feed` dans
+  `InMatchHudScreen.uxml` — chaque mort (solo ET réseau, un seul point d'appel commun dans
+  `UnitAI.Die()`) pose une ligne "☠ &lt;Unité&gt; détruit(e)" colorée par équipe, y compris pour une
+  mort qui a eu lieu hors du champ de vision de la caméra du joueur.
+- **Régression `isGuarding`** trouvée en auditant `08-known-issues-and-todo.md` §19.9.6 : le
+  correctif documenté au §19.15 point 4 (2026-09-12) vivait dans `TacticalResolver.Resolve`,
+  supprimé le lendemain avec toute la famille "Pure" — le bug d'origine (posture de Guet = -50%
+  dégâts subis PERMANENT dès le premier "Guetter" du match, jamais réinitialisé) était donc de
+  nouveau actif en production sans qu'aucun document ne le signale. Corrigé dans
+  `UnitAI_Movement.cs` : `isGuarding` repasse à `false` dès qu'une unité repart vers son prochain
+  checkpoint.
+- **Cache de schéma PostgREST périmé** (incident opérationnel, pas un bug de code) : `rest` n'avait
+  pas rechargé son schéma depuis ~10 jours, faisant échouer silencieusement toute écriture de
+  `profiles.action_points` (`PGRST204`, log `[MatchSessionManager] Mise à jour DB échouée`). Un
+  simple `docker compose restart rest` a suffi — confirmé par l'absence totale de nouvelles erreurs
+  sur plusieurs cycles de revenu de zone après coup. Aucune donnée perdue (le calcul en mémoire
+  restait correct, seule la persistance échouait).
 
 ## Historique (pour comprendre le raisonnement, pas l'état actuel)
 

@@ -37,6 +37,12 @@ namespace Novgov.Server
         public DateTime LastHeartbeat = DateTime.UtcNow;
         public bool HasSubmittedThisTurn = false;
         public UnitOrder[] PendingOrders = Array.Empty<UnitOrder>();
+        // Accusé de réception d'un "turn_result" par CE client (voir MatchSessionManager_
+        // CombatRealEngine.RunExecutionPhaseRealEngine) — sert de barrière avant l'envoi de
+        // "turn_playback_start", pour que les deux joueurs commencent à rejouer le même tour
+        // au même instant plutôt que chacun dès que SON PROPRE turn_result (taille différente
+        // selon le brouillard de guerre, donc temps de réception différent) lui est arrivé.
+        public bool HasAckedTurnResult = false;
         public bool HasSubmittedDeployment = false;
         public UnitPlacement[] PendingDeployment = null;
         // Vrai dès que CE client a fini de charger la carte et affiche réellement le dock de

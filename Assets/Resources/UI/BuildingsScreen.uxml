@@ -3,14 +3,15 @@
         <ui:VisualElement class="panel" style="width: 80%; max-width: 800px; height: 80%;">
             <ui:Label text="GESTION DES BÂTIMENTS &amp; RESSOURCES" class="title" style="margin-bottom: 24px;" />
             
-            <ui:VisualElement style="margin-bottom: 24px; padding: 12px; background-color: rgba(20,25,30,0.9); border-radius: 8px;">
-                <ui:Label text="Récupérez les Points d'Action générés par les bâtiments que vous contrôlez sur la carte du monde." style="color: white; font-size: 16px; white-space: normal;" />
+            <ui:VisualElement class="hub-info-banner" style="margin-bottom: 24px;">
+                <ui:Label text="Récupérez les Points d'Action générés par les bâtiments que vous contrôlez sur la carte du monde." />
             </ui:VisualElement>
 
             <!-- ScrollView for Buildings List -->
             <ui:ScrollView name="buildings-scroll" style="flex-grow: 1; margin-bottom: 24px; background-color: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px;" />
 
-            <ui:Button name="btn-close" class="btn-secondary" style="min-height: 72px;">
+            <ui:Button name="btn-close" class="btn-secondary btn-with-icon" style="min-height: 72px; justify-content: center;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/chevron_left.png'); margin-right: 8px;" />
                 <ui:Label text="RETOUR AU HUB" />
             </ui:Button>
         </ui:VisualElement>

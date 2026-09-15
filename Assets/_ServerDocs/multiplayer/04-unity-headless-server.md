@@ -1,11 +1,21 @@
 # Serveur Unity Headless autoritaire
 
-**État (2026-08-30) : build headless déployé et vérifié en direct sur le VPS — 1 seule instance
-(`game-server-1`, `novgov.com:7777`).** Voir [08-known-issues-and-todo.md](08-known-issues-and-todo.md)
-pour l'historique détaillé, mais **ce document a été réécrit le 2026-08-30 pour décrire
-l'architecture RÉELLEMENT en place aujourd'hui** — tout ce qui suit sur "Principe"/
-"MatchSessionManager"/"Scaling" ci-dessous n'est PAS le texte d'origine (qui décrivait une
-simulation NavMeshAgent temps réel, remplacée depuis) : voir §"Historique" tout en bas si besoin de
+> **⚠️ DÉPASSÉ DEPUIS LE 2026-09-13 — lire [00-current-architecture-2026-09-13.md](00-current-architecture-2026-09-13.md)
+> d'abord** (ajouté 2026-09-16). Ce document décrit l'architecture "calcul pur instantané" mise en
+> place le 2026-08-30 (`TacticalResolver`, 1 seule instance) — exactement l'inverse de ce qui tourne
+> aujourd'hui : `TacticalResolver`/toute la famille `TacticalCore` "Pure" ont été supprimés le
+> 2026-09-13 au profit d'un retour à une VRAIE simulation temps réel (NavMeshAgent + Physics via
+> `UnitAI.ExecuterOrdres()`, exactement comme le Solo), et le pool est remonté à 3 instances
+> (`game-server-1/2/3`). Gardé ici comme historique de CETTE bascule précise (2026-08-30) ; ne pas
+> s'y fier pour l'état actuel du calcul de combat ou du nombre d'instances.
+
+**État (2026-08-30, HISTORIQUE — voir bandeau ci-dessus) : build headless déployé et vérifié en
+direct sur le VPS — 1 seule instance (`game-server-1`, `novgov.com:7777`).** Voir
+[08-known-issues-and-todo.md](08-known-issues-and-todo.md) pour l'historique détaillé, mais **ce
+document a été réécrit le 2026-08-30 pour décrire l'architecture qui était RÉELLEMENT en place à
+cette date-là** — tout ce qui suit sur "Principe"/"MatchSessionManager"/"Scaling" ci-dessous n'est
+PAS le texte d'origine (qui décrivait une simulation NavMeshAgent temps réel, remplacée depuis PUIS
+restaurée le 2026-09-13, voir le bandeau ci-dessus) : voir §"Historique" tout en bas si besoin de
 retrouver l'ancienne description.
 
 ## Principe (2026-08-30)

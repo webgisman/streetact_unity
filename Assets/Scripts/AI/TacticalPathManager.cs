@@ -173,8 +173,15 @@ public partial class TacticalPathManager : MonoBehaviour
         // visuel de l'écran GameOver.
         if (IsSoloGameOver) return;
 
-        // Bloquer l'assignation de nouveaux ordres pendant l'exécution ou pendant le placement d'unités
-        if (phaseActuelle == GamePhase.Execution || UnitSpawnerUI.IsPlacingUnit) return;
+        // Bloquer l'assignation de nouveaux ordres pendant l'exécution, pendant le placement d'unités,
+        // ou tant que le déploiement initial est en cours (dock "QG Renforts" ouvert, voir
+        // UnitSpawnerUI/UnitAI_Movement) — avant ce garde-fou, une unité déjà posée restait
+        // sélectionnable/planifiable via ce même menu tactique alors que le tour/la partie n'a pas
+        // encore commencé (rapport utilisateur : "il faut pas laisser le joueur choisir des
+        // trajectoire ... le jeu n'a pas encore commencé"). Même flag que UnitAI_Movement.cs utilise
+        // déjà pour geler les NavMeshAgent pendant cette même fenêtre.
+        if (phaseActuelle == GamePhase.Execution || UnitSpawnerUI.IsPlacingUnit
+            || Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive) return;
 
         // APERÇU DE DESTINATION (correctif 2026-09-03). Le tracé n'était redessiné que sur
         // isPathsDirty — posé uniquement à la sélection d'une unité et à l'ajout/retrait d'un nœud —

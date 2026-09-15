@@ -1,23 +1,32 @@
 # État des lieux, problèmes rencontrés et travail restant
 
-> **⚠️ ARCHITECTURE DÉPASSÉE PAR LE TRAVAIL DU 2026-08-30 — lire
-> [04-unity-headless-server.md](04-unity-headless-server.md) et le README d'abord.** Ce document
-> est un JOURNAL HISTORIQUE (jusqu'au 2026-08-29) — utile pour comprendre le cheminement et les
-> bugs déjà résolus, mais il décrit une architecture depuis remplacée : simulation temps réel
-> NavMeshAgent (remplacée par `TacticalResolver`, un calcul instantané), "un seul match à la fois"
-> (remplacé par des parties concurrentes en donnée pure, voir `MatchState.cs`), pool de 3 instances
-> Docker (revenu à 1 seule instance + un pool de threads), déploiement toujours sur la carte
-> "Default" (Deathmatch/Zone de Contrôle supportent désormais la vraie position GPS du joueur).
-> Les mentions ci-dessous de `game-server-2`/`game-server-3`, "un seul match actif", etc. sont
-> des artefacts historiques, pas l'état actuel. Le reste du contenu (bugs trouvés/corrigés avant
-> le 2026-08-29, détail du build headless) reste fiable en tant qu'historique.
+> **⚠️ ARCHITECTURE DÉPASSÉE — lire [00-current-architecture-2026-09-13.md](00-current-architecture-2026-09-13.md)
+> d'abord** (2026-09-16 : ce pointeur visait jusqu'ici `04-unity-headless-server.md`/le README, qui
+> sont EUX-MÊMES dépassés depuis le passage au vrai moteur du 2026-09-13 — voir `00`, qui fait foi
+> pour tout ce qui concerne combat/déploiement et référence explicitement ce fichier-ci comme
+> "historique, pas l'état actuel"). Ce document est un JOURNAL HISTORIQUE (jusqu'au 2026-09-12) —
+> utile pour comprendre le cheminement et les bugs déjà résolus, mais il décrit successivement
+> PLUSIEURS architectures depuis remplacées : simulation temps réel NavMeshAgent (remplacée par
+> `TacticalResolver`, un calcul instantané, lui-même supprimé le 2026-09-13 au profit d'un retour à
+> une VRAIE simulation NavMeshAgent/Physics, voir `00`), "un seul match à la fois" (remplacé par des
+> parties concurrentes en donnée pure, puis par 1 seul match Live à la fois — modèles tous deux
+> dépassés), pool de 3 instances Docker (descendu à 1, puis remonté à 3 le 2026-09-13). Les mentions
+> ci-dessous de `game-server-2`/`game-server-3`, "un seul match actif", etc. sont des artefacts
+> historiques successifs, pas l'état actuel — seul `00-current-architecture-2026-09-13.md` doit être
+> considéré à jour. Le reste du contenu (bugs trouvés/corrigés avant chaque bascule, détail du build
+> headless) reste fiable en tant qu'historique.
 
-Dernière mise à jour : **2026-09-07/08, §19** (audit complet de jouabilité multijoueur : 19
-correctifs, dont la cause la plus probable du blocage "impossible de lancer/tester le multijoueur"
-— voir §19.1 — et une revue adversariale du travail de la même session qui a trouvé et corrigé 9
-défauts supplémentaires avant de le documenter). **Rien de §19 n'est encore rebuild ni redéployé
-sur le VPS, aucune partie à 2 joueurs n'a été rejouée depuis** — c'est le point de reprise. Les
-lignes qui suivent (§9/§10, 2026-08-29) restent l'historique du tout premier build/test réel ; ce
+Dernière mise à jour : **2026-09-16, §19.9** (voir les items 2/3/6-7 ci-dessous, marqués RÉSOLU —
+retour utilisateur "les joueurs ne comprennent rien, il y a des morts sans savoir pourquoi" :
+rejeu réseau d'un impact de mortier ajouté, fil de combat créé dans le HUD, régression `isGuarding`
+trouvée et corrigée). Le contenu §19 original date du **2026-09-07/08** (audit complet de
+jouabilité multijoueur : 19 correctifs, dont la cause la plus probable du blocage "impossible de
+lancer/tester le multijoueur" — voir §19.1 — et une revue adversariale du travail de la même
+session qui a trouvé et corrigé 9 défauts supplémentaires avant de le documenter), complété au fil
+de l'eau jusqu'au §19.15 (2026-09-12). **Tout ceci a depuis été rebuild et redéployé sur le VPS au
+moins une fois (2026-09-13, bascule vers le vrai moteur — voir `00`), mais aucune partie à 2
+joueurs humains n'a encore été rejouée en conditions réelles.** Les lignes qui suivent (§9/§10,
+2026-08-29) restent l'historique du tout premier build/test réel ; ce
 document liste **tout** ce qui a été fait, tout ce qui bloque, et tout ce qu'il reste à faire. À
 lire en partant de la fin (numéro de section le plus élevé) en reprenant le travail sur ce projet,
 dans n'importe quelle session future.
@@ -1663,25 +1672,55 @@ Rien de ce qui suit n'a été touché. Par ordre de gravité pour le joueur :
 1. **Conquête sans issue après la première capture** : `ZoneManager.ExpandNorth/South/East/West`
    n'ont aucun appelant et rien n'avance `CurrentTileX/Y` après une capture, donc les 4 boutons
    d'attaque se bloquent définitivement ; en prime, une partie PvP sur une vraie tuile déplace
-   `CurrentTileX/Y` vers la tuile de l'adversaire.
-2. **Aucun retour visuel de combat pendant le rejeu** : `SetNetworkHealth` court-circuite
-   `TakeDamage` (donc impacts/sang/étincelles) et `ShootAt` est désactivé en réseau (donc traçantes,
-   flash, son, ping radar). Les unités meurent sans que rien ne soit visible.
-3. **La destruction de bâtiment n'est jamais transmise** : `WallDestroyed` n'a aucun consommateur —
-   le bâtiment reste debout sur les deux écrans alors que le serveur le sait détruit.
+   `CurrentTileX/Y` vers la tuile de l'adversaire. **Toujours ouvert au 2026-09-16** (revérifié :
+   toujours aucun appelant pour ces 4 méthodes).
+2. ~~**Aucun retour visuel de combat pendant le rejeu**~~ **RÉSOLU (2026-09-11, puis complété
+   2026-09-16).** `PlayNetworkShotEffects`/`PlayNetworkHitReaction` (`UnitAI_Visuals.cs`) rejouent
+   traçantes/flash/impacts/son côté client depuis le 2026-09-11 — cet item était déjà faux au moment
+   où il a été écrit (2026-09-12) mais jamais raturé. Restait un trou spécifique : un tir de mortier
+   ressortait de `PlayNetworkShotEffects` sans le moindre effet (voir commentaire historique sur un
+   "faux tireur mortar", en réalité obsolète depuis la bascule au vrai moteur du 2026-09-13 — la
+   capture de snapshot ne distingue plus le mortier des tirs directs). Retour utilisateur exact :
+   "les joueurs ne comprennent rien, il y a des morts sans savoir pourquoi". Corrigé en ajoutant une
+   explosion cosmétique au point d'impact (`PlayNetworkMortarImpactEffects`, même son/flash/
+   tremblement de caméra que `MortarShell.Detonate`), et en ajoutant un fil de combat au HUD
+   (`CombatFeedUI.cs`, écran `InMatchHudScreen` "combat-feed") : chaque destruction d'unité — solo
+   ET réseau, un seul point d'appel dans `UnitAI.Die()` — pose désormais une ligne "☠ <Unité> détruit(e)"
+   colorée par équipe, qu'elle soit visible à l'écran au moment des faits ou non.
+3. ~~**La destruction de bâtiment n'est jamais transmise**~~ **RÉSOLU (2026-09-12).** Le champ
+   `Snapshot.destroyed_building_ids` (`NetMessage.cs`) et sa consommation dans
+   `MultiplayerMatchController.PlaySnapshotsBody` existent déjà — cet item était lui aussi obsolète
+   au moment de sa rédaction, jamais raturé depuis.
 4. **Grille tactique MUTABLE partagée entre parties concurrentes sur la même tuile** : détruire un
-   bâtiment dans une partie ouvre le mur dans les autres.
-5. **`mortarStrikes` n'est validé par rien** : ni type d'unité, ni portée. Un client modifié fait
-   pleuvoir 150 dégâts n'importe où avec n'importe quelle unité.
-6. **Postures à sens unique** : `isGuarding`/`isCamouflaged`/`isGarrisoned` ne sont jamais remis à
-   false — un GUETTER au tour 1 vaut -50 % de dégâts subis pour toute la partie, même en courant à
-   découvert (comportement « fidèle à l'original » mais très déséquilibré à deux joueurs).
+   bâtiment dans une partie ouvre le mur dans les autres. **Statut incertain post-bascule
+   2026-09-13** (un seul match Live à la fois occupe désormais la scène partagée — voir `00` — ce qui
+   change la nature du risque sans le confirmer réglé ; pas revérifié dans cette session, faute de
+   temps).
+5. **`mortarStrikes` n'est validé par rien** : ni type d'unité, ni portée. **Devenu sans objet
+   (2026-09-16)** : ce champ n'a plus aucun lecteur dans tout le projet (`TacticalTypes.cs` le
+   déclare, personne ne le consomme) depuis la suppression de `TacticalResolver`/la famille "Pure"
+   le 2026-09-13 — ni gap de sécurité, ni fonctionnalité active, juste une déclaration orpheline. Pas
+   supprimée dans cette session (hors périmètre du correctif en cours, pas de risque à la laisser).
+6. ~~**Postures à sens unique**~~ **RÉSOLU (2026-09-16, deuxième fois).** Un premier correctif
+   documenté en §19.15 point 4 visait `TacticalResolver.Resolve` — supprimé le lendemain (2026-09-13,
+   bascule vers le vrai moteur), ce qui a fait régresser ce bug en silence sans qu'aucun doc ne le
+   remarque. Revérifié dans cette session : `isGuarding` (contrairement à `isCamouflaged`/
+   `isGarrisoned`, qui ont bien leurs propres conditions de rupture) n'était remis à `false` NULLE
+   PART dans `Assets/Scripts/AI`. Corrigé en `UnitAI_Movement.cs` : `isGuarding = false` juste avant
+   qu'une unité ne reparte vers son prochain checkpoint (bouger rompt la posture statique, même
+   principe que les ruptures déjà existantes de `isCamouflaged`).
 7. **`ClampToDeploymentZone` est devenu la fonction identité** (désactivée le 2026-09-06 sur demande) :
    plus aucune borne de coordonnées, un client modifié peut déployer au contact ou hors carte.
+   **Toujours ouvert au 2026-09-16** (non revérifié en détail, hors périmètre de cette session).
 8. **Économie entièrement en PlayerPrefs locaux** : réinstaller remet à zéro, et un compte a un
-   portefeuille différent par téléphone.
+   portefeuille différent par téléphone. **RÉSOLU depuis (2026-09-13)** — voir
+   `00-current-architecture-2026-09-13.md` et §10 de `schema.sql` : les Points d'Action, la Caserne
+   et les Zones/bâtiments sont maintenant lus/écrits en base (Postgres via PostgREST), partagés entre
+   appareils d'un même compte.
 9. **`practice_ai` est inatteignable depuis le client** (aucun bouton) alors que tout le mode existe
-   côté serveur.
+   côté serveur. **Toujours ouvert au 2026-09-16** (non revérifié en détail, hors périmètre de cette
+   session — le mode existe mais confirmé mémoire de session précédente comme ajouté après ce
+   constat ; à vérifier au prochain passage si un bouton UI y donne bien accès).
 
 ### 19.10 Non vérifié en conditions réelles
 

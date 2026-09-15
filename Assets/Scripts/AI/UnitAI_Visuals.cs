@@ -250,7 +250,15 @@ public partial class UnitAI
     /// pendant la lecture d'un snapshot réseau. Ne touche jamais aux PV ni n'appelle TakeDamage.</summary>
     public void PlayNetworkShotEffects(Vector3 targetPos)
     {
-        if (isMortar) return; // voir note ci-dessus : pas de rejeu fidèle possible pour l'instant
+        // 2026-09-16 (retour joueur : "lors de l'action les joueurs ne comprennent rien, il y a des
+        // morts sans savoir pourquoi") : un tir de mortier arrivait ici avec shooting=true (voir
+        // MatchSessionManager_CombatRealEngine.CaptureRealEngineSnapshot, qui ne distingue plus le
+        // mortier depuis le passage au vrai moteur — la note ci-dessus sur un faux tireur "mortar"
+        // décrivait l'ANCIEN résolveur pur, supprimé le 2026-09-13) puis ressortait immédiatement
+        // sans le moindre effet — aucun tracé n'est fidèle pour un tir indirect de toute façon, mais
+        // rien n'expliquait la mort au joueur qui regardait la cible sans jamais avoir vu le mortier
+        // tirer. Une explosion à l'impact (même sans trajectoire d'obus fidèle) rend la cause visible.
+        if (isMortar) { PlayNetworkMortarImpactEffects(targetPos); return; }
 
         // 2026-09-12 (retour joueur : "il faut que le joueur voie les unités ennemies pendant un
         // combat, et qu'elles soient aussi visibles sur le radar, pas seulement en mode
@@ -336,6 +344,39 @@ public partial class UnitAI
         {
             lastHitAnimTime = Time.time;
             animator.SetTrigger("Hit");
+        }
+    }
+
+    /// <summary>Explosion cosmétique au point d'impact d'un tir de mortier rejoué en réseau (2026-09-16).
+    /// Le client ne connaît ni la position réelle du mortier tireur, ni la trajectoire de l'obus (le
+    /// serveur ne transmet que le résultat sur la cible) : plutôt que de ne RIEN montrer (voir
+    /// PlayNetworkShotEffects), on rejoue juste l'explosion elle-même à l'endroit de l'impact — même
+    /// son/flash/tremblement de caméra que MortarShell.Detonate/SpawnExplosionVFX (dupliqué en plus
+    /// léger ici : pas de cratère au sol, pas de dégâts recalculés, purement cosmétique), pour que
+    /// toute unité touchée par un obus se lise clairement comme "victime d'une explosion" plutôt que
+    /// mourir sans la moindre cause visible.</summary>
+    private void PlayNetworkMortarImpactEffects(Vector3 impactPos)
+    {
+        AudioClip boomClip = ProceduralAudioBuilder.CreateMortarExplosionSound();
+        if (boomClip != null) AudioSource.PlayClipAtPoint(boomClip, impactPos, 1.0f);
+
+        GameObject muzzleFlash = Resources.Load<GameObject>("WarFX/MuzzleFlash");
+        if (muzzleFlash != null)
+        {
+            GameObject fx = Instantiate(muzzleFlash, impactPos + Vector3.up * 1f, Quaternion.identity);
+            fx.transform.localScale = Vector3.one * 8f;
+            Destroy(fx, 2.0f);
+        }
+
+        if (Camera.main != null)
+        {
+            TacticalCamera tCam = Camera.main.GetComponent<TacticalCamera>();
+            if (tCam != null)
+            {
+                float distToCam = Vector3.Distance(impactPos, Camera.main.transform.position);
+                float shakeForce = Mathf.Clamp01(1f - (distToCam / 150f)) * 0.8f;
+                if (shakeForce > 0f) tCam.ShakeCamera(shakeForce, 0.6f);
+            }
         }
     }
 

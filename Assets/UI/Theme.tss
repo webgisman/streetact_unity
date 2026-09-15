@@ -36,6 +36,12 @@
     --color-danger-hover: rgb(180, 60, 46);
     --color-success: rgb(96, 132, 64);
 
+    /* Couleur unique pour toute valeur de ressource (Points d'Action) — remplace le "gold" CSS
+       nommé utilisé au coup par coup (ModeSelect/RosterScreen, avant ce passage) : ce jaune web pur
+       tranchait avec la palette khaki/laiton sourde du reste du thème. Un seul token ici garantit
+       que l'AP se lit avec exactement la même teinte partout où elle apparaît. */
+    --color-resource: rgb(196, 164, 64);
+
     /* Boutons "glass" (menus flottants sur la scène 3D) : le fond doit rester lisible
        même sans hover, donc pas d'alpha proche de 0 — voir Button.btn-glass ci-dessous. */
     --color-glass-fill: rgba(232, 222, 196, 0.14);
@@ -178,6 +184,81 @@
 .hub-badge-ok {
     color: var(--color-text-dim);
     font-size: 14px;
+}
+
+/* Valeur de ressource (Points d'Action) — voir --color-resource ci-dessus. */
+.resource-value {
+    color: var(--color-resource);
+    -unity-font-style: bold;
+}
+
+/* En-tête de groupe dans une liste d'actions plein-écran (ex: ModeSelectScreen, "OPÉRATIONS DE
+   COMBAT" / "LOGISTIQUE") — nom distinct de DeploymentDockScreen.uss ".section-header" (même rôle,
+   mais taille pensée pour ce dock compact précis) pour qu'aucune des deux règles ne puisse jamais
+   écraser l'autre selon l'ordre de résolution des feuilles de style. */
+.hub-section-header {
+    color: var(--color-text-dim);
+    font-size: 20px;
+    -unity-font-style: bold;
+    letter-spacing: 1.5px;
+    margin-top: 16px;
+    margin-bottom: 8px;
+    margin-left: 4px;
+}
+
+.hub-separator {
+    height: 1px;
+    background-color: var(--color-panel-border-dim);
+    margin-top: 6px;
+    margin-bottom: 10px;
+}
+
+/* Bandeau d'information contextuelle en haut d'un écran de gestion (Caserne/Bâtiments/Sièges/
+   Notifications) — remplace le fond bleu-gris arbitraire (rgba(20,25,30,0.9)) + texte blanc brut
+   utilisé jusqu'ici sur ces 4 écrans : il ne réutilisait aucun token de Theme.tss, contrastant avec
+   les cartes ".hub-card" juste en dessous qui, elles, suivent bien le langage khaki/laiton du reste
+   de l'UI. Même famille que ".hub-card" (panel-2 + liseré) pour que tout l'écran se lise comme un
+   seul tableau de bord cohérent plutôt que deux styles superposés. */
+.hub-info-banner {
+    background-color: var(--color-panel-2);
+    border-width: 1px;
+    border-left-width: 4px;
+    border-color: var(--color-panel-border-dim);
+    border-left-color: var(--color-accent);
+    border-radius: 2px;
+    padding: 12px 14px;
+    color: var(--color-text-dim);
+    font-size: 22px;
+    white-space: normal;
+}
+
+/* "Chip" compact (profil, jauge de ressource) flottant en haut d'un écran plein cadre — même
+   relief que ".panel" mais padding réduit, pensé pour un contenu court sur une ou deux lignes. */
+.hub-chip {
+    background-color: var(--color-panel);
+    border-width: 2px;
+    border-top-color: var(--color-panel-border);
+    border-left-color: var(--color-panel-border);
+    border-right-color: var(--color-panel-border-dim);
+    border-bottom-color: var(--color-panel-border-dim);
+    border-radius: 2px;
+    padding: 10px 14px;
+}
+
+/* Action secondaire discrète (ex: Déconnexion) qui ne doit jamais rivaliser visuellement avec les
+   actions de navigation principales — même traitement que AuthScreen "toggle-mode-button" (fond
+   transparent, pas de bordure), promu ici en classe réutilisable plutôt que dupliqué inline. */
+Button.btn-ghost {
+    background-color: transparent;
+    border-width: 0;
+    color: var(--color-text-dim);
+    font-size: 22px;
+    min-height: 48px;
+}
+
+Button.btn-ghost:hover {
+    color: var(--color-text);
+    background-color: var(--color-glass-fill);
 }
 
 /* Regroupe les actions du HUD tactique (cloche/vue 3D/annuler/FIN DE TOUR) en UN SEUL bandeau
@@ -555,6 +636,33 @@ Button.squad-portrait-btn.selected {
     font-size: 15px;
     -unity-font-style: bold;
     -unity-text-align: middle-center;
+}
+
+/* Ligne du fil de combat (InMatchHudScreen "combat-feed", 2026-09-16) — fond sombre opaque
+   systématique (jamais transparent) pour rester lisible sur n'importe quel arrière-plan de carte,
+   même langage que .dock-status. La couleur du texte encode l'équipe de l'unité détruite
+   (team1-badge/team2-badge existent déjà pour ce même codage ailleurs dans l'UI) : un coup d'œil
+   suffit à voir si c'est un allié ou un ennemi qui vient de tomber, sans lire le texte en entier. */
+.combat-feed-entry {
+    background-color: rgba(20, 18, 12, 0.82);
+    border-left-width: 3px;
+    border-left-color: var(--color-panel-border-dim);
+    border-radius: 2px;
+    padding: 4px 10px;
+    margin-bottom: 4px;
+    font-size: 20px;
+    -unity-font-style: bold;
+    white-space: normal;
+}
+
+.combat-feed-entry--team1 {
+    color: var(--color-team1);
+    border-left-color: var(--color-team1);
+}
+
+.combat-feed-entry--team2 {
+    color: var(--color-team2);
+    border-left-color: var(--color-team2);
 }
 
 /* Pastille de notification (coin haut-droit de la cloche) : ne s'affiche que s'il y a quelque

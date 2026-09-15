@@ -41,6 +41,10 @@ namespace Novgov.Server
                 {
                     conn.MapReady = true;
                 }
+                else if (msg.type == "turn_result_ack" && msg.turn_number == turnNumber)
+                {
+                    conn.HasAckedTurnResult = true;
+                }
             }
         }
 

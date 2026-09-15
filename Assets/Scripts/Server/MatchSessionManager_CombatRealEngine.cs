@@ -146,6 +146,9 @@ namespace Novgov.Server
             Snapshot[] snapshotsForTeam1 = FilterRealEngineSnapshotsForTeam(snapshots, unitById, 1);
             Snapshot[] snapshotsForTeam2 = FilterRealEngineSnapshotsForTeam(snapshots, unitById, 2);
 
+            if (p1 != null) p1.HasAckedTurnResult = false;
+            if (p2 != null) p2.HasAckedTurnResult = false;
+
             if (p1 != null && !p1.IsDisconnected)
             {
                 p1.Send(new NetMessage { type = "turn_result", turn_number = turnNumber, snapshot_interval_ms = TickDurationMs, snapshots = snapshotsForTeam1 });
@@ -154,6 +157,43 @@ namespace Novgov.Server
             {
                 p2.Send(new NetMessage { type = "turn_result", turn_number = turnNumber, snapshot_interval_ms = TickDurationMs, snapshots = snapshotsForTeam2 });
             }
+
+            // BARRIÈRE DE DÉPART SYNCHRONE (2026-09-16, rapport utilisateur : "pas de mouvement
+            // simultané et synchro entre les unités alliées, ni entre alliées et ennemies"). Avant
+            // ceci, chaque client démarrait PlaySnapshotsCoroutine dès la réception de SON PROPRE
+            // "turn_result" — or les deux payloads n'ont ni la même taille (snapshotsForTeam1/2 sont
+            // filtrés différemment par le brouillard de guerre, voir FilterRealEngineSnapshotsForTeam)
+            // ni le même ordre d'envoi (p1.Send() puis p2.Send() ci-dessus), donc les deux clients ne
+            // recevaient JAMAIS leur payload au même instant — chacun rejouait bien ses propres
+            // unités ET celles de l'adversaire en parfait synchronisme LOCAL (une seule boucle
+            // d'interpolation partagée, voir PlaySnapshotsBody côté client), mais les DEUX ÉCRANS
+            // étaient décalés l'un par rapport à l'autre, ce qui se lit comme "rien n'est synchro"
+            // pour deux joueurs qui comparent leurs appareils côte à côte.
+            //
+            // Correctif : chaque client, en recevant "turn_result", le met en cache et renvoie
+            // immédiatement "turn_result_ack" SANS démarrer sa lecture (voir
+            // MultiplayerMatchController.OnTurnResultReceived) ; le serveur attend ici les deux accusés
+            // de réception (borné, pour ne jamais bloquer indéfiniment un joueur dont l'adversaire a
+            // décroché) puis envoie "turn_playback_start" aux deux dans la foulée — c'est CE signal,
+            // minuscule et découplé du gros payload de simulation, qui déclenche réellement
+            // PlaySnapshotsCoroutine des deux côtés.
+            const float MaxPlaybackAckWaitSeconds = 3.0f;
+            float ackWait = 0f;
+            while (ackWait < MaxPlaybackAckWaitSeconds)
+            {
+                bool p1Ready = p1 == null || p1.IsDisconnected || p1.HasAckedTurnResult;
+                bool p2Ready = p2 == null || p2.IsDisconnected || p2.HasAckedTurnResult;
+                if (p1Ready && p2Ready) break;
+
+                if (p1 != null) DrainMessages(p1, turnNumber);
+                if (p2 != null) DrainMessages(p2, turnNumber);
+
+                yield return null;
+                ackWait += Time.deltaTime;
+            }
+
+            if (p1 != null && !p1.IsDisconnected) p1.Send(new NetMessage { type = "turn_playback_start", turn_number = turnNumber });
+            if (p2 != null && !p2.IsDisconnected) p2.Send(new NetMessage { type = "turn_playback_start", turn_number = turnNumber });
 
             double totalMs = (DateTime.UtcNow - executionStartUtc).TotalMilliseconds;
             Debug.Log($"[Timing] Tour {turnNumber} (VRAI MOTEUR) : {snapshots.Count} tick(s) réels, exécution+envoi en {totalMs:F1}ms de temps SERVEUR (le temps RÉEL de résolution était ~{elapsed + combatGrace:F1}s, contre quelques ms pour TacticalResolver.Resolve() — voir 11-real-engine-switch-2026-09-13.md).");

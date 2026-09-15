@@ -15,8 +15,15 @@
 
         <ui:VisualElement name="top-bar" style="flex-direction: row; justify-content: space-between; align-items: flex-start; padding: 12px 24px; picking-mode: Ignore;">
             <ui:Label name="team-banner" text="ÉQUIPE BLEUE" class="team1-badge" style="font-size: 30px; picking-mode: Ignore;" />
-            <ui:Label name="timer-label" text="" class="panel" style="font-size: 32px; -unity-font-style: bold; padding: 8px 20px; picking-mode: Ignore;" />
         </ui:VisualElement>
+
+        <!-- Fil de combat (2026-09-16, retour utilisateur : "lors de l'action les joueurs ne
+             comprennent rien, il y a des morts sans savoir pourquoi") — chaque destruction d'unité
+             (solo ET multijoueur, voir UnitAI.Die()) y ajoute une ligne au lieu de laisser le joueur
+             deviner depuis un simple changement de barre de vie hors champ. Colonne étroite, alignée
+             à gauche sous la bannière d'équipe, jamais au centre pour ne jamais gêner la visée/le tap
+             tactique — picking-mode: Ignore de bout en bout (lecture seule, jamais cliquable). -->
+        <ui:VisualElement name="combat-feed" style="align-self: flex-start; margin-left: 24px; margin-top: 4px; max-width: 46%; picking-mode: Ignore;" />
 
         <ui:Label name="phase-label" text="PLANIFICATION" class="panel" style="align-self: center; margin-top: 8px; font-size: 28px; -unity-font-style: bold; padding: 6px 24px; picking-mode: Ignore;" />
 

@@ -124,6 +124,12 @@ namespace Novgov.Network
         // l'empêchait) — la coroutine en cours resterait alors valide, une deuxième relirait par
         // dessus les MÊMES unités en même temps, une source de bugs visuels difficile à reproduire.
         private bool isPlayingSnapshots = false;
+        // "turn_result" reçu mais pas encore rejoué — mis en cache le temps d'accuser réception au
+        // serveur et d'attendre son signal "turn_playback_start" (voir OnTurnResultReceived/
+        // OnTurnPlaybackStart), pour que la LECTURE démarre au même instant chez les deux clients au
+        // lieu de démarrer dès que CE payload (taille variable selon le brouillard de guerre) est
+        // arrivé.
+        private NetMessage pendingTurnResult;
         private string statusMessage = "";
         private string ghostBannerText = "";
         private float ghostBannerTimer = 0f;
@@ -134,7 +140,7 @@ namespace Novgov.Network
         private TextField emailFieldEl, passwordFieldEl, usernameFieldEl;
         private VisualElement usernameContainer;
         private Button submitButton, toggleModeButton;
-        private Label teamBanner, phaseLabel, timerLabel, ghostBannerLabel, resultLabel, ratingLabel;
+        private Label teamBanner, phaseLabel, ghostBannerLabel, resultLabel, ratingLabel;
         private VisualElement zoneBarContainer, zoneFillTeam1, zoneFillTeam2;
         private bool uiBound = false;
 
@@ -472,7 +478,8 @@ namespace Novgov.Network
                 case "deployment_result": OnDeploymentResult(msg); break;
                 case "turn_timer": lastServerSecondsRemaining = msg.seconds_remaining; break;
                 case "opponent_ghosted": OnOpponentGhosted(msg); break;
-                case "turn_result": if (!isPlayingSnapshots) StartCoroutine(PlaySnapshotsCoroutine(msg)); break;
+                case "turn_result": if (!isPlayingSnapshots) OnTurnResultReceived(msg); break;
+                case "turn_playback_start": OnTurnPlaybackStart(msg); break;
                 case "match_over": StartCoroutine(DeferredMatchOver(msg)); break;
                 case "city_verify_result": OnCityVerifyResult(msg); break;
                 case "zone_captured": OnZoneCaptured(msg); break;
@@ -1123,6 +1130,54 @@ namespace Novgov.Network
             SetUiState(UiState.MatchOver);
         }
 
+        /// <summary>Met le tour reçu en cache et accuse immédiatement réception (voir
+        /// "turn_result_ack" côté serveur, MatchSessionManager_CombatRealEngine.
+        /// RunExecutionPhaseRealEngine) — ne lance PAS encore PlaySnapshotsCoroutine : la lecture
+        /// n'est déclenchée que par le signal "turn_playback_start" du serveur (voir
+        /// OnTurnPlaybackStart ci-dessous), une fois que les DEUX joueurs ont accusé réception. Sans
+        /// cette étape, chaque client démarrait sa lecture dès que SON PROPRE payload (taille
+        /// variable selon le brouillard de guerre) lui arrivait, désynchronisant les deux écrans d'un
+        /// même tour (rapport utilisateur 2026-09-16, "pas de mouvement simultané et synchro").</summary>
+        private void OnTurnResultReceived(NetMessage msg)
+        {
+            pendingTurnResult = msg;
+            GameServerClient.Instance?.Send(new NetMessage { type = "turn_result_ack", turn_number = msg.turn_number });
+            StartCoroutine(FallbackStartPlaybackIfServerNeverSignals(msg.turn_number));
+        }
+
+        /// <summary>Filet de sécurité (2026-09-16) : "turn_playback_start" est un message NOUVEAU —
+        /// un serveur pas encore reconstruit/redéployé avec ce correctif ne l'enverra JAMAIS, ce qui
+        /// laissait le client bloqué sur "ACTION EN COURS..." pour toujours (rapport utilisateur :
+        /// "j'ai action en cours mais rien ne se passe", juste après le déploiement de ce correctif
+        /// alors que le serveur du VPS n'avait pas encore été reconstruit). Volontairement plus long
+        /// que la fenêtre d'attente serveur (3s, voir MatchSessionManager_CombatRealEngine.
+        /// RunExecutionPhaseRealEngine) : si le serveur EST à jour, OnTurnPlaybackStart aura déjà vidé
+        /// pendingTurnResult avant que ce délai n'expire, et ce filet ne fait alors rien.</summary>
+        private IEnumerator FallbackStartPlaybackIfServerNeverSignals(int turnNumber)
+        {
+            yield return new WaitForSeconds(5f);
+            if (isPlayingSnapshots) yield break;
+            if (pendingTurnResult == null || pendingTurnResult.turn_number != turnNumber) yield break;
+            NetMessage toPlay = pendingTurnResult;
+            pendingTurnResult = null;
+            StartCoroutine(PlaySnapshotsCoroutine(toPlay));
+        }
+
+        /// <summary>Démarre RÉELLEMENT la lecture du tour mis en cache — voir OnTurnResultReceived.
+        /// Le TCP garantit l'ordre de réception sur une même connexion, et le serveur n'envoie ce
+        /// signal qu'APRÈS avoir reçu notre "turn_result_ack" (lui-même envoyé seulement après avoir
+        /// entièrement reçu et désérialisé "turn_result") : pendingTurnResult est donc toujours déjà
+        /// posé quand ce message arrive, sauf timeout serveur (adversaire disparu) où ce client peut
+        /// recevoir ce signal sans jamais avoir eu de tour à lui-même rejouer (rien à faire alors).</summary>
+        private void OnTurnPlaybackStart(NetMessage msg)
+        {
+            if (isPlayingSnapshots) return;
+            if (pendingTurnResult == null || pendingTurnResult.turn_number != msg.turn_number) return;
+            NetMessage toPlay = pendingTurnResult;
+            pendingTurnResult = null;
+            StartCoroutine(PlaySnapshotsCoroutine(toPlay));
+        }
+
         /// <summary>Joue le tour reçu du serveur, en garantissant que le verrou isPlayingSnapshots
         /// est TOUJOURS relâché — voir le finally.</summary>
         private IEnumerator PlaySnapshotsCoroutine(NetMessage msg)
@@ -1399,7 +1454,11 @@ namespace Novgov.Network
             {
                 var (okNotif, notifs) = await Novgov.Auth.SupabaseDatabaseClient.GetUnreadNotifications();
                 int unread = okNotif && notifs != null ? notifs.Length : 0;
-                lblNotifBadge.text = unread > 0 ? $"Notifications ({unread})" : "Notifications";
+                // Même pastille ".notif-badge" que la cloche du HUD tactique (TacticalBottomBarScreen) —
+                // remplace le texte "Notifications (N)" par un compteur visuel cohérent avec le reste
+                // du jeu plutôt qu'un traitement ad hoc propre à cet écran.
+                lblNotifBadge.text = unread > 9 ? "9+" : unread.ToString();
+                lblNotifBadge.style.display = unread > 0 ? DisplayStyle.Flex : DisplayStyle.None;
             }
         }
 
@@ -1489,7 +1548,7 @@ namespace Novgov.Network
             if (scroll == null) return;
             scroll.Clear();
             var lblLoading = new Label("Chargement des notifications...");
-            lblLoading.style.color = Color.white;
+            lblLoading.AddToClassList("hint");
             scroll.Add(lblLoading);
 
             var (ok, list) = await Novgov.Auth.SupabaseDatabaseClient.GetUnreadNotifications();
@@ -1497,7 +1556,7 @@ namespace Novgov.Network
             if (!ok || list == null || list.Length == 0)
             {
                 var lbl = new Label("Aucune notification non lue.");
-                lbl.style.color = Color.white;
+                lbl.AddToClassList("hint");
                 lbl.style.whiteSpace = WhiteSpace.Normal;
                 scroll.Add(lbl);
                 return;
@@ -1537,7 +1596,7 @@ namespace Novgov.Network
             if (scroll == null) return;
             scroll.Clear();
             var lblLoading = new Label("Chargement des sièges...");
-            lblLoading.style.color = Color.white;
+            lblLoading.AddToClassList("hint");
             scroll.Add(lblLoading);
 
             string myUserId = Novgov.Auth.SupabaseAuthClient.CurrentSession?.user?.id;
@@ -1546,7 +1605,7 @@ namespace Novgov.Network
             if (!ok || list == null || list.Length == 0)
             {
                 var lbl = new Label("Aucun siège en cours (ni comme attaquant, ni comme défenseur).");
-                lbl.style.color = Color.white;
+                lbl.AddToClassList("hint");
                 lbl.style.whiteSpace = WhiteSpace.Normal;
                 scroll.Add(lbl);
                 return;
@@ -1592,7 +1651,7 @@ namespace Novgov.Network
             if (scroll == null) return;
             scroll.Clear();
             var lblLoading = new Label("Chargement des territoires...");
-            lblLoading.style.color = Color.white;
+            lblLoading.AddToClassList("hint");
             scroll.Add(lblLoading);
 
             // 2026-09-13 : lit les VRAIES Zones possédées (public.zones.owner_user_id, partagé —
@@ -1602,7 +1661,7 @@ namespace Novgov.Network
             if (!ok || list == null || list.Length == 0)
             {
                 var lbl = new Label("Vous ne possédez aucun territoire (bâtiment). Partez à la conquête de Zones pour en gagner !");
-                lbl.style.color = Color.white;
+                lbl.AddToClassList("hint");
                 lbl.style.whiteSpace = WhiteSpace.Normal;
                 scroll.Add(lbl);
                 return;
@@ -1860,7 +1919,6 @@ namespace Novgov.Network
             hudRoot = UIScreenManager.Instance.GetScreen("InMatchHud");
             teamBanner = hudRoot.Q<Label>("team-banner");
             phaseLabel = hudRoot.Q<Label>("phase-label");
-            timerLabel = hudRoot.Q<Label>("timer-label");
             ghostBannerLabel = hudRoot.Q<Label>("ghost-banner");
             zoneBarContainer = hudRoot.Q<VisualElement>("zone-bar-container");
             zoneFillTeam1 = hudRoot.Q<VisualElement>("zone-fill-team1");
@@ -1980,8 +2038,11 @@ namespace Novgov.Network
             // existe toujours en coulisses (PlanningSeconds/DeploymentSeconds, généreuses, 5 min pour
             // le déploiement) comme filet de sécurité contre un adversaire réellement absent, mais ne
             // s'affiche plus nulle part. lastServerSecondsRemaining reste alimenté par "turn_timer"
-            // (PhaseSecondsRemaining en dépend encore ailleurs) mais n'est plus lu ici.
-            timerLabel.text = "";
+            // (PhaseSecondsRemaining en dépend encore ailleurs) mais n'est plus lu ici. Le Label
+            // "timer-label" lui-même a été retiré de InMatchHudScreen.uxml (2026-09-16) : vider son
+            // texte sans le cacher laissait un cadre ".panel" vide et sans nom visible en jeu, à
+            // l'opposé de la bannière d'équipe sur la même ligne (rapport utilisateur : "petit
+            // bouton à droite qui sert à rien et sans nom").
 
             phaseLabel.text = !string.IsNullOrEmpty(statusMessage)
                 ? statusMessage

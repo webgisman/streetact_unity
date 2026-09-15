@@ -938,7 +938,14 @@ public partial class UnitAI : MonoBehaviour
         isDead = true;
         AllLivingUnits.Remove(this);
         Debug.Log($"<color=black><b>[{gameObject.name}] EST MORT !</b></color>");
-        
+
+        // 2026-09-16 (retour utilisateur : "lors de l'action les joueurs ne comprennent rien, il y a
+        // des morts sans savoir pourquoi") — seul point d'appel commun au solo (TakeDamage ci-dessus)
+        // ET au rejeu réseau (ApplyNetworkDeath plus bas) : une ligne au fil de combat suffit ici pour
+        // couvrir les deux à la fois. No-op silencieux côté serveur dédié (UIScreenManager.Instance y
+        // est toujours null, UIBootstrap ne s'y exécutant jamais — voir GameManagerUI.BindStartupUI).
+        CombatFeedUI.ReportDeath(this);
+
         // Quitter le bâtiment et libérer la garnison
         if (currentBuilding != null)
         {
