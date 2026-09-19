@@ -26,41 +26,39 @@ namespace Novgov.Server
 
         public static Vector3 DeploymentZoneCenterForTeam(int team) => team == 1 ? Team1DeploymentZoneCenter : Team2DeploymentZoneCenter;
 
-        // Budget de déploiement manuel : jusqu'à 6 unités de combat (n'importe quel mélange parmi
-        // Fantassin/CharLeopard/VehiculeCanon/Mortier) + jusqu'à 8 barricades (même stock que le
-        // dock solo, voir UnitSpawnerUI.maxBarricadesPerTeam) — au-delà, ou un type d'unité hors de
-        // l'enum, la soumission ENTIÈRE est rejetée et ce camp reçoit le repli automatique.
-        // Publics depuis le 2026-09-08, même raison que Team1/2DeploymentZoneCenter ci-dessus :
-        // UnitSpawnerUI en a besoin pour afficher le budget réel PENDANT le déploiement (voir
-        // GetTeamDeploymentPointCost) au lieu de le laisser invisible jusqu'au rejet côté serveur.
+        // Plafonds de comptage du déploiement manuel : jusqu'à 6 unités de combat (n'importe quel
+        // mélange parmi Fantassin/CharLeopard/VehiculeCanon/Mortier) + jusqu'à 8 barricades (même
+        // stock que le dock solo, voir UnitSpawnerUI.maxBarricadesPerTeam) — un placement qui
+        // dépasserait un plafond, ou un type d'unité hors de l'enum, est écarté INDIVIDUELLEMENT
+        // (voir FilterRosterToBudget), jamais la soumission entière. Publics depuis le 2026-09-08,
+        // même raison que Team1/2DeploymentZoneCenter ci-dessus : UnitSpawnerUI en a besoin pour
+        // afficher l'effectif réel PENDANT le déploiement.
+        //
+        // 2026-09-19 (demande explicite, retour joueur en pleine partie) : le budget en POINTS
+        // (CombatPointBudget, ajouté le 2026-09-06) a été entièrement retiré, y compris son affichage
+        // client — seuls les plafonds de comptage bruts ci-dessous subsistent.
         public const int MaxDeployedCombatUnits = 6;
         public const int MaxDeployedBarricades = 8;
-        // 2026-09-12 (demande explicite) : sans plafond dédié, un camp pouvait aligner jusqu'à 4
-        // Mortiers (limité seulement par CombatPointBudget=8, coût 2 chacun) — même règle appliquée
-        // côté client (voir UnitSpawnerUI.MaxMortarsPerTeam) pour un message immédiat, mais l'AUTORITÉ
-        // reste ici : un client modifié qui soumettrait `submit_deployment` directement sans jamais
-        // passer par le dock doit être bloqué pareil.
+        // 2026-09-12 (demande explicite) : sans plafond dédié, un camp pouvait aligner jusqu'à 6
+        // Mortiers — même règle appliquée côté client (voir UnitSpawnerUI.MaxMortarsPerTeam) pour un
+        // message immédiat, mais l'AUTORITÉ reste ici : un client modifié qui soumettrait
+        // `submit_deployment` directement sans jamais passer par le dock doit être bloqué pareil.
         public const int MaxMortarsPerTeam = 2;
-        // Budget en points (voir UnitTypeStats.DeploymentCost) : plafonne la PUISSANCE
-        // totale déployée, pas seulement le nombre d'unités — sans ça, déployer le nombre max
-        // d'unités les plus lourdes (CharLeopard) était toujours strictement supérieur à toute
-        // composition mixte, tuant toute variété tactique (voir rapport d'audit jouabilité, défaut
-        // bloquant #1). 8 points permet par ex. 2 CharLeopard + 2 Fantassin, ou 4 VehiculeCanon, ou
-        // 1 CharLeopard + 1 Mortier + 1 VehiculeCanon + 1 Fantassin — mais jamais 4 CharLeopard (12).
-        public const int CombatPointBudget = 8;
 
         /// <summary>Garde EXACTEMENT les placements que le joueur a lui-même choisis (même type, même
-        /// position) qui tiennent dans le budget — dans l'ORDRE de soumission — et ne rejette qu'un
-        /// placement individuellement invalide (type hors énum, coordonnée NaN/Infinity) ou celui qui
-        /// ferait dépasser un plafond. <paramref name="anyDropped"/> est vrai si au moins un placement
-        /// a été écarté.</summary>
+        /// position) qui tiennent dans les plafonds de comptage — dans l'ORDRE de soumission — et ne
+        /// rejette qu'un placement individuellement invalide (type hors énum, coordonnée NaN/Infinity)
+        /// ou celui qui ferait dépasser un plafond (unités de combat, barricades, mortiers).
+        /// 2026-09-19 (demande explicite) : le budget en POINTS (CombatPointBudget) a été retiré —
+        /// seuls les plafonds de comptage bruts subsistent. <paramref name="anyDropped"/> est vrai si
+        /// au moins un placement a été écarté.</summary>
         private static List<UnitPlacement> FilterRosterToBudget(UnitPlacement[] placements, out bool anyDropped)
         {
             var kept = new List<UnitPlacement>();
             anyDropped = false;
             if (placements == null) return kept;
 
-            int combatCount = 0, barricadeCount = 0, mortarCount = 0, totalCost = 0;
+            int combatCount = 0, barricadeCount = 0, mortarCount = 0;
             foreach (var p in placements)
             {
                 if (!Enum.IsDefined(typeof(UnitSpawnerUI.UnitType), p.unit_type)) { anyDropped = true; continue; }
@@ -70,16 +68,13 @@ namespace Novgov.Server
                 var type = (UnitSpawnerUI.UnitType)p.unit_type;
                 bool isBarricade = type == UnitSpawnerUI.UnitType.BarricadeRoutiere;
                 bool isMortar = type == UnitSpawnerUI.UnitType.Mortier;
-                int cost = UnitTypeStats.DeploymentCost(type);
 
                 bool fitsCount = isBarricade ? barricadeCount + 1 <= MaxDeployedBarricades : combatCount + 1 <= MaxDeployedCombatUnits;
                 bool fitsMortarCap = !isMortar || mortarCount + 1 <= MaxMortarsPerTeam;
-                bool fitsBudget = totalCost + cost <= CombatPointBudget;
-                if (!fitsCount || !fitsMortarCap || !fitsBudget) { anyDropped = true; continue; }
+                if (!fitsCount || !fitsMortarCap) { anyDropped = true; continue; }
 
                 if (isBarricade) barricadeCount++; else combatCount++;
                 if (isMortar) mortarCount++;
-                totalCost += cost;
                 kept.Add(p);
             }
             return kept;

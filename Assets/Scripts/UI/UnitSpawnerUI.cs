@@ -205,16 +205,6 @@ public partial class UnitSpawnerUI : MonoBehaviour
                               Mathf.Abs(targetWorldPos.y - navHit.position.y) < 2.5f;
                 }
 
-                if (isValid && IsMultiplayerDeploymentActive() && !IsInsideDeploymentZone(navHit.position))
-                {
-                    isValid = false;
-                    outOfDeploymentZone = true;
-                }
-                else
-                {
-                    outOfDeploymentZone = false;
-                }
-
                 if (previewRing != null)
                 {
                     previewRing.SetActive(true);
@@ -301,9 +291,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
                         else
                         {
                             string errMsg;
-                            if (outOfDeploymentZone)
-                                errMsg = "Hors de votre zone de départ ! Déployez à l'intérieur du cercle de votre camp.";
-                            else if (isHeavyUnit && isBuildingOrRoof)
+                            if (isHeavyUnit && isBuildingOrRoof)
                                 errMsg = "Les véhicules et canons doivent être placés sur la rue, pas sur les toits !";
                             else
                                 errMsg = "Emplacement hors-carte ! Touchez une rue pour déployer l'unité.";
@@ -588,6 +576,13 @@ public partial class UnitSpawnerUI : MonoBehaviour
             }
             else
             {
+                // Repli visuellement TROMPEUR (retour joueur 2026-09-19 : "je déploie un char et un
+                // canon, je vois deux chars") — Resources.Load a échoué pour "engins/canon-vehicle"
+                // (le fichier existe pourtant sur disque au moment d'écrire ceci ; possible import
+                // FBX cassé/non ré-importé). Loggé fort pour ne plus jamais laisser ce repli passer
+                // inaperçu — un canon qui a exactement l'apparence d'un char est indiscernable pour
+                // le joueur, contrairement à un repli en simple cube.
+                Debug.LogError("[UnitSpawnerUI] Resources.Load(\"engins/canon-vehicle\") a échoué — repli sur le modèle du CHAR LEOPARD, qui sera donc visuellement IDENTIQUE à une unité CharLeopard réelle. Vérifier l'import de Assets/Resources/engins/canon-vehicle.fbx.");
                 GameObject tankPrefab = Resources.Load<GameObject>("Kucher/Tank Leopard2/Prefabs/Leopard2");
                 if (tankPrefab != null) newUnitObj = Instantiate(tankPrefab, position, Quaternion.identity);
                 else
@@ -896,25 +891,6 @@ public partial class UnitSpawnerUI : MonoBehaviour
         return count;
     }
 
-    /// <summary>Somme des coûts en points (Novgov.Server.UnitTypeStats.DeploymentCost) des unités de
-        /// afficher le budget en points PENDANT le déploiement PvP (voir RefreshDeploymentDockUI) : le
-    /// dock ne plafonnait jusqu'ici que le NOMBRE d'unités (maxUnitsPerTeam), jamais leur coût — un
-    /// joueur pouvait construire une composition entièrement lourde (ex. 2 CharLeopard + 1 Mortier +
-    /// 1 Fantassin, sous la limite de 4 unités) que le serveur refusait ensuite en partie SANS que
-    /// le dock ait jamais montré la moindre limite de points. Voir
-    /// Novgov.Server.MatchSessionManager.FilterRosterToBudget côté serveur.</summary>
-    public int GetTeamDeploymentPointCost(int team)
-    {
-        int total = 0;
-        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
-        {
-            UnitAI u = UnitAI.AllLivingUnits[i];
-            if (u == null || u.isDead || u.teamID != team) continue;
-            total += Novgov.Server.UnitTypeStats.DeploymentCost(Novgov.Server.UnitTypeStats.InferType(u));
-        }
-        return total;
-    }
-
     /// <summary>
     /// Échantillonne plusieurs points de NavMesh autour de "desired" (le point visé lui-même, puis
     /// un anneau de points à distances/angles croissants) et retourne celui avec le Y le plus bas.
@@ -1186,74 +1162,6 @@ public partial class UnitSpawnerUI : MonoBehaviour
         selectedTeam = team;
         isPanelOpen = true;
         CancelPlacement();
-        HideDeploymentZoneMarker();
-    }
-
-    // Vrai quand un placement hors zone de départ vient d'être refusé — sert à donner la VRAIE
-    // raison au joueur au lieu du message générique "hors-carte".
-    private bool outOfDeploymentZone = false;
-
-    private GameObject deploymentZoneMarker;
-
-    private static bool IsMultiplayerDeploymentActive()
-    {
-        return Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive;
-    }
-
-    /// <summary>Le point est-il dans la zone de départ du camp local ? Utilise EXACTEMENT les
-    /// constantes du serveur (Novgov.Server.MatchSessionManager) pour qu'il n'y ait qu'une seule
-    /// définition de la zone.</summary>
-    private bool IsInsideDeploymentZone(Vector3 worldPos)
-    {
-        return worldPos.x >= -25f && worldPos.x <= 25f && worldPos.z >= -25f && worldPos.z <= 25f;
-    }
-
-    /// <summary>Anneau au sol matérialisant la zone de départ pendant le déploiement PvP. Rien ne
-    /// signalait cette zone auparavant, alors que le serveur la faisait respecter.</summary>
-    private void ShowDeploymentZoneMarker(int team)
-    {
-        HideDeploymentZoneMarker();
-
-        Vector3 center = Novgov.Server.MatchSessionManager.DeploymentZoneCenterForTeam(team);
-        float radius = Novgov.Server.MatchSessionManager.DeploymentZoneRadius;
-
-        deploymentZoneMarker = new GameObject("DeploymentZoneRing");
-        deploymentZoneMarker.transform.position = new Vector3(center.x, 0.08f, center.z);
-
-        var lr = deploymentZoneMarker.AddComponent<LineRenderer>();
-        const int segments = 72;
-        lr.positionCount = segments + 1;
-        lr.useWorldSpace = false;
-        lr.loop = false;
-        lr.widthMultiplier = 0.55f;
-        lr.numCapVertices = 2;
-        lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        lr.receiveShadows = false;
-
-        for (int i = 0; i <= segments; i++)
-        {
-            float a = (i / (float)segments) * Mathf.PI * 2f;
-            lr.SetPosition(i, new Vector3(Mathf.Cos(a) * radius, 0f, Mathf.Sin(a) * radius));
-        }
-
-        Color zoneColor = IsLocalPlayerTeam(team) ? NovgovTheme.TeamPlayer : NovgovTheme.TeamEnemy;
-        zoneColor.a = 0.85f;
-        Material mat = SafeMaterialFactory.CreateUnlit(zoneColor);
-        if (mat != null)
-        {
-            lr.material = mat;
-            lr.startColor = zoneColor;
-            lr.endColor = zoneColor;
-        }
-    }
-
-    private void HideDeploymentZoneMarker()
-    {
-        if (deploymentZoneMarker != null)
-        {
-            Destroy(deploymentZoneMarker);
-            deploymentZoneMarker = null;
-        }
     }
 
 #if !UNITY_SERVER
@@ -1387,10 +1295,6 @@ public partial class UnitSpawnerUI : MonoBehaviour
         bool mpDeployment = Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive;
         if (Novgov.Network.MultiplayerMatchController.IsFlowActive && !mpDeployment) hidden = true;
 
-        // L'anneau de zone de départ ne vit que pendant la phase de déploiement. Piloté ici, depuis
-        // le rafraîchissement appelé chaque frame, plutôt qu'à chacune des sorties de phase — aucune
-        // transition ne peut ainsi le laisser affiché.
-        if (!mpDeployment && deploymentZoneMarker != null) HideDeploymentZoneMarker();
         // Le menu de démarrage (choix de carte hors-ligne/GPS/multijoueur) n'a encore chargé aucune
         // carte ni unité — sans ce garde-fou, ce dock plein écran (même vide) reste au-dessus du
         // menu de démarrage dans l'arbre UI Toolkit et intercepte silencieusement tous les taps
@@ -1451,19 +1355,8 @@ public partial class UnitSpawnerUI : MonoBehaviour
         if (isPanelOpen)
         {
             int currentTeamCount = (selectedTeam == 1) ? playerUnits : enemyUnits;
-            if (mpDeployment)
-            {
-                int points = GetTeamDeploymentPointCost(selectedTeam);
-                effectifsLabel.text = $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}   •   Points : {points} / {Novgov.Server.MatchSessionManager.CombatPointBudget}";
-                effectifsLabel.style.color = new StyleColor(
-                    (currentTeamCount >= maxUnitsPerTeam || points > Novgov.Server.MatchSessionManager.CombatPointBudget)
-                        ? NovgovTheme.Danger : NovgovTheme.Info);
-            }
-            else
-            {
-                effectifsLabel.text = $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}";
-                effectifsLabel.style.color = new StyleColor(currentTeamCount >= maxUnitsPerTeam ? NovgovTheme.Danger : NovgovTheme.Info);
-            }
+            effectifsLabel.text = $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}";
+            effectifsLabel.style.color = new StyleColor(currentTeamCount >= maxUnitsPerTeam ? NovgovTheme.Danger : NovgovTheme.Info);
 
             team1Button.text = $"Joueur ({playerUnits})";
             team2Button.text = $"IA ({enemyUnits})";
