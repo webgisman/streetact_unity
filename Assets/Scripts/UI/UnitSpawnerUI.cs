@@ -1478,26 +1478,27 @@ public partial class UnitSpawnerUI : MonoBehaviour
         {
             if (picked == uiDoc.rootVisualElement) break;
 
-            // Un Label seul (2026-09-19, retour joueur : taps absorbés en silence sans le moindre
-            // bouton visé) N'est PAS un contrôle interactif — bannière d'équipe, en-têtes de
-            // section, texte de statut, libellé du bouton tab (dont le TEXTE, un Label enfant, est
-            // le premier élément réellement sous le doigt) : aucun code dans tout le projet
-            // n'attache jamais de `.clicked` à un Label (grep-confirmé). Le picking-mode par défaut
-            // d'UI Toolkit sur un Label est pourtant Position, pas Ignore — chacun de ces libellés
-            // purement décoratifs, dès qu'il n'a pas explicitement `picking-mode: Ignore` dans son
-            // UXML, absorbait donc silencieusement tout tap dans son rectangle, y compris par-dessus
-            // une unité 3D juste derrière, sans qu'aucun clic n'ait jamais été réellement visé ici.
-            if (picked.pickingMode == PickingMode.Position && !(picked is Label))
-            {
-                reason = $"{picked.GetType().Name} '{picked.name}' (picking-mode=Position)";
-                return true;
-            }
+            // LISTE BLANCHE (2026-09-19, retour joueur répété : des taps absorbés en silence sans
+            // le moindre bouton visé — "top-bar" en particulier, un simple conteneur de mise en
+            // page). Remplace l'ancienne liste noire ("tout ce qui a picking-mode == Position
+            // absorbe, sauf les cas déjà repérés") : le picking-mode RÉSOLU d'un élément ne reflète
+            // pas de façon fiable ce qui a été déclaré dans son UXML (bug Unity déjà documenté dans
+            // UIScreenManager.cs pour l'élément "root" de chaque écran) — un conteneur purement
+            // décoratif peut donc se retrouver Position sans que rien ne l'ait jamais voulu. Plutôt
+            // que de rallonger indéfiniment une liste noire à chaque nouveau conteneur touché par ce
+            // bug, seuls les éléments RÉELLEMENT interactifs (grep-confirmé dans tout le projet)
+            // absorbent désormais : Button/ScrollView/TextField, et les 4 seuls conteneurs
+            // d'absorption intentionnelle du projet (fond de ContextMenu, cluster de boutons tactile
+            // du bas, groupe de boutons d'exécution) — un `picked.pickingMode == Position` isolé,
+            // sur n'importe quel autre élément, n'a plus aucun effet.
             if (picked is Button || picked is ScrollView || picked is TextField)
             {
                 reason = $"{picked.GetType().Name} '{picked.name}'";
                 return true;
             }
-            if (picked.ClassListContains("context-panel") || picked.ClassListContains("dock-panel") || picked.ClassListContains("context-button") || picked.ClassListContains("context-cancel-btn"))
+            if (picked.ClassListContains("context-panel") || picked.ClassListContains("dock-panel")
+                || picked.ClassListContains("context-button") || picked.ClassListContains("context-cancel-btn")
+                || picked.ClassListContains("hud-action-cluster") || picked.name == "execution-group")
             {
                 reason = $"{picked.GetType().Name} '{picked.name}' (classe {string.Join(",", picked.GetClasses())})";
                 return true;
