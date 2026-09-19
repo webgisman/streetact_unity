@@ -174,9 +174,9 @@ public partial class TacticalPathManager
         // (UI Toolkit picking) couvre désormais la barre du bas, les menus contextuels et
         // le dock de déploiement, plus besoin de Rect codées en dur par écran. N'est plus atteint
         // que pour un tap qui n'a touché AUCUNE unité directement (voir juste au-dessus).
-        if (UnitSpawnerUI.Instance != null && UnitSpawnerUI.Instance.IsPointerOverOnGUI(tapPosition))
+        if (UnitSpawnerUI.Instance != null && UnitSpawnerUI.Instance.IsPointerOverOnGUI(tapPosition, out string absorbedBy))
         {
-            TapDiagnosticOverlay.Report("Tap absorbé par un élément d'UI (bouton/menu/dock) — aucune action 3D.");
+            TapDiagnosticOverlay.Report($"Tap absorbé par : {absorbedBy} — aucune action 3D.");
             return;
         }
 

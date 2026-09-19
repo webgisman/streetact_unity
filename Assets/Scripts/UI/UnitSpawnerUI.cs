@@ -1429,12 +1429,24 @@ public partial class UnitSpawnerUI : MonoBehaviour
     /// fonctionner. Le corps reste conditionnel : côté serveur, il n'y a de toute façon aucun
     /// UIDocument/panel UI Toolkit à interroger, donc "jamais sur l'UI" est la bonne réponse.
     /// </summary>
-    public bool IsPointerOverOnGUI(Vector2 screenPos)
+    public bool IsPointerOverOnGUI(Vector2 screenPos) => IsPointerOverOnGUI(screenPos, out _);
+
+    /// <summary>Même comportement que <see cref="IsPointerOverOnGUI(Vector2)"/>, avec en plus une
+    /// description de l'élément qui a effectivement absorbé le tap (ou de la raison du blocage —
+    /// cooldown, radar) dans <paramref name="reason"/>, uniquement pour le diagnostic à l'écran
+    /// (TapDiagnosticOverlay) — ajouté 2026-09-19 après plusieurs retours "le tap ne fait rien" sans
+    /// qu'on puisse jamais savoir QUEL élément était en cause.</summary>
+    public bool IsPointerOverOnGUI(Vector2 screenPos, out string reason)
     {
+        reason = null;
 #if UNITY_SERVER
         return false;
 #else
-        if (Time.time - lastUIClickTime < 0.3f) return true;
+        if (Time.time - lastUIClickTime < 0.3f)
+        {
+            reason = $"cooldown post-clic UI (0,3s, dernier clic il y a {Time.time - lastUIClickTime:F2}s)";
+            return true;
+        }
 
         // 1. Protection du radar tactique (TacticalRadarUI, dessiné en OnGUI — donc invisible au
         // picking UI Toolkit du bloc 2 ci-dessous, qui ne connaît que les éléments UI Toolkit).
@@ -1445,7 +1457,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
         if (TacticalRadarUI.BottomEdgeScreenY > 0f && screenPos.y >= Screen.height - TacticalRadarUI.BottomEdgeScreenY - 8f)
         {
             float radarLeftX = Screen.width - TacticalRadarUI.BottomEdgeScreenY; // le radar est ~carré, ancré en haut-droite
-            if (screenPos.x >= radarLeftX - 8f) return true;
+            if (screenPos.x >= radarLeftX - 8f) { reason = "radar tactique (coin haut-droit)"; return true; }
         }
 
         // 2. UI Toolkit picking générique pour tous les autres éléments (barre du bas, dock de
@@ -1465,10 +1477,30 @@ public partial class UnitSpawnerUI : MonoBehaviour
         {
             if (picked == uiDoc.rootVisualElement) break;
 
-            // Si on touche n'importe quel élément actif ou interactif
-            if (picked.pickingMode == PickingMode.Position) return true;
-            if (picked is Button || picked is ScrollView || picked is TextField || picked is Label) return true;
-            if (picked.ClassListContains("context-panel") || picked.ClassListContains("dock-panel") || picked.ClassListContains("context-button") || picked.ClassListContains("context-cancel-btn")) return true;
+            // Un Label seul (2026-09-19, retour joueur : taps absorbés en silence sans le moindre
+            // bouton visé) N'est PAS un contrôle interactif — bannière d'équipe, en-têtes de
+            // section, texte de statut, libellé du bouton tab (dont le TEXTE, un Label enfant, est
+            // le premier élément réellement sous le doigt) : aucun code dans tout le projet
+            // n'attache jamais de `.clicked` à un Label (grep-confirmé). Le picking-mode par défaut
+            // d'UI Toolkit sur un Label est pourtant Position, pas Ignore — chacun de ces libellés
+            // purement décoratifs, dès qu'il n'a pas explicitement `picking-mode: Ignore` dans son
+            // UXML, absorbait donc silencieusement tout tap dans son rectangle, y compris par-dessus
+            // une unité 3D juste derrière, sans qu'aucun clic n'ait jamais été réellement visé ici.
+            if (picked.pickingMode == PickingMode.Position && !(picked is Label))
+            {
+                reason = $"{picked.GetType().Name} '{picked.name}' (picking-mode=Position)";
+                return true;
+            }
+            if (picked is Button || picked is ScrollView || picked is TextField)
+            {
+                reason = $"{picked.GetType().Name} '{picked.name}'";
+                return true;
+            }
+            if (picked.ClassListContains("context-panel") || picked.ClassListContains("dock-panel") || picked.ClassListContains("context-button") || picked.ClassListContains("context-cancel-btn"))
+            {
+                reason = $"{picked.GetType().Name} '{picked.name}' (classe {string.Join(",", picked.GetClasses())})";
+                return true;
+            }
 
             picked = picked.parent;
         }
