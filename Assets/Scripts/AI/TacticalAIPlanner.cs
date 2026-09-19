@@ -362,9 +362,7 @@ public static class TacticalAIPlanner
             {
                 totalPathLength += Vector3.Distance(path.corners[i], path.corners[i + 1]);
             }
-
-            float targetDistAlongPath = Mathf.Min(unit.maxMovementPerTurn, totalPathLength - stopDistance);
-
+            float targetDistAlongPath = Mathf.Min(RealMovementBudget(unit), totalPathLength - stopDistance);
             if (targetDistAlongPath <= 0.5f)
             {
                 unit.AddTacticalNode(new TacticalPathManager.TacticalNode

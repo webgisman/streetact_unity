@@ -428,7 +428,16 @@ public class TacticalRadarUI : MonoBehaviour
 
             Vector2 blipPos = center + screenOffset;
             float blipSize = isSelectedUnit ? 13f : (unit.isPlayerControlled ? 9f : 11f);
-            Texture2D tex = unit.isPlayerControlled ? allyBlipTex : enemyBlipTex;
+            // Couleur du point : identité d'ÉQUIPE ABSOLUE (voir NovgovTheme.ColorForTeam), pas
+            // isPlayerControlled — corrigé le 2026-09-19, même retour joueur que UnitAI.
+            // SetupHealthBar/UpdateHealthBar et UnitTacticalMarker. Sans ce correctif, un joueur de
+            // l'équipe 2 aurait vu SES PROPRES points radar en bleu (allyBlipTex, --color-team1)
+            // tout en ayant, après ce même correctif ailleurs, ses unités en rouge dans la scène 3D
+            // — une NOUVELLE incohérence entre radar et vue 3D si seul l'un des deux était corrigé.
+            // allyCount/enemyDetectedCount juste au-dessus restent, eux, sur isPlayerControlled à
+            // dessein : "combien des MIENNES, combien d'ennemies repérées" est une vraie métrique
+            // tactique relative au joueur local, pas une couleur de marque d'équipe.
+            Texture2D tex = (unit.teamID != 2) ? allyBlipTex : enemyBlipTex;
 
             // Halo et réticule de sélection holographique pulsant sur le radar
             if (isSelectedUnit && selectedBlipRingTex != null)

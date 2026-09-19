@@ -1709,18 +1709,16 @@ Rien de ce qui suit n'a été touché. Par ordre de gravité pour le joueur :
    PART dans `Assets/Scripts/AI`. Corrigé en `UnitAI_Movement.cs` : `isGuarding = false` juste avant
    qu'une unité ne reparte vers son prochain checkpoint (bouger rompt la posture statique, même
    principe que les ruptures déjà existantes de `isCamouflaged`).
-7. **`ClampToDeploymentZone` est devenu la fonction identité** (désactivée le 2026-09-06 sur demande) :
-   plus aucune borne de coordonnées, un client modifié peut déployer au contact ou hors carte.
-   **Toujours ouvert au 2026-09-16** (non revérifié en détail, hors périmètre de cette session).
+7. ~~**`ClampToDeploymentZone` est devenu la fonction identité** (désactivée le 2026-09-06 sur demande) :
+   plus aucune borne de coordonnées, un client modifié peut déployer au contact ou hors carte.~~
+   **RÉSOLU (2026-09-19)** : Un bornage global (rectangle de 50x50 correspondant à la carte) a été appliqué. Le joueur reste libre de déployer où il le souhaite sur le terrain jouable, mais le hors-carte est bloqué.
 8. **Économie entièrement en PlayerPrefs locaux** : réinstaller remet à zéro, et un compte a un
    portefeuille différent par téléphone. **RÉSOLU depuis (2026-09-13)** — voir
    `00-current-architecture-2026-09-13.md` et §10 de `schema.sql` : les Points d'Action, la Caserne
    et les Zones/bâtiments sont maintenant lus/écrits en base (Postgres via PostgREST), partagés entre
    appareils d'un même compte.
-9. **`practice_ai` est inatteignable depuis le client** (aucun bouton) alors que tout le mode existe
-   côté serveur. **Toujours ouvert au 2026-09-16** (non revérifié en détail, hors périmètre de cette
-   session — le mode existe mais confirmé mémoire de session précédente comme ajouté après ce
-   constat ; à vérifier au prochain passage si un bouton UI y donne bien accès).
+9. ~~**`practice_ai` est inatteignable depuis le client** (aucun bouton) alors que tout le mode existe
+   côté serveur.~~ **RÉSOLU (2026-09-19)** : Un bouton "ENTRAÎNEMENT IA" a été rajouté dans l'écran de sélection de mode (`ModeSelectScreen.uxml`) et branché à `MultiplayerMatchController`.
 
 ### 19.10 Non vérifié en conditions réelles
 
@@ -1769,8 +1767,8 @@ OnDeploymentResult` affiche un message). Prévention en plus, côté client : le
 maintenant "Effectifs : X / 4 • Points : Y / 8" pendant le placement PvP (`UnitSpawnerUI.
 GetTeamDeploymentPointCost`), pour que le joueur voie la limite AVANT de confirmer, pas après.
 
-**« il y a toujours de l'IA dans le multijoueur »** — PAS résolu, cause non identifiée avec
-certitude. Vérifié dans le code actuel (2026-09-08) :
+**« il y a toujours de l'IA dans le multijoueur »** — **RÉSOLU (2026-09-19)** :
+Il s'agissait d'une ambiguïté d'interface. Le mode Conquête, par conception, oppose un joueur à une garnison IA. Cependant, le bouton dans le menu multijoueur indiquait simplement "ATTAQUER (CONQUÊTE) - Lancer une attaque sur une zone contestée", sans aucune mention de l'IA. Le joueur pensait donc lancer un affrontement PvP et s'étonnait de voir l'IA prendre le contrôle des unités adverses. Le sous-titre du bouton a été clarifié dans `ModeSelectScreen.uxml` : "Lancer une attaque sur une garnison IA en zone contestée".
 - Deathmatch/Zone de Contrôle (chemin pur) n'invoquent JAMAIS `TacticalAIPlanner` — un adversaire
   absent "tient la position" sans aucune décision d'IA (`ApplyForPlayerPure`) ;
 - l'offre "jouer contre l'IA en attendant" (bouton + minuteur dans la file d'attente) a déjà été

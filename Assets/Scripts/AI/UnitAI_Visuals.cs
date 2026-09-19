@@ -424,10 +424,21 @@ public partial class UnitAI
     }
 
     private GameObject coverAura;
+    private bool cachedIsNearBarrier;
+    private float nextBarrierCheckTime;
 
     public void UpdateCoverAura()
     {
-        bool inCover = isPlayerControlled && (isGarrisoned || isRooftopSniper || isCamouflaged || isGuarding);
+        // Scan des barricades coûteux (linéaire sur RoadBarrier.AllBarriers) — la proximité d'une
+        // unité à une barricade statique ne change qu'en cas de mouvement réel, un rafraîchissement
+        // toutes les ~0.25s (au lieu de chaque frame, pour CHAQUE unité vivante) est imperceptible
+        // visuellement mais évite un scan par frame par unité sur le serveur.
+        if (Time.time >= nextBarrierCheckTime)
+        {
+            cachedIsNearBarrier = RoadBarrier.IsUnitNearBarrier(transform.position, 2.2f);
+            nextBarrierCheckTime = Time.time + 0.25f;
+        }
+        bool inCover = isPlayerControlled && (isGarrisoned || isRooftopSniper || isCamouflaged || isGuarding || cachedIsNearBarrier);
 
         if (inCover && coverAura == null && !isTank)
         {

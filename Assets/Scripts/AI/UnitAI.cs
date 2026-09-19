@@ -244,15 +244,18 @@ public partial class UnitAI : MonoBehaviour
         }
 
         // --- INTEGRATION AUTOMATIQUE DU MARQUEUR TACTIQUE ---
+        // Couleur d'ÉQUIPE ABSOLUE (voir NovgovTheme.ColorForTeam) — PAS isPlayerControlled,
+        // corrigé le 2026-09-19 en même temps que SetupHealthBar/UpdateHealthBar pour la même
+        // raison (voir la doc de ColorForTeam).
         if (GetComponent<UnitTacticalMarker>() == null)
         {
             var marker = gameObject.AddComponent<UnitTacticalMarker>();
-            marker.markerColor = isPlayerControlled ? Color.blue : Color.red;
+            marker.markerColor = NovgovTheme.ColorForTeam(teamID);
         }
         else
         {
             var marker = GetComponent<UnitTacticalMarker>();
-            marker.markerColor = isPlayerControlled ? Color.blue : Color.red;
+            marker.markerColor = NovgovTheme.ColorForTeam(teamID);
             marker.RefreshMarker();
         }
 
@@ -510,20 +513,11 @@ public partial class UnitAI : MonoBehaviour
         if (leftoverSmoke != null) Destroy(leftoverSmoke.gameObject);
 
         // --- SETUP TANK OU FANTASSIN (Initialiser la vie AVANT la barre de vie) ---
+        Novgov.Server.UnitTypeStats.Get(Novgov.Server.UnitTypeStats.InferType(this), out health, out porteeDetection, out _, out _, out _, out _);
+        maxHealth = health;
+
         if (isTank)
         {
-            if (isCanonVehicle)
-            {
-                health = 250;
-                maxHealth = 250f;
-            }
-            else
-            {
-                health = 500;
-                maxHealth = 500f;
-            }
-            porteeDetection = 45f; // Portée étendue pour les chars afin d'engager à longue distance
-            
             // Si la tourelle n'est pas assignée, on essaie de la trouver
             if (turretBone == null)
             {
@@ -561,10 +555,6 @@ public partial class UnitAI : MonoBehaviour
             }
             else if (isMortar)
             {
-                health = 350;
-                maxHealth = 350f;
-                porteeDetection = 120f;
-
                 Texture2D gradTex = Resources.Load<Texture2D>("gradientTexturelar");
                 if (gradTex == null)
                 {
@@ -595,9 +585,6 @@ public partial class UnitAI : MonoBehaviour
         }
         else
         {
-            health = 100;
-            maxHealth = 100f;
-            
             // L'infanterie conserve sa couleur d'origine (verte) du modèle 3D.
             // Seule la barre de vie permet de distinguer les équipes.
             
@@ -810,7 +797,11 @@ public partial class UnitAI : MonoBehaviour
         fg.transform.localPosition = new Vector3(0, 0, -0.02f);
         fg.transform.localScale = new Vector3(1f, 1f, 1f);
         
-        Color teamCol = (!isPlayerControlled) ? new Color(1f, 0.15f, 0.15f, 1f) : new Color(0.15f, 0.6f, 1f, 1f);
+        // Couleur d'ÉQUIPE ABSOLUE (équipe 1 = bleu, équipe 2 = rouge, voir NovgovTheme.ColorForTeam)
+        // — PAS isPlayerControlled ("mes unités" vs "pas les miennes", relatif au client local).
+        // Corrigé le 2026-09-19 : voir la doc de ColorForTeam pour le retour joueur complet — un
+        // joueur de l'équipe 2 (rouge) voyait jusqu'ici ses PROPRES unités en bleu.
+        Color teamCol = NovgovTheme.ColorForTeam(teamID);
         Material fgMat = SafeMaterialFactory.CreateUnlit(teamCol);
         fg.GetComponent<Renderer>().material = fgMat;
         healthBarFill = fg.transform;
@@ -842,7 +833,8 @@ public partial class UnitAI : MonoBehaviour
             Renderer r = healthBarFill.GetComponent<Renderer>();
             if (r != null && r.material != null)
             {
-                Color teamCol = (!isPlayerControlled) ? new Color(1f, 0.15f, 0.15f, 1f) : new Color(0.15f, 0.6f, 1f, 1f);
+                // Couleur d'ÉQUIPE ABSOLUE — voir le même correctif dans SetupHealthBar ci-dessus.
+                Color teamCol = NovgovTheme.ColorForTeam(teamID);
                 if (r.material.HasProperty("_BaseColor")) r.material.SetColor("_BaseColor", teamCol);
                 else r.material.color = teamCol;
             }

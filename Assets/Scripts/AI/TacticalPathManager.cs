@@ -3,7 +3,11 @@ using UnityEngine;
 /// <summary>
 /// Point d'entrée du gameplay tactique tour-par-tour : cycle de phases (Planification/Exécution)
 /// et état de sélection partagés par tous les fichiers partiels de cette classe —
-///   - TacticalPathManager_Input.cs : détection du tap/clic (sélection, cascade porte/fenêtre/bâtiment/sol)
+///   - Input/TacticalPathManager_Input.cs : orchestration du tap/clic (lecture pointeur, détection
+///       tap, sélection d'unité) — voir Assets/Scripts/AI/Input/ pour le détail des briques
+///       (PointerFrameReader, GestureScale, TapGestureDetector, UnitSelectionResolver)
+///   - Input/TacticalPathManager_TapActionRouter.cs : cascade porte/fenêtre/bâtiment/sol/barricade
+///       une fois qu'aucune unité n'est visée par le tap
 ///   - TacticalPathManager_Selection.cs : sélection d'unité (clic direct, cloche blessés, squad-bar)
 ///   - TacticalPathManager_ContextMenu.cs : ouverture/fermeture des menus d'ordre, confirmation
 ///   - TacticalPathManager_UI.cs : binding UI Toolkit (barre du bas, squad-bar, ContextMenu)
@@ -223,9 +227,17 @@ public partial class TacticalPathManager : MonoBehaviour
             DessinerTousLesChemins();
         }
 
-        // 1. Si le panneau d'action (porte/fenêtre/bâtiment) est ouvert, on attend l'interaction du joueur
-        if (menuPanel != null && menuPanel.activeSelf) return;
-
+        // NOTE (2026-09-19) : ce garde-fou vérifiait autrefois `menuPanel.activeSelf` pour attendre
+        // l'interaction du joueur tant qu'un panneau d'action (porte/fenêtre/bâtiment) était ouvert.
+        // `menuPanel` est un champ uGUI hérité d'avant la bascule vers UI Toolkit — plus aucun code
+        // ne l'active jamais (grep confirmé : aucun `menuPanel.SetActive(true)` dans tout le projet),
+        // ce test était donc TOUJOURS faux et ne gardait plus rien depuis longtemps. Supprimé pour ne
+        // plus laisser croire que c'est ICI que le jeu attend la fermeture d'un menu — le vrai garde-
+        // fou "un menu/dock UI Toolkit ouvert absorbe ce tap" vit dans HandlePointerInput
+        // (UnitSpawnerUI.IsPointerOverOnGUI, voir Input/TacticalPathManager_Input.cs), et NE bloque
+        // plus du tout un tap DIRECT sur une autre unité (voir le commentaire "UN TAP DIRECT SUR UNE
+        // AUTRE UNITÉ..." dans ce même fichier) — le champ `menuPanel` lui-même reste déclaré (des
+        // appels `.SetActive(false)` défensifs subsistent ailleurs) mais ne conditionne plus rien ici.
         HandlePointerInput();
     }
 }

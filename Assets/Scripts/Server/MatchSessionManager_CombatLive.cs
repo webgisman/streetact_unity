@@ -73,6 +73,26 @@ namespace Novgov.Server
                     if (float.IsInfinity(node.x) || float.IsInfinity(node.y) || float.IsInfinity(node.z)) continue;
                     if (!Enum.IsDefined(typeof(TacticalPathManager.NodeAction), node.action)) continue;
 
+                    // DURCISSEMENT SERVEUR (2026-09-19) — miroir de TacticalPathManager_ContextMenu.
+                    // TryFallbackAuSolPourBlinde côté client (voir sa doc pour la root cause complète) :
+                    // le NavMesh, ici comme là-bas, marche à tort sur l'intérieur de chaque bâtiment
+                    // (son sol 2D "Footprint_2D" est un vrai collider plein bake par NavMeshSurface,
+                    // voir CityGenerator.cs), donc rien n'empêche STRUCTURELLEMENT un char/canon-
+                    // véhicule/mortier de recevoir un nœud de chemin dont les coordonnées XZ tombent
+                    // dans l'empreinte d'un bâtiment. Le client corrigé n'en soumettra plus, mais ce
+                    // chemin réseau reste atteignable par un client modifié qui saute le menu — le
+                    // serveur (autorité finale du mouvement réel via NavMeshAgent, voir
+                    // RunExecutionPhaseRealEngine) ne doit pas non plus faire confiance au client sur
+                    // ce point. Un blindé ne peut, par construction, ni entrer dans un bâtiment ni
+                    // monter sur un toit (voir TacticalPathManager_TapActionRouter) — un point XZ dans
+                    // UNE empreinte de bâtiment est donc TOUJOURS invalide pour lui, quelle que soit
+                    // l'action demandée ou la hauteur Y (une position sur le toit partage la même
+                    // empreinte XZ que l'intérieur).
+                    if (unit.isTank && BuildingStructure.FindBuildingAt(new Vector3(node.x, node.y, node.z)) != null)
+                    {
+                        continue;
+                    }
+
                     unit.AddTacticalNode(new TacticalPathManager.TacticalNode
                     {
                         position = new Vector3(node.x, node.y, node.z),
@@ -89,7 +109,7 @@ namespace Novgov.Server
         /// d'événements pré-calculé — la signature n'a pas eu besoin de changer).</summary>
         private Snapshot CaptureTacticalSnapshot(int t, Dictionary<string, Vector2> pos, Dictionary<string, float> rotation,
             Dictionary<string, int> health, Dictionary<string, bool> dead, Dictionary<string, bool> shooting, Dictionary<string, string> shootTarget,
-            List<UnitAI> units, Dictionary<string, float> yByUnit, int[] destroyedBuildingIdsThisTick)
+            List<UnitAI> units, Dictionary<string, float> yByUnit, int[] destroyedBuildingIdsThisTick, string[] destroyedBarrierIdsThisTick)
         {
             var states = new UnitState[units.Count];
             for (int i = 0; i < units.Count; i++)
@@ -119,7 +139,14 @@ namespace Novgov.Server
                 zoneProgress2 = CaptureZone.Instance.ProgressTeam2;
             }
 
-            return new Snapshot { t = t, units = states, zone_progress_team1 = zoneProgress1, zone_progress_team2 = zoneProgress2, destroyed_building_ids = destroyedBuildingIdsThisTick };
+            return new Snapshot { 
+                t = t, 
+                units = states, 
+                zone_progress_team1 = zoneProgress1, 
+                zone_progress_team2 = zoneProgress2, 
+                destroyed_building_ids = destroyedBuildingIdsThisTick,
+                destroyed_barrier_ids = destroyedBarrierIdsThisTick
+            };
         }
     }
 }

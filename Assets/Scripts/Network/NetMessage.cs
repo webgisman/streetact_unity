@@ -200,6 +200,9 @@ namespace Novgov.Network
         // visuellement intact chez les deux joueurs alors que le serveur le savait détruit (voir
         // §19.9.3 de 08-known-issues-and-todo.md). Null/vide la plupart des ticks.
         public int[] destroyed_building_ids;
+        
+        // Barricades routières détruites PENDANT CE TICK précis (noms des GameObjects)
+        public string[] destroyed_barrier_ids;
     }
 
     [Serializable]

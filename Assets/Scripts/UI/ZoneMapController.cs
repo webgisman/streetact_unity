@@ -167,7 +167,15 @@ namespace Novgov.UI
 
             if (owner == myUserId)
             {
-                if (statusLabel != null) statusLabel.text = "Cette Zone vous appartient déjà.";
+                if (statusLabel != null) statusLabel.text = "Déplacement vers cette Zone...";
+                
+                if (dx == 0 && dy == -1) zm.ExpandNorth();
+                else if (dx == 0 && dy == 1) zm.ExpandSouth();
+                else if (dx == 1 && dy == 0) zm.ExpandEast();
+                else if (dx == -1 && dy == 0) zm.ExpandWest();
+                
+                RefreshCurrentZoneLabel();
+                StartCoroutine(RefreshNeighborOwnership());
                 return;
             }
 

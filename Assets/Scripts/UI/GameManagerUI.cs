@@ -90,7 +90,7 @@ public class GameManagerUI : MonoBehaviour
         // en cours de session.
         if (zoneMapButton != null)
         {
-            bool hasHomeZone = Novgov.Generation.ZoneManager.EnsureInstance().HasHomeZone;
+            bool hasHomeZone = Novgov.Generation.ZoneManager.Instance != null && Novgov.Generation.ZoneManager.Instance.HasHomeZone;
             zoneMapButton.style.display = hasHomeZone ? UnityEngine.UIElements.DisplayStyle.Flex : UnityEngine.UIElements.DisplayStyle.None;
         }
     }

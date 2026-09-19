@@ -99,6 +99,15 @@ namespace Novgov.Server
                 wasDestroyed[i] = env != null && env.isDestroyed;
             }
 
+            // Photo de l'état des barricades routières
+            var barriersSnapshot = new List<RoadBarrier>(RoadBarrier.AllBarriers);
+            var barrierNames = barriersSnapshot.Select(b => b.gameObject.name).ToList();
+            var barrierWasDestroyed = new bool[barriersSnapshot.Count];
+            for (int i = 0; i < barriersSnapshot.Count; i++)
+            {
+                barrierWasDestroyed[i] = barriersSnapshot[i] == null || barriersSnapshot[i].health <= 0;
+            }
+
             // Lance RÉELLEMENT l'exécution (NavMeshAgent.SetDestination, coroutines de checkpoint,
             // UnitAI_Combat.Update() qui scanne/tire en temps réel) — identique à ce que fait
             // TacticalPathManager.LancerExecutionTour ligne 131 pour le Solo.
@@ -115,7 +124,7 @@ namespace Novgov.Server
                 yield return new WaitForSeconds(tickIntervalSec);
                 elapsed += tickIntervalSec;
                 if (currentMatchMode == "zone_control" && CaptureZone.Instance != null) CaptureZone.Instance.Tick();
-                snapshots.Add(CaptureRealEngineSnapshot(tickIndex++, allUnits, buildingsSnapshot, wasDestroyed));
+                snapshots.Add(CaptureRealEngineSnapshot(tickIndex++, allUnits, buildingsSnapshot, wasDestroyed, barriersSnapshot, barrierNames, barrierWasDestroyed));
             }
 
             float combatGrace = 0f;
@@ -124,7 +133,7 @@ namespace Novgov.Server
                 yield return new WaitForSeconds(tickIntervalSec);
                 combatGrace += tickIntervalSec;
                 if (currentMatchMode == "zone_control" && CaptureZone.Instance != null) CaptureZone.Instance.Tick();
-                snapshots.Add(CaptureRealEngineSnapshot(tickIndex++, allUnits, buildingsSnapshot, wasDestroyed));
+                snapshots.Add(CaptureRealEngineSnapshot(tickIndex++, allUnits, buildingsSnapshot, wasDestroyed, barriersSnapshot, barrierNames, barrierWasDestroyed));
             }
 
             // Toujours au moins UN tick — sinon un tour où rien ne bouge/ne tire (ex : les deux camps
@@ -133,7 +142,7 @@ namespace Novgov.Server
             if (snapshots.Count == 0)
             {
                 if (currentMatchMode == "zone_control" && CaptureZone.Instance != null) CaptureZone.Instance.Tick();
-                snapshots.Add(CaptureRealEngineSnapshot(0, allUnits, buildingsSnapshot, wasDestroyed));
+                snapshots.Add(CaptureRealEngineSnapshot(0, allUnits, buildingsSnapshot, wasDestroyed, barriersSnapshot, barrierNames, barrierWasDestroyed));
             }
 
             foreach (var unit in allUnits)
@@ -206,7 +215,7 @@ namespace Novgov.Server
         /// visible en portée à cet instant, jamais un état d'animation garanti frame-exact. Purement
         /// cosmétique côté client (tracé de tir), sans effet sur les PV/positions/morts, qui restent
         /// la vérité intégrale du vrai moteur.</summary>
-        private Snapshot CaptureRealEngineSnapshot(int t, List<UnitAI> units, List<BuildingStructure> buildingsSnapshot, bool[] wasDestroyed)
+        private Snapshot CaptureRealEngineSnapshot(int t, List<UnitAI> units, List<BuildingStructure> buildingsSnapshot, bool[] wasDestroyed, List<RoadBarrier> barriersSnapshot, List<string> barrierNames, bool[] barrierWasDestroyed)
         {
             var pos = new Dictionary<string, Vector2>();
             var rotation = new Dictionary<string, float>();
@@ -245,8 +254,21 @@ namespace Novgov.Server
             }
             if (destroyedList.Count > 0) destroyedThisTick = destroyedList.ToArray();
 
+            var destroyedBarriersList = new List<string>();
+            for (int i = 0; i < barriersSnapshot.Count; i++)
+            {
+                if (barrierWasDestroyed[i]) continue;
+                bool isNowDestroyed = barriersSnapshot[i] == null || barriersSnapshot[i].health <= 0;
+                if (isNowDestroyed)
+                {
+                    barrierWasDestroyed[i] = true;
+                    destroyedBarriersList.Add(barrierNames[i]);
+                }
+            }
+            string[] destroyedBarriersThisTick = destroyedBarriersList.Count > 0 ? destroyedBarriersList.ToArray() : null;
+
             var livingUnitsOnly = units.Where(u => u != null).ToList();
-            Snapshot snap = CaptureTacticalSnapshot(t, pos, rotation, health, dead, shooting, shootTarget, livingUnitsOnly, yByUnit, destroyedThisTick);
+            Snapshot snap = CaptureTacticalSnapshot(t, pos, rotation, health, dead, shooting, shootTarget, livingUnitsOnly, yByUnit, destroyedThisTick, destroyedBarriersThisTick);
             return snap;
         }
 
@@ -282,7 +304,8 @@ namespace Novgov.Server
                     units = visibleUnits.ToArray(),
                     zone_progress_team1 = src.zone_progress_team1,
                     zone_progress_team2 = src.zone_progress_team2,
-                    destroyed_building_ids = src.destroyed_building_ids
+                    destroyed_building_ids = src.destroyed_building_ids,
+                    destroyed_barrier_ids = src.destroyed_barrier_ids
                 };
             }
             return result;

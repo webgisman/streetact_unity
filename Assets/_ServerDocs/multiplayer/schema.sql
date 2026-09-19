@@ -439,6 +439,38 @@ $$;
 
 grant execute on function public.claim_daily_bonus() to authenticated;
 
+-- Transfert transactionnel des AP (Conquête/Siège) pour éviter une condition de course
+-- (un joueur dépense des AP pendant que le serveur les lit/modifie asynchronement).
+create or replace function public.pillage_action_points(attacker_id uuid, defender_id uuid)
+returns table(stolen_ap integer, attacker_new_ap integer)
+language plpgsql
+as $$
+declare
+    v_def_ap integer;
+    v_att_ap integer;
+begin
+    -- Verrouiller les deux profils dans un ordre déterministe pour éviter les deadlocks
+    if attacker_id < defender_id then
+        select action_points into v_att_ap from public.profiles where id = attacker_id for update;
+        select action_points into v_def_ap from public.profiles where id = defender_id for update;
+    else
+        select action_points into v_def_ap from public.profiles where id = defender_id for update;
+        select action_points into v_att_ap from public.profiles where id = attacker_id for update;
+    end if;
+
+    if v_def_ap is null then v_def_ap := 0; end if;
+    if v_att_ap is null then v_att_ap := 0; end if;
+
+    if v_def_ap > 0 then
+        update public.profiles set action_points = 0 where id = defender_id;
+        update public.profiles set action_points = action_points + v_def_ap where id = attacker_id;
+    end if;
+
+    return query select v_def_ap, v_att_ap + v_def_ap;
+end;
+$$;
+-- Non exposé à authenticated car uniquement appelé par le serveur de jeu (service_role)
+
 -- =========================================================================
 -- 11. Sièges de Zone — PvP asynchrone (2026-09-13, demande explicite : "les joueurs vont vouloir
 -- attaquer une map déjà conquise... le joueur doit être notifié et organiser tout cela").

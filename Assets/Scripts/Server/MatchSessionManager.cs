@@ -144,6 +144,38 @@ namespace Novgov.Server
         [Serializable] private class ZoneOwnerEntry { public string owner_user_id; public int building_level; }
         [Serializable] private class ZoneOwnerQueryResult { public ZoneOwnerEntry[] items; }
 
+        [Serializable] private class ActionPointsEntry { public int action_points; }
+        [Serializable] private class ActionPointsQueryResult { public ActionPointsEntry[] items; }
+
+        /// <summary>Solde d'Action Points ACTUEL d'un joueur — lu juste avant GrantZoneIncome pour
+        /// lui ajouter le revenu de Zone au lieu de l'écraser (PostgrestPatch ne fait pas
+        /// d'incrémentation atomique côté base, contrairement à pillage_action_points/RPC).</summary>
+        private IEnumerator FetchActionPoints(string userId, Action<int> onResult)
+        {
+            string url = $"{GameServerBootstrap.RestUrl}/profiles?id=eq.{userId}&select=action_points";
+            using var req = UnityEngine.Networking.UnityWebRequest.Get(url);
+            req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
+            req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+            yield return req.SendWebRequest();
+
+            int ap = 0;
+            if (req.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
+            {
+                try
+                {
+                    string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                    var parsed = JsonUtility.FromJson<ActionPointsQueryResult>(wrapped);
+                    if (parsed?.items != null && parsed.items.Length > 0) ap = parsed.items[0].action_points;
+                }
+                catch (Exception ex) { Debug.LogWarning($"[ZoneIncome] Parsing action_points ({userId}) échoué : {ex.Message}"); }
+            }
+            else
+            {
+                Debug.LogWarning($"[ZoneIncome] Lecture action_points ({userId}) échouée : {req.error}");
+            }
+            onResult(ap);
+        }
+
         /// <summary>2026-09-13 : le revenu par Zone était fixe (10 AP), quel que soit l'investissement
         /// du propriétaire — pondéré maintenant par building_level (schema.sql §11, upgrade_building())
         /// pour que "renforcer son économie" (demande explicite) ait un effet réel et mesurable, pas

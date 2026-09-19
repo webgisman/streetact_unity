@@ -32,7 +32,7 @@ namespace Novgov.Network
     /// HandleSignIn/etc. appelaient SetUiState/RefreshHudDynamicFields (déclarées plus bas, dans un
     /// bloc #if !UNITY_SERVER déjà existant) sans être elles-mêmes gardées.
     /// </summary>
-    public class MultiplayerMatchController : MonoBehaviour
+    public partial class MultiplayerMatchController : MonoBehaviour
     {
         public static MultiplayerMatchController Instance { get; private set; }
         public static bool IsActive { get; private set; }
@@ -86,9 +86,6 @@ namespace Novgov.Network
         private int attackTileX;
         private int attackTileY;
 
-        // Siège ciblé par SiegeZone()/DefendSiege() (2026-09-13) — id de la ligne public.zone_sieges
-        // déjà créée côté client (SupabaseDatabaseClient.StartSiege, appelé AVANT cette connexion) ou
-        // déjà existante (défense). Voir NetMessage.siege_id.
         private long pendingSiegeId;
 
         /// <summary>Résultat d'une demande de conquête INSTANTANÉE (zone_captured/zone_attack_result,
@@ -106,11 +103,6 @@ namespace Novgov.Network
         public static Dictionary<string, int> LostUnits = new Dictionary<string, int>();
 
         // Composition RÉELLE déployée pour mon camp (unit_type -> quantité), capturée à
-        // OnDeploymentResult (correctif 2026-09-06 — voir OnMatchOver) : ProcessLostUnitsAsync lit
-        // LostUnits pour décrémenter la caserne, mais rien n'écrivait jamais dedans — aucune perte
-        // au combat n'était donc jamais déduite, un joueur pouvait redéployer indéfiniment des
-        // unités pourtant mortes. Comparé à l'effectif encore vivant à OnMatchOver pour en déduire
-        // les pertes, sans dépendre d'un nouveau message serveur.
         private Dictionary<string, int> deployedRosterCountByType = new Dictionary<string, int>();
 
         private string currentMode = "deathmatch";
@@ -119,10 +111,6 @@ namespace Novgov.Network
         private int currentTurnNumber = 1;
         private int lastServerSecondsRemaining = -1;
         public static int PhaseSecondsRemaining => Instance != null ? Instance.lastServerSecondsRemaining : 0;
-        // 2026-09-06 : garde contre un second "turn_result" qui démarrerait une deuxième
-        // PlaySnapshotsCoroutine en parallèle de la première (jamais vu en pratique, mais rien ne
-        // l'empêchait) — la coroutine en cours resterait alors valide, une deuxième relirait par
-        // dessus les MÊMES unités en même temps, une source de bugs visuels difficile à reproduire.
         private bool isPlayingSnapshots = false;
         // "turn_result" reçu mais pas encore rejoué — mis en cache le temps d'accuser réception au
         // serveur et d'attendre son signal "turn_playback_start" (voir OnTurnResultReceived/
@@ -137,6 +125,9 @@ namespace Novgov.Network
         // Références UI Toolkit mises en cache une fois dans BindUI().
         private VisualElement authRoot, waitingRoot, hudRoot, matchOverRoot;
         private Label authTitleLabel, authStatusLabel, waitingStatusLabel;
+
+        // Écran "Waiting" (matchmaking initial ET attente de déploiement adverse, voir SetUiState) —
+        private float waitingScreenEnteredRealtime = 0f;
         private TextField emailFieldEl, passwordFieldEl, usernameFieldEl;
         private VisualElement usernameContainer;
         private Button submitButton, toggleModeButton;
@@ -144,10 +135,6 @@ namespace Novgov.Network
         private VisualElement zoneBarContainer, zoneFillTeam1, zoneFillTeam2;
         private bool uiBound = false;
 
-        // 2026-09-06 : offre "jouer contre l'IA en attendant" (bouton + minuteur + StartPracticeVsAI)
-        // retirée sur demande explicite — aucune mention d'IA ne doit apparaître dans les files
-        // d'attente Deathmatch/Zone de Contrôle. Elle n'était de toute façon jamais éligible pour
-        // Conquête/Entraînement (déjà exclus), donc plus aucun mode ne peut plus l'atteindre.
 
         private void Awake()
         {
@@ -166,7 +153,7 @@ namespace Novgov.Network
 
             if (uiState == UiState.Connecting || uiState == UiState.Matchmaking)
             {
-                if (waitingStatusLabel != null) waitingStatusLabel.text = statusMessage;
+                if (waitingStatusLabel != null) waitingStatusLabel.text = RenderWaitingScreenText();
             }
             else if (uiState == UiState.InMatch)
             {
@@ -174,16 +161,38 @@ namespace Novgov.Network
             }
         }
 
+                /// voir waitingScreenEnteredRealtime pour le contexte complet). <see cref="statusMessage"/>
+        /// seul ne changeait jamais tant que le message attendu (match_found/deployment_result)
+        /// n'arrivait pas — potentiellement plusieurs MINUTES de silence total à l'écran, ce qui se
+        /// lit exactement comme un gel du jeu même quand tout fonctionne normalement.</summary>
+        private string RenderWaitingScreenText()
+        {
+            float elapsed = Time.realtimeSinceStartup - waitingScreenEnteredRealtime;
+
+            // Points de suspension animés (0 à 3, un cran toutes les ~0,5s) : la plus petite preuve
+            // possible que l'application tourne toujours et n'a pas gelé — un texte parfaitement
+            // statique pendant plusieurs minutes est indiscernable d'un plantage pour le joueur.
+            int dotCount = ((int)(elapsed * 2f)) % 4;
+            string dots = new string('.', dotCount);
+
+            string text = statusMessage + dots;
+
+            // Au-delà de 15s, cette attente n'est plus le cas courant (l'appariement/déploiement
+            // normal est quasi instantané entre deux joueurs déjà prêts) — le joueur mérite de savoir
+            // explicitement que c'est ATTENDU et BORNÉ dans le temps, pas planté. Les bornes réelles
+            // sont MatchSessionManager.MapReadyMaxWaitSeconds/DeploymentSeconds (300s chacune,
+            // volontairement généreuses, voir leur commentaire) — jusqu'à 10 minutes dans le pire cas
+            // si l'adversaire charge encore sa carte ou n'a pas fini de se déployer.
+            if (elapsed > 15f)
+            {
+                text += "\n\nCela peut prendre plusieurs minutes si l'adversaire charge encore sa carte — la partie n'est pas bloquée.";
+            }
+
+            return text;
+        }
+
         public async void BeginLoginFlow()
         {
-            // 2026-09-06 : deux tentatives précédentes ici (déconnexion forcée du Joueur Virtuel,
-            // puis un simple "ignorer la session enregistrée") réglaient la lecture mais pas le fond
-            // du problème — PlayerPrefs vivait dans une case du Registre Windows PARTAGÉE entre
-            // l'Éditeur principal et ses clones Multiplayer Play Mode, donc SE CONNECTER depuis un
-            // Joueur Virtuel écrasait quand même cette case, et l'Éditeur principal en héritait au
-            // lancement suivant. Corrigé à la racine dans SupabaseAuthClient (voir
-            // Novgov.Core.EditorPlayerPrefsScope) : chaque identité a maintenant sa propre case, donc
-            // ce code redevient l'implémentation normale, sans cas particulier Éditeur ici.
             if (SupabaseAuthClient.HasSavedSession())
             {
                 statusMessage = "Reconnexion...";
@@ -403,8 +412,7 @@ namespace Novgov.Network
             StartCoroutine(ConnectToGameServerCoroutine());
         }
 
-        /// <summary>2026-09-06 : jusqu'ici "deathmatch"/"zone_control" n'étaient JAMAIS déclenchés
-        /// depuis l'UI — seuls AttackZone (Conquête, un joueur contre une garnison IA, jamais un
+                /// depuis l'UI — seuls AttackZone (Conquête, un joueur contre une garnison IA, jamais un
         /// adversaire vivant) et StartPracticeVsAI (accessible uniquement DEPUIS une file d'attente
         /// déjà ouverte) appelaient ConnectToGameServerCoroutine. Le vrai appariement à deux joueurs
         /// vivants (DetermineMatchCacheKey côté serveur) existait donc dans le protocole sans aucun
@@ -419,6 +427,12 @@ namespace Novgov.Network
         public void StartZoneControl()
         {
             selectedMode = "zone_control";
+            StartCoroutine(ConnectToGameServerCoroutine());
+        }
+
+        public void StartPracticeVsAI()
+        {
+            selectedMode = "practice_ai";
             StartCoroutine(ConnectToGameServerCoroutine());
         }
 
@@ -494,8 +508,7 @@ namespace Novgov.Network
         /// fermeture est donc NORMALE et attendue — sans ce drapeau, HandleServerDisconnected la
         /// traitait comme une panne réseau, affichait "Connexion au serveur perdue" et renvoyait au
         /// menu une frame après l'ouverture du panneau de résultat, que le joueur n'avait donc jamais
-        /// le temps de lire (2026-09-07).</summary>
-        private bool expectingCloseAfterZoneResult = false;
+                private bool expectingCloseAfterZoneResult = false;
 
         private void OnZoneCaptured(NetMessage msg)
         {
@@ -527,8 +540,7 @@ namespace Novgov.Network
             OnZoneResult?.Invoke(message);
         }
 
-        /// <summary>Réponse à la soumission d'un déploiement de SIÈGE (2026-09-13) — attaquant
-        /// (mode="siege_attack_deploy") ou défenseur (mode="siege_defend_deploy") vient de valider
+                /// (mode="siege_attack_deploy") ou défenseur (mode="siege_defend_deploy") vient de valider
         /// son placement, voir MatchSessionManager_Siege.cs. Jamais de match live derrière : le
         /// serveur ferme la connexion juste après (comme zone_captured/zone_attack_result), d'où la
         /// réutilisation du même drapeau/événement OnZoneResult (déjà écouté par ZoneMapController
@@ -595,12 +607,6 @@ namespace Novgov.Network
             // Deathmatch/Zone de Contrôle (2026-08-30, "des milliers de cartes") : le serveur peut
             // désormais assigner la vraie tuile GPS d'un des deux joueurs (msg.has_home_tile) au lieu
             // de toujours la carte par défaut fixe — voir MatchSessionManager.TryStartMatch/
-            // DetermineMatchCacheKey. AVANT ce correctif, le client gardait affichée sa propre ville
-            // réelle (chargée avant même la connexion, voir GameManagerUI.StartDeviceGPS) pendant que
-            // le serveur simulait sur la carte par défaut, ce qui produisait exactement les bugs
-            // remontés en test (déploiement sur des polygones qui n'existent pas sur la carte du
-            // serveur, positions "décalées") — il faut donc TOUJOURS charger explicitement la carte
-            // que le serveur a réellement choisie, jamais faire confiance à ce qui est déjà affiché.
             statusMessage = "Chargement du champ de bataille...";
             StartCoroutine(LoadMatchMapThenOpenDeployment(msg.has_home_tile, msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
         }
@@ -618,8 +624,7 @@ namespace Novgov.Network
         /// <summary>Lit le bâtiment HQ RÉEL de cette Zone depuis public.zones.hq_building_index
         /// (désigné une fois par le serveur, voir MatchSessionManager_Conquest.EnsureHqBuildingIndex)
         /// — remplace l'ancien SupabaseDatabaseClient.GetBuilding (PlayerPrefs LOCAL à cet appareil,
-        /// jamais partagé, 2026-09-13) qui causait le bug "bâtiment jaune chez un joueur, pas chez
-        /// l'autre" : les deux clients d'un même match lisent maintenant la MÊME ligne en base.</summary>
+                /// l'autre" : les deux clients d'un même match lisent maintenant la MÊME ligne en base.</summary>
         private async System.Threading.Tasks.Task LoadZoneWithHqAsync(int tileX, int tileY, string json)
         {
             var (ok, zone) = await Novgov.Auth.SupabaseDatabaseClient.GetZoneInfo(tileX, tileY, CityGenerator.ZONE_ZOOM);
@@ -643,10 +648,6 @@ namespace Novgov.Network
                 if (cityGen != null) cityGen.LoadDefaultOfflineCity();
             }
 
-            // 2026-09-06 : 60s/30s -> 300s (5 min), même demande/même raison que
-            // MatchSessionManager.DeploymentSeconds/MapReadyMaxWaitSeconds côté serveur — sans ce
-            // relèvement en parallèle, ce plafond CLIENT abandonnait bien avant que le délai généreux
-            // du serveur n'ait la moindre chance de servir.
             const float MapLoadMaxWaitSeconds = 300f;
             float maxWait = MapLoadMaxWaitSeconds;
             while (cityGen != null && !cityGen.IsCityReady && maxWait > 0f)
@@ -668,12 +669,6 @@ namespace Novgov.Network
             OpenDeploymentDock();
         }
 
-        // ÉQUITÉ GÉOMÉTRIQUE, 2ème étage (2026-09-12) — voir NetMessage.city_verify/
-        // city_verify_result et MatchState.AuthoritativeCityHash (serveur) pour le contexte complet.
-        // Vrai UNIQUEMENT entre l'envoi de "city_verify" et la réception de "city_verify_result" (ou
-        // l'expiration du filet de sécurité ci-dessous) — jamais laissé à true plus longtemps, sinon
-        // une résolution tardive/inattendue d'un ancien city_verify_result déclencherait une
-        // resynchronisation hors de propos.
         private bool awaitingCityVerifyResult = false;
 
         /// <summary>Calcule le hash de la ville que CE client vient de générer localement et le
@@ -790,41 +785,20 @@ namespace Novgov.Network
         /// où le serveur ait dû recadrer une position hors de la zone légale.</summary>
         private void OpenDeploymentDock()
         {
-            // Récupération PROACTIVE de la caserne dès l'ouverture du déploiement (correctif
-            // 2026-09-06) — sans ça, UnitSpawnerUI.CurrentRoster restait null jusqu'au tout premier
-            // appel de GetRoster() (jamais garanti d'avoir eu lieu avant que le joueur ne tape sur un
-            // bouton de déploiement), et le contrôle de caserne y traitait un roster absent comme
-            // "0 unité possédée" pour tout : voir le commentaire dans UnitSpawnerUI.StartPlacingUnit.
-            // Lancée ici en tâche de fond, largement avant que le joueur n'ait fini de charger sa
-            // carte et ne puisse taper sur un bouton d'unité.
             _ = Novgov.Auth.SupabaseDatabaseClient.GetRoster();
 
             UnitSpawnerUI.Instance.ClearAllUnits();
-            // 2026-09-13 (demande explicite, "laisse-moi choisir tous les types d'unité au
-            // déploiement") : ce plafond était codé en dur à 4, sous le vrai budget serveur
-            // (MaxDeployedCombatUnits = 6, voir MatchSessionManager_Deployment.cs) — un joueur qui
-            // plaçait déjà 4 Fantassin (4/8 points, budget encore largement disponible) se retrouvait
-            // bloqué par ce plafond CLIENT et ne pouvait alors plus jamais poser un Char/Canon/Mortier,
-            // même avec des points restants. Référence directe à la constante serveur (déjà publique
-            // pour l'affichage du budget, voir plus bas "Points : {points} / CombatPointBudget") au
-            // lieu d'un second nombre en dur qui pouvait diverger.
             UnitSpawnerUI.Instance.maxUnitsPerTeam = Novgov.Server.MatchSessionManager.MaxDeployedCombatUnits;
             UnitSpawnerUI.Instance.OpenDockForMultiplayerDeployment(localTeamId);
 
-            // Centrage de la caméra sur la zone de déploiement du joueur local
+            // Centrage de la caméra sur la zone de déploiement du joueur local — chaque camp regarde
+            // son propre coin, et l'orientation doit pointer vers le centre de la carte pour ce coin.
             if (TacticalCamera.Instance != null)
             {
                 Vector3 center = localTeamId == 1 ? new Vector3(-25f, 0f, -25f) : new Vector3(25f, 0f, 25f);
                 TacticalCamera.Instance.focusPosition = center;
-                if (localTeamId == 2)
-                {
-                    // L'équipe 2 déploie depuis le coin Nord-Est, on tourne la caméra à 180° pour faire face au champ de bataille
-                    TacticalCamera.Instance.currentYaw = 225f;
-                }
-                else
-                {
-                    TacticalCamera.Instance.currentYaw = 45f;
-                }
+                // L'équipe 2 déploie depuis le coin Nord-Est, on tourne la caméra à 180° pour faire face au champ de bataille.
+                TacticalCamera.Instance.currentYaw = localTeamId == 2 ? 225f : 45f;
             }
             IsDeploymentPhaseActive = true;
 
@@ -835,8 +809,6 @@ namespace Novgov.Network
             // réellement son dock de déploiement — voir MatchSessionManager.RunDeploymentPhase, qui
             // attend ce signal des DEUX joueurs avant de démarrer le vrai compte à rebours de 45s
             // (sinon le chargement de ville pouvait à lui seul consommer tout le timer, voir rapport
-            // de bug "des unités bleues et rouges apparaissent d'un coup sans jamais avoir pu placer
-            // les miennes").
             GameServerClient.Instance.Send(new NetMessage { type = "deployment_ready" });
         }
 
@@ -895,7 +867,6 @@ namespace Novgov.Network
             // timer (le joueur n'a alors JAMAIS cliqué "CONFIRMER", donc ce flag restait bloqué à true) —
             // sans cette ligne, le dock de déploiement (UnitSpawnerUI) restait affiché EN PERMANENCE
             // par-dessus le HUD de combat pour le reste du match (superposition de boutons/texte
-            // "DÉPLOIEMENT (...)" collé sur "PLANIFICATION", bug remonté en jeu).
             IsDeploymentPhaseActive = false;
 
             UnitSpawnerUI.Instance.ClearAllUnits();
@@ -954,14 +925,6 @@ namespace Novgov.Network
             // joueur aurait figé l'interface pendant ce laps de temps.
             Novgov.TacticalCore.TacticalGridBuilder.BuildFromScene();
 
-            // "roster_trimmed" (2026-09-08) : au moins UN des placements que J'AI moi-même soumis
-            // dépassait le budget serveur (nombre d'unités ou points, voir MatchSessionManager.
-            // FilterRosterToBudget) et a été écarté INDIVIDUELLEMENT — le reste de mon déploiement
-            // est bien celui que j'ai choisi, aux positions que j'ai choisies (plus de remplacement
-            // en bloc par une escouade fixe sans rapport, voir §19 de 08-known-issues-and-todo.md).
-            // Le dock ne connaît pas encore ce budget en points (seulement un nombre d'unités, voir
-            // OpenDeploymentDock) : ce message est le seul moyen pour l'instant de savoir qu'une
-            // partie du déploiement demandé n'a pas pu tenir.
             if (msg.reason == "roster_trimmed")
             {
                 statusMessage = "Une partie de votre déploiement dépassait le budget autorisé (unités trop lourdes) — le reste a été posé tel quel.";
@@ -972,19 +935,6 @@ namespace Novgov.Network
 
         private void OnOpponentGhosted(NetMessage msg)
         {
-            // CORRIGÉ 2026-09-08 — ce texte affirmait "une IA de secours a joué vos/ses unités" dans
-            // TOUS les cas, alors que c'est FAUX pour Deathmatch/Zone de Contrôle. Il ne reflétait
-            // que le chemin "vivant" (`ApplyForPlayer`, Conquête/Entraînement), qui appelle
-            // réellement `TacticalAIPlanner.PlanifierTourIA()` pour un joueur ghosté. Le chemin PUR
-            // (`ApplyForPlayerPure`, Deathmatch/Zone de Contrôle — voir son propre commentaire :
-            // "plutôt que TacticalAIPlanner... ses unités TIENNENT LA POSITION") ne lance JAMAIS
-            // aucune IA — un camp ghosté y reste simplement immobile (mais riposte s'il est attaqué,
-            // comme toute unité). Un vrai joueur PvP voyait donc, à chaque tour manqué (le sien ou
-            // celui de l'adversaire), une bannière lui affirmant noir sur blanc qu'une IA venait de
-            // jouer à sa place — signalé par un joueur (2026-09-08) : "il y a toujours de l'IA dans
-            // le multijoueur alors qu'on a dit pas d'IA". `currentMode` distingue les deux moteurs
-            // sans nouveau champ réseau : "deathmatch"/"zone_control" -> chemin pur, jamais d'IA ;
-            // "conquest"/"practice_ai" -> chemin vivant, IA réelle.
             bool realAiRan = currentMode == "conquest" || currentMode == "practice_ai";
             string who = msg.team_id == localTeamId ? "Vous étiez" : "Adversaire";
             string pronoun = msg.team_id == localTeamId ? "vos" : "ses";
@@ -999,8 +949,7 @@ namespace Novgov.Network
             }
         }
 
-        /// <summary>Alimente LostUnits (correctif 2026-09-06) en comparant, PAR TYPE, la composition
-        /// réellement déployée pour mon camp (deployedRosterCountByType, capturée à
+                /// réellement déployée pour mon camp (deployedRosterCountByType, capturée à
         /// OnDeploymentResult depuis la liste AUTORITAIRE du serveur) à l'effectif ENCORE VIVANT de
         /// ce même camp à l'instant précis de la fin de partie. Avant ce correctif, LostUnits n'était
         /// JAMAIS écrit nulle part dans tout le projet : ProcessLostUnitsAsync ne faisait donc
@@ -1030,8 +979,7 @@ namespace Novgov.Network
             }
         }
 
-        /// <summary>2026-09-13 : décrémentait auparavant la caserne locale via UpsertRosterItem
-        /// (PlayerPrefs, supprimé — voir SupabaseDatabaseClient.cs, la caserne est maintenant une
+                /// (PlayerPrefs, supprimé — voir SupabaseDatabaseClient.cs, la caserne est maintenant une
         /// vraie table serveur, public.player_roster, verrouillée en écriture directe). Ne fait plus
         /// rien : le déploiement ne dépend plus d'un stock d'unités possédées (voir
         /// UnitSpawnerUI.StartPlacingUnit, demande explicite "laisse-moi déployer tout"), donc la
@@ -1050,14 +998,6 @@ namespace Novgov.Network
                 yield return null;
             }
 
-            // 2026-09-12 (retour joueur : "un menu sort alors qu'il ne devrait pas y être" à la fin
-            // d'une partie) : la toute fin de PlaySnapshotsBody remet phaseActuelle à Planification
-            // (ré-active la sélection/le menu contextuel) AVANT que cette coroutine ne reprenne la
-            // main ici — au moins une frame durant laquelle le joueur peut encore sélectionner une
-            // unité ou ouvrir un menu d'ordre sur une partie déjà terminée côté serveur, laissant un
-            // menu contextuel ouvert par-dessus/derrière l'écran de fin qui s'affiche juste après.
-            // Fermé explicitement avant d'afficher cet écran, quoi qu'il ait pu se passer pendant
-            // cette fenêtre.
             if (TacticalPathManager.Instance != null)
                 TacticalPathManager.Instance.ForceCloseTacticalUIForMatchEnd();
 
@@ -1079,12 +1019,6 @@ namespace Novgov.Network
 
             bool isVictory = msg.winner_team == localTeamId;
 
-            // 2026-09-13 : plus de ClaimBuildingAsync ici — la propriété de la Zone (donc de son
-            // bâtiment HQ) est déjà écrite en base côté serveur (MatchSessionManager_Conquest.
-            // CaptureZoneInDb, appelée pour un vrai combat/une capture neutre), et l'index du
-            // bâtiment HQ est désigné une seule fois par EnsureHqBuildingIndex — ce client n'a plus
-            // rien à "réclamer" séparément (l'ancien mécanisme n'écrivait de toute façon que dans son
-            // propre PlayerPrefs local, jamais partagé).
 
             IsActive = false;
             string resultText;
@@ -1137,16 +1071,14 @@ namespace Novgov.Network
         /// OnTurnPlaybackStart ci-dessous), une fois que les DEUX joueurs ont accusé réception. Sans
         /// cette étape, chaque client démarrait sa lecture dès que SON PROPRE payload (taille
         /// variable selon le brouillard de guerre) lui arrivait, désynchronisant les deux écrans d'un
-        /// même tour (rapport utilisateur 2026-09-16, "pas de mouvement simultané et synchro").</summary>
-        private void OnTurnResultReceived(NetMessage msg)
+                private void OnTurnResultReceived(NetMessage msg)
         {
             pendingTurnResult = msg;
             GameServerClient.Instance?.Send(new NetMessage { type = "turn_result_ack", turn_number = msg.turn_number });
             StartCoroutine(FallbackStartPlaybackIfServerNeverSignals(msg.turn_number));
         }
 
-        /// <summary>Filet de sécurité (2026-09-16) : "turn_playback_start" est un message NOUVEAU —
-        /// un serveur pas encore reconstruit/redéployé avec ce correctif ne l'enverra JAMAIS, ce qui
+                /// un serveur pas encore reconstruit/redéployé avec ce correctif ne l'enverra JAMAIS, ce qui
         /// laissait le client bloqué sur "ACTION EN COURS..." pour toujours (rapport utilisateur :
         /// "j'ai action en cours mais rien ne se passe", juste après le déploiement de ce correctif
         /// alors que le serveur du VPS n'avait pas encore été reconstruit). Volontairement plus long
@@ -1185,49 +1117,18 @@ namespace Novgov.Network
             isPlayingSnapshots = true;
             currentTurnNumber = msg.turn_number + 1;
 
-            // REJEU SOUS GARDE (2026-09-07). Deux états doivent être rétablis quoi qu'il arrive,
-            // sinon le client est définitivement bloqué :
-            //   - isPlayingSnapshots : le verrou qui fait ignorer tout turn_result reçu pendant un
-            //     rejeu (voir HandleServerMessage). Bloqué à true, le client ignore DÉFINITIVEMENT
-            //     tous les tours suivants pendant que le serveur le fantômise à chaque tour ;
-            //   - phaseActuelle : TacticalPathManager.Update sort immédiatement tant qu'elle vaut
-            //     Execution, donc le joueur ne peut plus ni sélectionner une unité, ni poser un
-            //     point, ni atteindre FIN DE TOUR.
-            // Les deux sont rétablis en fin de PlaySnapshotsBody, donc sautés dès que celui-ci lève
-            // (un SpawnUnitAt qui renvoie null, une unité détruite en cours de rejeu, ou deux unités
-            // de même nom faisant lever ToDictionary).
-            //
-            // Un simple `try { yield return PlaySnapshotsBody(msg); } finally { ... }` NE SUFFIT PAS :
-            // Unity déroule lui-même l'itérateur imbriqué, donc une exception levée dans MoveNext()
-            // du corps ne repasse jamais par la machine à états de CETTE méthode — le finally n'est
-            // émis que dans son Dispose(), que Unity n'appelle pas sur une coroutine avortée. On
-            // pompe donc l'itérateur à la main, exactement comme MatchSessionManager.RunMatchGuarded
-            // le fait côté serveur et pour la même raison (yield interdit dans un try/catch).
-            IEnumerator inner = PlaySnapshotsBody(msg);
-            while (true)
-            {
-                bool moved = false;
-                bool crashed = false;
-                try
+            return SafeCoroutineRunner.Run(
+                PlaySnapshotsBody(msg),
+                onComplete: () =>
                 {
-                    moved = inner.MoveNext();
-                }
-                catch (System.Exception e)
+                    isPlayingSnapshots = false;
+                },
+                onException: (Exception e) =>
                 {
                     Debug.LogError($"[MultiplayerMatchController] Exception pendant le rejeu du tour — récupération pour ne pas figer la partie : {e}");
-                    crashed = true;
-                }
-
-                if (crashed)
-                {
                     RecoverFromFailedReplay();
-                    yield break;
                 }
-                if (!moved) break;
-                yield return inner.Current;
-            }
-
-            isPlayingSnapshots = false;
+            );
         }
 
         /// <summary>Remet le client dans un état JOUABLE après un rejeu interrompu par une exception —
@@ -1265,21 +1166,11 @@ namespace Novgov.Network
                 // tick, toute unité adverse déjà apparue mais qui n'y figure plus.
                 var visibleThisTick = new HashSet<string>();
 
-                // Glissement fluide (2026-09-11) : la position/rotation de ce tick ne sont plus posées
-                // instantanément puis figées jusqu'au prochain (250 ms plus tard, voir TickDurationMs)
-                // — ça se voyait comme une saccade, un "téléport" d'1 m toutes les 250 ms au lieu d'un
-                // mouvement continu. On mémorise ici le départ/arrivée de chaque unité pour ce tick et
-                // on interpole frame par frame pendant l'attente, après la boucle ci-dessous.
                 var lerpFromPos = new Dictionary<UnitAI, Vector3>();
                 var lerpFromRot = new Dictionary<UnitAI, Quaternion>();
                 var lerpToPos = new Dictionary<UnitAI, Vector3>();
                 var lerpToRot = new Dictionary<UnitAI, Quaternion>();
 
-                // Retour visuel de combat (2026-09-11) : tirs à rejouer une fois toutes les unités de
-                // ce tick connues (résolution de shoot_target_id différée après la boucle ci-dessous,
-                // qui peut encore faire apparaître la cible si c'est sa première apparition côté
-                // client) — mais AVANT la boucle d'interpolation, tant que les transforms sont encore
-                // à leur position PRÉCÉDENTE (celle du tick d'avant), l'instant exact où le tir part.
                 var shotsThisTick = new List<(UnitAI shooter, string targetId)>();
 
                 foreach (UnitState state in snap.units)
@@ -1295,11 +1186,6 @@ namespace Novgov.Network
                         // apparaître directement à sa position révélée.
                         var newType = (UnitSpawnerUI.UnitType)state.unit_type;
                         Vector3 spawnPos = new Vector3(state.x, state.y, state.z);
-                        // skipSafeSpawnAdjustment: true — même correctif que OnDeploymentResult ci-dessus :
-                        // cette position vient d'un tick déjà résolu par le serveur (voir TacticalResolver),
-                        // pas d'un placement frais. Sans ce garde, une unité ennemie qui vient d'être
-                        // repérée pouvait apparaître visuellement à un endroit différent de sa VRAIE
-                        // position logique (celle que le serveur et les autres clients utilisent).
                         unit = UnitSpawnerUI.Instance.SpawnUnitAt(newType, spawnPos, state.team_id, forcedName: state.unit_id, skipSafeSpawnAdjustment: true);
                         if (unit == null) continue;
                         unitLookup[state.unit_id] = unit;
@@ -1310,6 +1196,9 @@ namespace Novgov.Network
                     }
 
                     unit.SetVisualsVisibility(true);
+
+                    unit.teamID = state.team_id;
+                    unit.isPlayerControlled = (state.team_id == localTeamId);
 
                     Vector3 newPos = new Vector3(state.x, state.y, state.z);
                     Quaternion newRot = Quaternion.Euler(0f, state.ry, 0f);
@@ -1344,13 +1233,6 @@ namespace Novgov.Network
                     target.PlayNetworkHitReaction(hitDir);
                 }
 
-                // Destruction de bâtiment (2026-09-12) : jusqu'ici WallDestroyed n'avait AUCUN
-                // consommateur réseau (voir §19.9.3 de 08-known-issues-and-todo.md) — le bâtiment
-                // restait visuellement intact chez les deux joueurs alors que le serveur le savait
-                // détruit. buildingId est un INDEX dans BuildingStructure.AllBuildings (voir
-                // TacticalGridBuilder) — ApplyNetworkDestruction (jamais TakeDamage/DestroyEnvironment)
-                // ne retire JAMAIS ce bâtiment de cette liste, pour que cet index reste valide pour
-                // tout le reste de la partie (voir son commentaire dans DestructibleEnvironment.cs).
                 if (snap.destroyed_building_ids != null)
                 {
                     foreach (int buildingId in snap.destroyed_building_ids)
@@ -1359,6 +1241,15 @@ namespace Novgov.Network
                         BuildingStructure bs = BuildingStructure.AllBuildings[buildingId];
                         DestructibleEnvironment env = bs != null ? bs.GetComponent<DestructibleEnvironment>() : null;
                         env?.ApplyNetworkDestruction();
+                    }
+                }
+
+                if (snap.destroyed_barrier_ids != null)
+                {
+                    foreach (string barrierName in snap.destroyed_barrier_ids)
+                    {
+                        RoadBarrier barrier = RoadBarrier.AllBarriers.Find(b => b.gameObject.name == barrierName);
+                        if (barrier != null) barrier.RemoveByPlayer();
                     }
                 }
 
@@ -1422,8 +1313,7 @@ namespace Novgov.Network
         // UI Toolkit — câblage une fois, puis mise à jour ciblée des champs qui changent.
         // =====================================================================
 
-        /// <summary>2026-09-13 : passe par la fonction Postgres claim_daily_bonus() (schema.sql §10,
-        /// +50 AP une fois par jour UTC, suivi par profiles.last_daily_bonus_at — un vrai horodatage
+                /// +50 AP une fois par jour UTC, suivi par profiles.last_daily_bonus_at — un vrai horodatage
         /// serveur, pas le PlayerPrefs local d'avant, remis à zéro par une simple réinstallation).
         /// Le bonus "+10 par bâtiment possédé" a été retiré : la possession d'une Zone rapporte
         /// maintenant un vrai revenu passif régulier côté serveur (MatchSessionManager.
@@ -1464,10 +1354,6 @@ namespace Novgov.Network
 
         // =====================================================================
         // Petits éléments réutilisables pour les listes dynamiques (Notifications/Sièges/Bâtiments/
-        // Caserne) — voir Theme.tss ".hub-card"/".hub-pip"/etc, 2026-09-13, demande explicite
-        // "intuitif et gamefiable". Centralisés ici pour que les 4 écrans se ressemblent (même
-        // carte, même badge), au lieu de 4 mises en page ad hoc légèrement différentes.
-        // =====================================================================
 
         private static VisualElement MakeHubCard()
         {
@@ -1535,8 +1421,7 @@ namespace Novgov.Network
                 : $"{remaining.Minutes}min restantes";
         }
 
-        /// <summary>2026-09-13 : première lecture/affichage client de public.notifications (schema.sql
-        /// §9) — jusqu'ici le serveur écrivait (WriteNotification) mais rien ne les lisait jamais.
+                /// §9) — jusqu'ici le serveur écrivait (WriteNotification) mais rien ne les lisait jamais.
         /// Pas de push : lues à l'ouverture du HUB (RefreshModeSelectScreen) et sur ce bouton dédié,
         /// exactement comme demandé ("le joueur qui lance de temps en temps son appli pour voir la
         /// notif").</summary>
@@ -1583,8 +1468,7 @@ namespace Novgov.Network
             }
         }
 
-        /// <summary>2026-09-13 : liste les sièges "pending" où le joueur est attaquant (statut
-        /// "en attente de résolution") ou défenseur ("Défendre maintenant" ouvre le même dock de
+                /// "en attente de résolution") ou défenseur ("Défendre maintenant" ouvre le même dock de
         /// déploiement que l'attaquant, côté équipe 2 — voir MultiplayerMatchController.DefendSiege).
         /// Compte à rebours en direct (FormatCountdown) : rend l'urgence VISIBLE plutôt qu'un simple
         /// "répondez avant l'échéance" statique — au coeur du "gamefiable" demandé.</summary>
@@ -1618,9 +1502,6 @@ namespace Novgov.Network
 
                 var row = MakeHubCard();
                 // Pas d'émoji ici (🛡/🏰 etc.) : plage Unicode "pictographes" sans glyphe de repli
-                // fiable une fois une police custom assignée (voir Theme.tss, même bug déjà corrigé
-                // pour les boutons d'icône) — seul "⚔" (symbole, pas pictographe) est déjà utilisé
-                // avec succès ailleurs dans ce projet (ZoneMapController, mini-carte des Zones).
                 var col = MakeTextColumn(
                     isDefender ? $"⚔ Zone ({s.tile_x},{s.tile_y}) assiégée !" : $"Siège sur ({s.tile_x},{s.tile_y})",
                     isDefender ? "Vous êtes le défenseur — organisez votre garnison." : "Vous êtes l'attaquant — en attente du défenseur.");
@@ -1654,8 +1535,6 @@ namespace Novgov.Network
             lblLoading.AddToClassList("hint");
             scroll.Add(lblLoading);
 
-            // 2026-09-13 : lit les VRAIES Zones possédées (public.zones.owner_user_id, partagé —
-            // remplace SupabaseDatabaseClient.GetBuildings, PlayerPrefs local à cet appareil).
             var (ok, list) = await Novgov.Auth.SupabaseDatabaseClient.GetOwnedZones();
             scroll.Clear();
             if (!ok || list == null || list.Length == 0)
@@ -1686,10 +1565,6 @@ namespace Novgov.Network
                 }
                 row.Add(col);
 
-                // 2026-09-13 : "renforcer son économie" (demande explicite) — investir des AP dans SA
-                // Zone augmente à la fois le revenu passif (ZoneIncomeLoop) ET la force de la
-                // garnison auto-générée en cas de siège non défendu en direct (voir
-                // MatchSessionManager_Siege.ResolveSiegeNow, schema.sql §11).
                 if (z.building_level < 3)
                 {
                     var btnUpgrade = new Button();
@@ -1731,10 +1606,6 @@ namespace Novgov.Network
 
             var (ok, roster) = await Novgov.Auth.SupabaseDatabaseClient.GetRoster();
 
-            // Source unique (correctif 2026-09-06) : ce tableau était dupliqué ici avec des noms
-            // ("Canon", "Char") qui ne correspondent à aucune valeur réelle de UnitType — voir le
-            // commentaire de SupabaseDatabaseClient.KnownUnitTypes pour le détail du bug que ça
-            // causait (Canon/Char indéfiniment indéployables après achat).
             string[] unitTypes = Novgov.Auth.SupabaseDatabaseClient.KnownUnitTypes;
             int[] unitCosts = Novgov.Auth.SupabaseDatabaseClient.KnownUnitCosts;
             // Un mot court par type pour que la carte se lise sans avoir à connaître le jeu par
@@ -1768,10 +1639,6 @@ namespace Novgov.Network
 
                 if (canAfford)
                 {
-                    // 2026-09-13 : passe par la fonction Postgres buy_unit() (schema.sql §10) — le
-                    // coût est vérifié et déduit ATOMIQUEMENT côté serveur (jamais ce "cost" client,
-                    // qui ne sert plus qu'à l'AFFICHAGE) ; remplace le PATCH direct
-                    // UpdateProfile+UpsertRosterItem (PlayerPrefs local, 2026-09-13).
                     btnBuy.clicked += async () =>
                     {
                         btnBuy.SetEnabled(false);
@@ -1817,6 +1684,9 @@ namespace Novgov.Network
 
             Button zoneControlBtn = modeSelectRoot?.Q<Button>("btn-zone-control");
             if (zoneControlBtn != null) zoneControlBtn.clicked += StartZoneControl;
+
+            Button practiceAIBtn = modeSelectRoot?.Q<Button>("btn-practice-ai");
+            if (practiceAIBtn != null) practiceAIBtn.clicked += StartPracticeVsAI;
 
             Button rosterBtn = modeSelectRoot?.Q<Button>("btn-roster");
             if (rosterBtn != null) rosterBtn.clicked += () => {
@@ -1954,7 +1824,15 @@ namespace Novgov.Network
                     break;
                 case UiState.Connecting:
                 case UiState.Matchmaking:
-                    waitingStatusLabel.text = statusMessage;
+                    // Reparti à zéro à CHAQUE entrée dans cet état, y compris une ré-entrée sur le
+                    // MÊME état visuel (ex: SubmitLocalDeployment rappelle SetUiState(Matchmaking)
+                    // alors qu'on y était peut-être déjà) — voir waitingScreenEnteredRealtime : sans
+                    // ce reset, l'indicateur "cela peut prendre plusieurs minutes" pourrait apparaître
+                    // immédiatement pour une attente qui vient de commencer, héritée du délai déjà
+                    // écoulé lors d'une attente PRÉCÉDENTE (ex: recherche d'adversaire longue, suivie
+                    // d'un déploiement rapide).
+                    waitingScreenEnteredRealtime = Time.realtimeSinceStartup;
+                    waitingStatusLabel.text = RenderWaitingScreenText();
                     UIScreenManager.Instance.Show("Waiting");
                     break;
                 case UiState.Deployment:
@@ -2023,26 +1901,11 @@ namespace Novgov.Network
         {
             // Dégagement dynamique sous le radar (voir InMatchHudScreen.uxml) — un hardcode de
             // 180px s'y calibrait sur l'ancienne taille FIXE du radar (120px) ; depuis son
-            // agrandissement dynamique (TacticalRadarUI, jusqu'à 230px, 2026-09-02), ce hardcode
-            // aurait laissé la bannière équipe/timer chevaucher le radar. Suit sa vraie hauteur
-            // réelle à chaque frame (espace UI Toolkit, voir BottomEdgeVirtualY) avec une petite
-            // marge ; repli sur une valeur raisonnable si le radar est masqué (vue 3D Action) pour
-            // ne pas coller la bannière tout en haut de l'écran.
             float radarBottom = TacticalRadarUI.BottomEdgeVirtualY;
             hudRoot.style.paddingTop = radarBottom > 0f ? radarBottom + 12f : 40f;
 
             bool isExecuting = TacticalPathManager.Instance != null && TacticalPathManager.Instance.phaseActuelle == TacticalPathManager.GamePhase.Execution;
 
-            // 2026-09-06 : compte à rebours retiré de l'affichage sur demande explicite ("enlève le
-            // temps dans tous les états, ne stresse pas le joueur") — la limite de temps serveur
-            // existe toujours en coulisses (PlanningSeconds/DeploymentSeconds, généreuses, 5 min pour
-            // le déploiement) comme filet de sécurité contre un adversaire réellement absent, mais ne
-            // s'affiche plus nulle part. lastServerSecondsRemaining reste alimenté par "turn_timer"
-            // (PhaseSecondsRemaining en dépend encore ailleurs) mais n'est plus lu ici. Le Label
-            // "timer-label" lui-même a été retiré de InMatchHudScreen.uxml (2026-09-16) : vider son
-            // texte sans le cacher laissait un cadre ".panel" vide et sans nom visible en jeu, à
-            // l'opposé de la bannière d'équipe sur la même ligne (rapport utilisateur : "petit
-            // bouton à droite qui sert à rien et sans nom").
 
             phaseLabel.text = !string.IsNullOrEmpty(statusMessage)
                 ? statusMessage

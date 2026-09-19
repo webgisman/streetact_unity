@@ -11,10 +11,12 @@ tous les modes, deux rythmes de jeu 5 min/6h, notifications) — il fait foi en 
 avec le résumé "Décisions d'architecture" plus bas dans cette page ou avec le document 04, tous les
 deux écrits pour l'architecture précédente (résolveur pur/déterministe, remplacée le 2026-09-13).
 
-**État (2026-09-13) : bascule complète vers le vrai moteur Unity + déploiement réel sur
-novgov.com**, à la demande explicite de l'utilisateur. Voir
-[12-production-deployment-2026-09-13.md](12-production-deployment-2026-09-13.md) pour ce qui a été
-vérifié en production (et ce qui ne l'a pas été — le gameplay réel à 2 joueurs, toujours pas testé).
+**État (2026-09-19) : premier vrai match à 2 joueurs authentifiés joué de bout en bout sur
+novgov.com** (matchmaking → déploiement → tour réel), après avoir découvert et corrigé une
+compilation cassée (voir [13-session-2026-09-19-compile-fixes-real-2p-test.md](13-session-2026-09-19-compile-fixes-real-2p-test.md)).
+Voir [12-production-deployment-2026-09-13.md](12-production-deployment-2026-09-13.md) pour l'état
+antérieur du déploiement (bascule vers le vrai moteur Unity), et le document 13 pour ce qui a
+réellement été vérifié en jeu depuis.
 
 <details>
 <summary>État précédent (2026-09-08), avant la bascule du 2026-09-13 — historique, plus à jour</summary>
@@ -71,6 +73,7 @@ fichiers de config serveur (yml, sql, conf) — Unity les ignore au build.
 12. [00-current-architecture-2026-09-13.md](00-current-architecture-2026-09-13.md) — **document de
     référence pour l'état actuel** du calcul de combat/déploiement/rythmes de jeu.
 13. [09-real-unity-combat-investigation-2026-09-13.md](09-real-unity-combat-investigation-2026-09-13.md), [10-deathmatch-zonecontrol-switched-to-live-2026-09-13.md](10-deathmatch-zonecontrol-switched-to-live-2026-09-13.md), [11-real-engine-async-pace-notifications-2026-09-13.md](11-real-engine-async-pace-notifications-2026-09-13.md), [12-production-deployment-2026-09-13.md](12-production-deployment-2026-09-13.md) — la bascule du 2026-09-13, dans l'ordre chronologique.
+14. [13-session-2026-09-19-compile-fixes-real-2p-test.md](13-session-2026-09-19-compile-fixes-real-2p-test.md) — compilation cassée trouvée/corrigée, premier vrai test à 2 joueurs authentifiés, audit serveur (5 constats non corrigés).
 
 ## Identifiants
 

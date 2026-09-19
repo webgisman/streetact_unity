@@ -89,7 +89,16 @@ namespace Novgov.Server
         /// 2026-09-06 sur demande explicite : le placement manuel est accepté n'importe où sur la
         /// carte. Les constantes/centres restent utilisés par AutoDeployBattlefield (déploiement
         /// automatique), non concerné par ce changement.</summary>
-        private static Vector3 ClampToDeploymentZone(Vector3 pos, int team) => pos;
+        private static Vector3 ClampToDeploymentZone(Vector3 pos, int team)
+        {
+            // Borne la position aux limites RÉELLES du monde généré (voir
+            // TacticalGridBuilder.DefaultWorldRadius, le même rayon utilisé pour construire la grille
+            // tactique) pour éviter qu'un client modifié déploie hors du monde. Un ±25 en dur ici
+            // aurait à tort recadré des placements légitimes bien à l'intérieur de la vraie carte
+            // (le rayon réel est 120, pas 25) — voir 08-known-issues-and-todo.md.
+            float r = Novgov.TacticalCore.TacticalGridBuilder.DefaultWorldRadius;
+            return new Vector3(Mathf.Clamp(pos.x, -r, r), pos.y, Mathf.Clamp(pos.z, -r, r));
+        }
 
         private static int InferUnitType(UnitAI u) => (int)InferUnitTypeEnum(u);
 

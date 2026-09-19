@@ -245,11 +245,19 @@ unités" INCONDITIONNELLEMENT, y compris pour Deathmatch/Zone de Contrôle où c
 ### `deployment_result`
 Diffusé aux DEUX clients une fois la phase de déploiement résolue (soumission filtrée au budget,
 ou repli automatique par camp si rien n'a pu en être conservé — voir `submit_deployment`
-ci-dessus) — les DEUX camps y figurent, y compris le sien propre : le client ne fait jamais
-confiance à ses propres positions candidates locales et respawn exactement cette liste
-(`MultiplayerMatchController.OnDeploymentResult`, `unit_id` réutilisé tel quel par
-`UnitSpawnerUI.SpawnUnitAt(..., forcedName: ...)` pour que `turn_result`/`PlaySnapshotsCoroutine`
-retrouve ensuite chaque unité par ce même nom).
+ci-dessus). **Corrigé (2026-09-19), ce paragraphe était faux depuis l'origine** : chaque client ne
+reçoit QUE les unités de COMBAT de son propre camp (jamais celles de l'adversaire) + les
+barricades des DEUX camps (visibles sur le terrain comme un obstacle physique, pas une unité à
+cacher) — voir `MatchSessionManager_Deployment.RunDeploymentPhaseLive`,
+`team1Units.Concat(team2Barricades)` / `team2Units.Concat(team1Barricades)`. C'est le DÉBUT du
+brouillard de guerre réseau (voir `turn_result` plus bas) : les unités de combat adverses
+n'apparaissent chez ce client que plus tard, dès qu'elles sont repérées dans un `turn_result` —
+confirmé par le commentaire de `MultiplayerMatchController.OnTurnResultReceived` ("deployment_result
+ne contenait que ma propre équipe"). Ses propres unités, elles, sont toujours respawnées
+EXACTEMENT depuis cette liste (jamais depuis ses positions candidates locales), au cas où le
+serveur ait dû les recadrer (`MultiplayerMatchController.OnDeploymentResult`, `unit_id` réutilisé
+tel quel par `UnitSpawnerUI.SpawnUnitAt(..., forcedName: ...)` pour que `turn_result`/
+`PlaySnapshotsCoroutine` retrouve ensuite chaque unité par ce même nom).
 
 `reason` (2026-09-08) : `"roster_trimmed"` si AU MOINS UN placement soumis par CE joueur a été
 écarté individuellement (budget dépassé) alors que le reste de sa soumission a bien été conservé —

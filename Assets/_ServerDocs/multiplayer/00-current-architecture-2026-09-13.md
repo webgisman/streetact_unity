@@ -99,9 +99,13 @@ ces notifications** — seule l'écriture serveur existe pour l'instant.
   partiellement) ; `TacticalCoreSelfTest.cs`, `_Client.cs` et le FullMatchSim ont été conservés mais
   réduits à ce qui ne dépendait pas du résolveur (A*/`TacticalGrid`, hash déterministe, sentinelles
   client, plafonds de déploiement) — re-vérifié par un compile Editor et un build serveur réels.
-- **Aucun test réel à 2 joueurs** depuis la bascule du 2026-09-13 — ni pour le vrai moteur, ni pour
-  le cycle pause/reprise async, ni pour le choix élargi de types d'unité au déploiement. **Toujours
-  vrai au 2026-09-16** malgré les correctifs ci-dessous.
+- ~~Aucun test réel à 2 joueurs depuis la bascule du 2026-09-13~~ **PARTIELLEMENT FAIT le
+  2026-09-19** — un vrai match (matchmaking, déploiement, un tour réel via le vrai moteur) a été
+  joué de bout en bout par deux comptes authentifiés distincts, voir
+  [13-session-2026-09-19-compile-fixes-real-2p-test.md](13-session-2026-09-19-compile-fixes-real-2p-test.md).
+  **Toujours pas testé** : le cycle pause/reprise async, le choix élargi de types d'unité au
+  déploiement, et tout rendu VISUEL côté client (le test du 2026-09-19 parle le protocole réseau
+  directement, sans client Unity réel à l'écran).
 - **Notifications** : écriture serveur seule, aucune lecture/affichage côté client. **Toujours vrai
   au 2026-09-16.**
 - **Migration base de données appliquée en production** (`novgov.com`) le 2026-09-13 — voir

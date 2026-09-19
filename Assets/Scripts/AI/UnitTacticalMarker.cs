@@ -47,11 +47,13 @@ public class UnitTacticalMarker : MonoBehaviour
         markerObject.layer = uiLayer;
 
         markerRenderer = markerObject.GetComponent<MeshRenderer>();
-        
-        bool isPlayer = unitAI != null ? unitAI.isPlayerControlled : (markerColor == Color.blue);
+
+        // Équipe ABSOLUE (voir NovgovTheme.ColorForTeam), pas isPlayerControlled — corrigé
+        // 2026-09-19, même retour joueur que UnitAI.SetupHealthBar/UpdateHealthBar.
+        bool isTeamOne = unitAI != null ? unitAI.teamID != 2 : (markerColor == Color.blue);
         bool isTank = unitAI != null && unitAI.isTank;
 
-        Texture2D iconTex = GetOrCreateIconTexture(isPlayer, isTank);
+        Texture2D iconTex = GetOrCreateIconTexture(isTeamOne, isTank);
 
         Material mat = SafeMaterialFactory.CreateUnlit(Color.white);
         if (mat == null) return; // ex: build Dedicated Server sans shaders — marqueur purement cosmétique, inutile côté serveur
@@ -71,9 +73,10 @@ public class UnitTacticalMarker : MonoBehaviour
     public void RefreshMarker()
     {
         if (markerRenderer == null) return;
-        bool isPlayer = unitAI != null ? unitAI.isPlayerControlled : (markerColor == Color.blue);
+        // Équipe ABSOLUE — voir le même correctif dans CreateMarker ci-dessus.
+        bool isTeamOne = unitAI != null ? unitAI.teamID != 2 : (markerColor == Color.blue);
         bool isTank = unitAI != null && unitAI.isTank;
-        Texture2D iconTex = GetOrCreateIconTexture(isPlayer, isTank);
+        Texture2D iconTex = GetOrCreateIconTexture(isTeamOne, isTank);
         if (markerRenderer.sharedMaterial != null)
         {
             markerRenderer.sharedMaterial.mainTexture = iconTex;
@@ -97,14 +100,18 @@ public class UnitTacticalMarker : MonoBehaviour
         }
     }
 
-    private Texture2D GetOrCreateIconTexture(bool isPlayer, bool isTank)
+    /// <summary><paramref name="isTeamOne"/> est une identité d'ÉQUIPE ABSOLUE (équipe 1 vs équipe
+    /// 2, voir NovgovTheme.ColorForTeam) depuis le 2026-09-19 — PAS "mon camp"/"l'ennemi" relatif au
+    /// client local (l'ancien nom "isPlayer" laissait croire le contraire). "Ally"/"Enemy" dans les
+    /// noms de cache ci-dessous restent au sens d'équipe 1/2, pas au sens joueur local/adversaire.</summary>
+    private Texture2D GetOrCreateIconTexture(bool isTeamOne, bool isTank)
     {
-        if (isPlayer && !isTank && cachedAllyInfantryTex != null) return cachedAllyInfantryTex;
-        if (isPlayer && isTank && cachedAllyTankTex != null) return cachedAllyTankTex;
-        if (!isPlayer && !isTank && cachedEnemyInfantryTex != null) return cachedEnemyInfantryTex;
-        if (!isPlayer && isTank && cachedEnemyTankTex != null) return cachedEnemyTankTex;
+        if (isTeamOne && !isTank && cachedAllyInfantryTex != null) return cachedAllyInfantryTex;
+        if (isTeamOne && isTank && cachedAllyTankTex != null) return cachedAllyTankTex;
+        if (!isTeamOne && !isTank && cachedEnemyInfantryTex != null) return cachedEnemyInfantryTex;
+        if (!isTeamOne && isTank && cachedEnemyTankTex != null) return cachedEnemyTankTex;
 
-        Color mainCol = isPlayer ? new Color(0.1f, 0.65f, 1f, 1f) : new Color(1f, 0.2f, 0.25f, 1f);
+        Color mainCol = isTeamOne ? new Color(0.1f, 0.65f, 1f, 1f) : new Color(1f, 0.2f, 0.25f, 1f);
         Color bgCol = new Color(0.04f, 0.08f, 0.12f, 0.88f);
 
         int size = 64;
@@ -173,10 +180,10 @@ public class UnitTacticalMarker : MonoBehaviour
 
         tex.Apply();
 
-        if (isPlayer && !isTank) cachedAllyInfantryTex = tex;
-        else if (isPlayer && isTank) cachedAllyTankTex = tex;
-        else if (!isPlayer && !isTank) cachedEnemyInfantryTex = tex;
-        else if (!isPlayer && isTank) cachedEnemyTankTex = tex;
+        if (isTeamOne && !isTank) cachedAllyInfantryTex = tex;
+        else if (isTeamOne && isTank) cachedAllyTankTex = tex;
+        else if (!isTeamOne && !isTank) cachedEnemyInfantryTex = tex;
+        else if (!isTeamOne && isTank) cachedEnemyTankTex = tex;
 
         return tex;
     }

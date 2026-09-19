@@ -21,8 +21,6 @@ public class CityGenerator : MonoBehaviour
     public int zoneTileY = 0;
     public int HQBuildingIndex = -1;
 
-    // Conservés en lecture seule pour tout code externe qui affiche encore une position GPS (debug UI,
-    // logs) : recalculés à partir de (zoneTileX, zoneTileY) au centre de la Zone, jamais lus en entrée.
     public float latitude { get; private set; } = 50.6927f;
     public float longitude { get; private set; } = 3.1778f;
 
@@ -129,19 +127,6 @@ public class CityGenerator : MonoBehaviour
         GeoProjection.SetCenter(latitude, longitude);
         CurrentGridCacheKey = $"Z{ZONE_ZOOM}_{zoneTileX}_{zoneTileY}";
 
-        // CACHE DISQUE LU AVANT TOUTE REQUÊTE (correctif 2026-09-05). Ce fichier était jusqu'ici
-        // écrit après chaque fetch mais JAMAIS relu : chaque appel à cette méthode déclenchait donc
-        // TOUJOURS un vrai appel réseau Overpass, même pour une tuile déjà générée par ce processus
-        // auparavant. Une fois qu'une tuile a été vue une première fois, son JSON est désormais figé
-        // ici pour la durée de vie du cache — ce qui réduit aussi l'exposition au risque documenté
-        // "deux requêtes vers deux miroirs Overpass indépendants peuvent légèrement diverger" : seul
-        // le tout premier appel jamais fait pour cette tuile touche encore le réseau.
-        //
-        // Cette méthode n'est plus utilisée pour la géométrie d'un VRAI match multijoueur (voir
-        // LoadZoneFromServerData, appelé à la place) : elle ne sert plus qu'à l'initialisation de la
-        // Zone domicile du joueur, à l'exploration de la carte des Zones, et — en tout dernier
-        // recours si le serveur n'a pas fourni ses données — à un repli d'urgence. Ce cache-hit ne
-        // réintroduit donc aucun risque d'équité qui n'existait pas déjà dans ce chemin de repli.
         if (TryReadZoneCacheFromDisk(zoneTileX, zoneTileY, out string cachedJson))
         {
             Debug.Log($"[CityGenerator] 📂 Zone ({zoneTileX},{zoneTileY}) restaurée depuis le cache disque local — aucune requête Overpass.");
@@ -229,8 +214,7 @@ public class CityGenerator : MonoBehaviour
 
     /// <summary>Tout ce qui suit l'obtention du JSON Overpass d'une Zone — que ce JSON vienne d'un
     /// fetch réseau direct (FetchCityData), du cache disque local, OU du serveur autoritaire (voir
-    /// LoadZoneFromServerData, correctif 2026-09-05) : parse+construit les bâtiments
-    /// (ProcessDataCoroutine), attend le sol (MapTileLoader), bake le NavMesh, notifie les UnitAI.
+        /// (ProcessDataCoroutine), attend le sol (MapTileLoader), bake le NavMesh, notifie les UnitAI.
     /// Extrait de FetchCityData pour que ces TROIS origines de données partagent EXACTEMENT le même
     /// chemin de traitement — la moindre divergence de code ici serait une source d'iniquité en soi,
     /// indépendamment de la question "le JSON en entrée est-il identique".</summary>
@@ -241,8 +225,7 @@ public class CityGenerator : MonoBehaviour
     }
 
     /// <summary>Attend le sol, bake le NavMesh autour des bâtiments fraîchement créés, puis relâche
-    /// les unités et marque la ville prête — extrait de FinishZoneLoadFromJson (2026-09-12) pour être
-    /// partagé avec ApplyAuthoritativeBuildingsCoroutine (résynchronisation "équité géométrique, 2ème
+        /// partagé avec ApplyAuthoritativeBuildingsCoroutine (résynchronisation "équité géométrique, 2ème
     /// étage") : les deux chemins créent des bâtiments par des voies différentes (JSON Overpass vs
     /// structure déjà résolue reçue du serveur), mais la finalisation (NavMesh/streaming/IsCityReady)
     /// est identique dans les deux cas. Comportement STRICTEMENT inchangé par rapport à l'ancien code
@@ -297,7 +280,12 @@ public class CityGenerator : MonoBehaviour
         surface.collectObjects = CollectObjects.All;
         surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
         surface.defaultArea = 0; // Walkable
+        
+        // NavMeshSurface.BuildNavMeshAsync() n'existe pas dans la version du package AI Navigation
+        // utilisée par ce projet (seul BuildNavMesh() synchrone est exposé) — retour à l'appel
+        // synchrone d'origine après une tentative de bake asynchrone qui ne compilait pas.
         surface.BuildNavMesh();
+
         Debug.Log("NavMesh automatically baked and perfectly fitted around building colliders!");
 
         // Enregistrer immédiatement les bâtiments pour le streaming 3D
@@ -321,8 +309,7 @@ public class CityGenerator : MonoBehaviour
         IsCityReady = true;
     }
 
-    /// <summary>ÉQUITÉ GÉOMÉTRIQUE, 2ème étage (2026-09-12) — voir MatchState.AuthoritativeCityHash
-    /// (serveur) et NetMessage.city_verify_result pour le contexte complet. Appelée UNIQUEMENT quand
+        /// (serveur) et NetMessage.city_verify_result pour le contexte complet. Appelée UNIQUEMENT quand
     /// le serveur a détecté que la ville générée localement par ce client diffère de la sienne :
     /// reconstruit la ville ENTIÈRE (jamais un patch partiel, voir NetMessage.BuildingGeometryDto)
     /// directement depuis la structure déjà résolue reçue du serveur — sans repasser par le JSON
@@ -541,8 +528,7 @@ public class CityGenerator : MonoBehaviour
         }
     }
 
-    /// <summary>ÉQUITÉ MULTIJOUEUR (2026-09-05) — point d'entrée principal pour charger une Zone à
-    /// partir du JSON Overpass exact que le SERVEUR AUTORITAIRE a lui-même utilisé pour cette
+        /// partir du JSON Overpass exact que le SERVEUR AUTORITAIRE a lui-même utilisé pour cette
     /// tuile, plutôt que de laisser ce client refaire sa propre requête Overpass indépendante.
     ///
     /// AVANT ce correctif : client ET serveur appelaient chacun GenerateCity() -> FetchCityData(),
@@ -596,8 +582,7 @@ public class CityGenerator : MonoBehaviour
     // Nom de fichier cache unique et déterministe pour une Zone de Conquête (index de tuile, pas de
     // coordonnées GPS arrondies) : CityCache_Z17_{tileX}_{tileY}.json.
     /// <summary>Chemin complet du cache disque du JSON Overpass brut d'une Zone — dans le MÊME
-    /// sous-dossier persistant que TacticalGridBuilder ("TacticalGridCache"), correctif 2026-09-05 :
-    /// ce fichier vivait auparavant à la racine de Application.persistentDataPath, un répertoire
+        /// ce fichier vivait auparavant à la racine de Application.persistentDataPath, un répertoire
     /// EFFACÉ à chaque redéploiement du conteneur serveur (contrairement à "TacticalGridCache", monté
     /// sur un volume Docker nommé qui survit aux redéploiements — voir docker-compose.yml). Partager
     /// ce même dossier évite tout changement d'infrastructure (aucune modification de
@@ -720,7 +705,11 @@ public class CityGenerator : MonoBehaviour
         surface.collectObjects = CollectObjects.All;
         surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
         surface.defaultArea = 0;
+        
+        // Voir le commentaire de LoadZoneFromCache/l'équivalent zone-tuile : BuildNavMeshAsync()
+        // n'existe pas sur ce NavMeshSurface, appel synchrone.
         surface.BuildNavMesh();
+
         Debug.Log("NavMesh automatiquement généré pour le mode Hors-Ligne !");
 
         if (TacticalStreamingManager.Instance != null)
@@ -744,25 +733,6 @@ public class CityGenerator : MonoBehaviour
 
     private IEnumerator ProcessDataCoroutine(string json)
     {
-        // ÉQUITÉ MULTIJOUEUR (correctif 2026-09-05) : flux UnityEngine.Random réamorcé
-        // DÉTERMINISTIQUEMENT ici, une seule fois, avant tout tirage — matériaux de mur/toit
-        // (GetRandomWallMaterial/GetRandomRoofMaterial) ET mobilier urbain
-        // (StreetPropsGenerator.PlaceStreetProps, qui pose de VRAIS colliders physiques intégrés au
-        // NavMesh). Sans amorçage, ce flux global est initialisé par Unity de façon NON
-        // déterministe au démarrage du process : deux exécutions de cette même méthode (client et
-        // serveur, ou même client et client) sur EXACTEMENT le même JSON produisaient quand même un
-        // mobilier urbain différent (nombre, position, présence d'un lampadaire/arbre/banc) — la
-        // "disposition" au sens large restait donc différente d'un appareil à l'autre même une fois
-        // les bâtiments identiques garantis.
-        //
-        // Le seed dérive de zoneTileX/zoneTileY (jamais de CurrentGridCacheKey.GetHashCode() : le
-        // hash d'une string .NET n'est PAS garanti stable entre process/plateformes, contrairement à
-        // de l'arithmétique entière simple) pour une vraie Zone, ou d'une constante fixe pour la
-        // carte par défaut (bundle identique des deux côtés, un simple nombre arbitraire suffit).
-        // Déterministe SEULEMENT si l'ORDRE et le NOMBRE d'appels à Random qui suivent sont
-        // eux-mêmes une fonction pure du JSON (c'est le cas ici : un seul passage séquentiel sur
-        // response.elements, jamais de branchement dépendant de l'horloge/du réseau) — garanti
-        // désormais que client et serveur reçoivent le MÊME texte JSON (voir LoadZoneFromServerData).
         int citySeed = (CurrentGridCacheKey == "Default") ? 424242 : unchecked(zoneTileX * 73_856_093 ^ zoneTileY * 19_349_663);
         UnityEngine.Random.InitState(citySeed);
 
@@ -1096,8 +1066,7 @@ public class CityGenerator : MonoBehaviour
     /// unité perchée. Dériver la valeur de la géométrie évite en plus toute dépendance à l'ORDRE des
     /// appels, contrairement à un simple Random.InitState.
     ///
-    /// Hash ENTIER pur (Novgov.Core.DeterministicHash), plus de trigonométrie (correctif 2026-09-05).
-    /// La version précédente (`Mathf.Sin(x*a+y*b) * grand_facteur` puis `Mathf.Floor`) restait
+        /// La version précédente (`Mathf.Sin(x*a+y*b) * grand_facteur` puis `Mathf.Floor`) restait
     /// techniquement déterministe SUR UNE PLATEFORME DONNÉE, mais `sin()` n'est pas garantie
     /// bit-identique par IEEE754 entre la libm Android (Bionic/ARM) du client et la glibc Linux du
     /// serveur dédié — un écart d'un seul bit sur `Sin(x)`, amplifié par le grand facteur, pouvait en
@@ -1704,16 +1673,6 @@ public class CityGenerator : MonoBehaviour
             }
         }
 
-        // UNE FENÊTRE = UN OBJET SÉLECTIONNABLE (correctif 2026-09-03).
-        //
-        // Les fenêtres étaient fusionnées en un seul maillage "Windows_Visual" sans collider et sans
-        // composant d'interaction, là où chaque porte recevait son propre BoxCollider et son
-        // DoorInteraction (voir juste au-dessus). Résultat : le raycast de sélection ne pouvait jamais
-        // toucher de fenêtre, WindowInteraction n'était instancié NULLE PART, donc clickedWindow
-        // restait toujours nul, ShowWindowMenu() était du code mort et NodeAction.GarnisonFenetre ne
-        // pouvait pas être produite par le client. Toute la mécanique de garnison à la fenêtre (-75%
-        // de dégâts, cône de tir de 140°) était ainsi inatteignable en solo comme en multijoueur,
-        // alors que le serveur ET le client en avaient l'implémentation complète.
         if (structure.windows != null && structure.windows.Count > 0)
         {
             for (int wi = 0; wi < structure.windows.Count; wi++)

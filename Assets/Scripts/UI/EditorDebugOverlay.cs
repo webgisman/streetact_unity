@@ -42,9 +42,24 @@ public class EditorDebugOverlay : MonoBehaviour
             $"Zone actuelle : {zone}\n" +
             $"Ville simulée : {mockCity.Name}";
 
+        // Ancré à DROITE (2026-09-19, retour explicite "l'affichage du diagnostic couvre les
+        // unités") — la plupart des unités/de l'UI de jeu vivent plutôt à gauche/en bas, jamais
+        // testé à droite jusqu'ici.
+        //
+        // Y ancré SOUS le radar (2026-09-19, second retour le même jour : "les éléments de
+        // diagnostic sont sous le radar" — TacticalRadarUI vit AUSSI en haut-droite ET force
+        // GUI.depth=-100 pour toujours dessiner PAR-DESSUS tout le reste en OnGUI, donc un simple
+        // padding fixe de 8px partait de zéro connaissance de la vraie hauteur du radar (jusqu'à
+        // 230px + bandeau, voir TacticalRadarUI.radarSize) et se faisait recouvrir dès que le radar
+        // était affiché. BottomEdgeScreenY est le même point d'ancrage public déjà utilisé par
+        // TacticalBottomBarScreen pour la même raison ("empiler les boutons sous le radar sans
+        // chevauchement") — vaut 0 si le radar est masqué (vue 3D Action), donc ce panneau remonte
+        // alors naturellement vers le haut de l'écran.
         Vector2 size = labelStyle.CalcSize(new GUIContent(text));
-        GUI.Box(new Rect(8, 8, size.x + 24, size.y + 16), GUIContent.none, boxStyle);
-        GUI.Label(new Rect(18, 16, size.x + 12, size.y), text, labelStyle);
+        float x = Screen.width - size.x - 32;
+        float y = TacticalRadarUI.BottomEdgeScreenY + 8f;
+        GUI.Box(new Rect(x, y, size.x + 24, size.y + 16), GUIContent.none, boxStyle);
+        GUI.Label(new Rect(x + 10, y + 8, size.x + 12, size.y), text, labelStyle);
     }
 }
 #endif

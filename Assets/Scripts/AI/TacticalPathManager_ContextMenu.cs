@@ -10,13 +10,7 @@ public partial class TacticalPathManager
     // ==========================================
 
     /// <summary>Ferme tout menu contextuel ouvert ET désélectionne l'unité courante — à appeler
-    /// depuis l'extérieur (voir MultiplayerMatchController.DeferredMatchOver, correctif 2026-09-12
-    /// "un menu contextuel apparaît alors que la partie est déjà terminée") juste avant d'afficher
-    /// l'écran de fin de partie. Nécessaire car la fin normale d'un rejeu de tour
-    /// (MultiplayerMatchController.PlaySnapshotsBody) remet `phaseActuelle` à Planification — donc
-    /// réactive la saisie tactique — AVANT que le différé de `match_over` ne reprenne la main pour
-    /// afficher l'écran de fin : le joueur dispose d'au moins une frame où il peut encore
-    /// sélectionner une unité ou ouvrir un menu d'ordre sur une partie déjà terminée côté serveur.
+    /// depuis l'extérieur juste avant d'afficher l'écran de fin de partie. 
     /// `SelectionnerUnite(null)` suffit : elle appelle déjà `FermerMenuContextuel` en interne.</summary>
     public void ForceCloseTacticalUIForMatchEnd()
     {
@@ -53,16 +47,8 @@ public partial class TacticalPathManager
     }
 
     /// <summary>Tente un repli sur le sol RÉEL aux mêmes coordonnées X/Z avant de rejeter un tap ou
-    /// de l'interpréter comme un ordre lié au bâtiment. En ville dense, la caméra tactique (vue
-    /// oblique, bridée à 75°) fait souvent "raser" la façade d'un bâtiment PROCHE alors que le joueur
-    /// visait la rue juste devant/à côté — le raycast touche alors le mur (parfois assez haut, voir
-    /// le diagnostic loggé plus haut) au lieu du sol derrière. Sans ce repli, un blindé ne pouvait
-    /// plus du tout être commandé près de la moindre façade, même en visant la rue.
-    ///
-    /// Utilisé pour les blindés (tap rejeté) ET, depuis le 2026-09-03, pour l'infanterie quand le
-    /// bâtiment n'a été identifié que par le collider touché et non par l'empreinte : dans ce cas les
-    /// coordonnées visées sont hors du bâtiment, le joueur montrait donc bien la rue (voir
-    /// TacticalPathManager_Input, "FAÇADE RASÉE PAR LA VUE OBLIQUE").
+    /// de l'interpréter comme un ordre lié au bâtiment. Utilisé pour éviter que le raycast 
+    /// ne se bloque sur la façade des bâtiments à cause de la caméra oblique.
     ///
     /// Retourne true si un point de sol marchable existe à proximité et que le menu d'ordre a été
     /// ouvert à sa place (le tap est alors traité comme résolu, l'appelant doit `return`
@@ -73,6 +59,13 @@ public partial class TacticalPathManager
         if (!UnityEngine.AI.NavMesh.SamplePosition(flatPoint, out UnityEngine.AI.NavMeshHit navHit, 4.5f, UnityEngine.AI.NavMesh.AllAreas))
             return false;
 
+        // Empêche les blindés de cibler accidentellement un point de repli à l'intérieur d'un bâtiment.
+        UnitAI selectedUnitAI = uniteSelectionnee != null ? uniteSelectionnee.GetComponent<UnitAI>() : null;
+        if (selectedUnitAI != null && selectedUnitAI.isTank && BuildingStructure.FindBuildingAt(navHit.position) != null)
+        {
+            return false;
+        }
+
         positionClicTemporaire = navHit.position;
         isBuildingSelected = false;
         selectedBuilding = null;
@@ -80,24 +73,10 @@ public partial class TacticalPathManager
         isWindowSelected = false;
         isGroundCheckpointSelected = true;
 
-        // Recalculer isNearBuildingWall ICI (correctif 2026-09-05) : ce champ n'était mis à jour que
-        // par la branche "CAS SOL NORMAL" de HandlePointerInput, jamais par ce repli. L'option "4. SE
-        // CACHER (Contre mur)" du menu Fantassin affichait donc la valeur laissée par le tap
-        // précédent — parfois pour une AUTRE unité, plus tôt dans la partie — au lieu de refléter ce
-        // point-ci. Même test que la branche normale (même rayon, mêmes critères).
-        isNearBuildingWall = false;
-        Collider[] nearbyWalls = Physics.OverlapSphere(positionClicTemporaire, 2.2f);
-        foreach (var c in nearbyWalls)
-        {
-            if (c.GetComponentInParent<BuildingStructure>() != null || c.gameObject.name.Contains("Building") || c.gameObject.name.Contains("Mur") || c.gameObject.name.Contains("Wall") || c.gameObject.name.Contains("Polygone"))
-            {
-                isNearBuildingWall = true;
-                break;
-            }
-        }
+        // Recalculer isNearBuildingWall ici pour s'assurer que le menu propose l'option de couverture.
+        isNearBuildingWall = IsPositionNearBuildingWall(positionClicTemporaire);
 
-        AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
-        if (menuPanel != null) menuPanel.SetActive(false);
+        PlayClickFeedback();
 #if !UNITY_SERVER
         ShowGroundCheckpointMenu();
 #endif
@@ -280,11 +259,6 @@ public partial class TacticalPathManager
                 // Arme le garde-fou anti-fuite de UnitSpawnerUI.IsPointerOverOnGUI (cooldown 0.3s) :
                 // sans lui, le RELÂCHEMENT du même clic physique (même pixel) peut retomber sur un
                 // raycast 3D brut si ce bouton modifie l'affichage du ContextMenu entre-temps —
-                // c'est la cause racine de tous les bugs "TERMINÉ/ANNULER produit un comportement
-                // random sur la carte" observés jusqu'ici (voir cancel/confirm dans BindTacticalUI,
-                // seuls endroits qui masquent réellement le ContextMenu). Un cooldown en secondes
-                // (essayé avant) bloquait aussi la sélection légitime d'une autre unité juste après —
-                // une seule frame suffit à couper la fuite du MÊME clic physique.
                 suppressPointerInputUntilFrame = Time.frameCount;
                 foreach (var sibling in buttonContainerEl.Children())
                     sibling.RemoveFromClassList("context-button-selected");
@@ -303,12 +277,8 @@ public partial class TacticalPathManager
         UIScreenManager.Instance.SetVisible("ContextMenu", true);
     }
 
-    /// <summary>Toast temporaire (voir invalid-tap-toast dans TacticalBottomBarScreen.uxml) pour
-    /// signaler un tap sur un endroit non atteignable par l'unité sélectionnée — au lieu d'ignorer
-    /// le tap en silence comme avant. L'unité reste sélectionnée, le joueur retape ailleurs.
-    /// Paramètres ajoutés (2026-09-12) pour réutiliser le même toast avec un autre message/une autre
-    /// durée — voir ConfirmerFinDeTourSiOrdresManquants dans TacticalPathManager_Execution.cs — sans
-    /// dupliquer tout l'élément UI pour un second avertissement.</summary>
+    /// <summary>Toast temporaire pour signaler un tap sur un endroit non atteignable par l'unité sélectionnée.
+    /// Peut être réutilisé avec un message et une durée personnalisés.</summary>
     private void ShowInvalidTapFeedback(string message = "IMPOSSIBLE D'ALLER ICI", float duration = 1.8f)
     {
         if (!tacticalUiBound) return;

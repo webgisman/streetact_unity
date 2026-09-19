@@ -28,13 +28,13 @@ public static class TacticalNetworkReplayAutoTest
         int passed = 0, failed = 0;
         Debug.Log("=== TacticalNetworkReplayAutoTest : destruction de bâtiment côté client (rejeu réseau) ===");
 
-        RunIsolated("ApplyNetworkDestruction détruit visuellement SANS toucher aux PV d'une unité voisine",
+        EditorAutoTestHarness.RunIsolated("TacticalNetworkReplayAutoTest", "ApplyNetworkDestruction détruit visuellement SANS toucher aux PV d'une unité voisine",
             TestNetworkDestructionDoesNotDamageNearbyUnit, ref passed, ref failed);
-        RunIsolated("ApplyNetworkDestruction ne retire PAS le bâtiment de BuildingStructure.AllBuildings",
+        EditorAutoTestHarness.RunIsolated("TacticalNetworkReplayAutoTest", "ApplyNetworkDestruction ne retire PAS le bâtiment de BuildingStructure.AllBuildings",
             TestNetworkDestructionKeepsBuildingIndexStable, ref passed, ref failed);
-        RunIsolated("ApplyNetworkDestruction est idempotente (un second appel ne fait rien de plus)",
+        EditorAutoTestHarness.RunIsolated("TacticalNetworkReplayAutoTest", "ApplyNetworkDestruction est idempotente (un second appel ne fait rien de plus)",
             TestNetworkDestructionIsIdempotent, ref passed, ref failed);
-        RunIsolated("PlayNetworkShotEffects déclenche l'alerte radar (retour 2026-09-12, radar muet en multijoueur)",
+        EditorAutoTestHarness.RunIsolated("TacticalNetworkReplayAutoTest", "PlayNetworkShotEffects déclenche l'alerte radar (retour 2026-09-12, radar muet en multijoueur)",
             TestPlayNetworkShotEffectsPingsRadar, ref passed, ref failed);
 
         Debug.Log($"[TacticalNetworkReplayAutoTest] {passed} réussi(s), {failed} échoué(s).");
@@ -42,25 +42,6 @@ public static class TacticalNetworkReplayAutoTest
         {
             throw new System.Exception($"[TacticalNetworkReplayAutoTest] {failed} test(s) échoué(s) — voir le log ci-dessus pour le détail.");
         }
-    }
-
-    private static void RunIsolated(string label, System.Func<bool> test, ref int passed, ref int failed)
-    {
-        EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-        Run(label, test, ref passed, ref failed);
-    }
-
-    private static void Run(string label, System.Func<bool> test, ref int passed, ref int failed)
-    {
-        bool ok;
-        try { ok = test(); }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"[TacticalNetworkReplayAutoTest] EXCEPTION pendant '{label}' : {e}");
-            ok = false;
-        }
-        if (ok) { passed++; Debug.Log($"[TacticalNetworkReplayAutoTest] OK — {label}"); }
-        else { failed++; Debug.LogError($"[TacticalNetworkReplayAutoTest] ECHEC — {label}"); }
     }
 
     /// <summary>Bâtiment réel minimal (BuildingStructure + DestructibleEnvironment, colliders réels

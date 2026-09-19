@@ -134,17 +134,25 @@ namespace Novgov.TacticalCore
             if (!TryWorldToCell(p1, out int x1, out int z1)) return;
             if (!TryWorldToCell(p2, out int x2, out int z2)) return;
 
-            int minCx = Mathf.Max(0, Mathf.Min(x1, x2) - 1);
-            int maxCx = Mathf.Min(width - 1, Mathf.Max(x1, x2) + 1);
-            int minCz = Mathf.Max(0, Mathf.Min(z1, z2) - 1);
-            int maxCz = Mathf.Min(height - 1, Mathf.Max(z1, z2) + 1);
+            int dx = Mathf.Abs(x2 - x1), sx = x1 < x2 ? 1 : -1;
+            int dz = -Mathf.Abs(z2 - z1), sz = z1 < z2 ? 1 : -1;
+            int err = dx + dz, e2;
 
-            for (int cz = minCz; cz <= maxCz; cz++)
+            while (true)
             {
-                for (int cx = minCx; cx <= maxCx; cx++)
+                // Applique le blocage sur la cellule traversée et son entourage immédiat (1 cellule de padding)
+                for (int cz = z1 - 1; cz <= z1 + 1; cz++)
                 {
-                    SetWalkable(cx, cz, !blocked);
+                    for (int cx = x1 - 1; cx <= x1 + 1; cx++)
+                    {
+                        SetWalkable(cx, cz, !blocked);
+                    }
                 }
+
+                if (x1 == x2 && z1 == z2) break;
+                e2 = 2 * err;
+                if (e2 >= dz) { err += dz; x1 += sx; }
+                if (e2 <= dx) { err += dx; z1 += sz; }
             }
         }
     }

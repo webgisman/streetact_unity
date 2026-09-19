@@ -101,38 +101,22 @@ namespace Novgov.Server
         /// laisser matchInProgress bloqué à "true" pour toujours.</summary>
         private IEnumerator RunConquestRequestGuarded(PlayerConnection conn, int tileX, int tileY)
         {
-            IEnumerator inner = RunConquestRequest(conn, tileX, tileY);
-            while (true)
-            {
-                bool moved = false;
-                bool crashed = false;
-                try
+            return SafeCoroutineRunner.Run(
+                RunConquestRequest(conn, tileX, tileY),
+                onComplete: () =>
                 {
-                    moved = inner.MoveNext();
-                }
-                catch (Exception e)
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                },
+                onException: (Exception e) =>
                 {
                     Debug.LogError($"[MatchSessionManager] Exception non gérée pendant une conquête — abandon : {e}");
-                    crashed = true;
-                }
-
-                if (crashed)
-                {
                     try { if (!conn.IsDisconnected) conn.Send(new NetMessage { type = "zone_attack_result", success = false, reason = "server_error", zone_tile_x = tileX, zone_tile_y = tileY }); } catch { }
                     try { conn.Close(); } catch { }
                     matchInProgress = false;
                     StartCoroutine(ReportInstanceStatus());
-                    yield break;
                 }
-
-                if (!moved)
-                {
-                    matchInProgress = false;
-                    StartCoroutine(ReportInstanceStatus());
-                    yield break;
-                }
-                yield return inner.Current;
-            }
+            );
         }
 
         /// <summary>Vrai si (bx,by) est adjacente à (ax,ay) au sens des 4 directions cardinales
@@ -348,56 +332,50 @@ namespace Novgov.Server
             attacker.Close();
         }
 
-        [Serializable] private class ActionPointsEntry { public int action_points; }
-        [Serializable] private class ActionPointsQueryResult { public ActionPointsEntry[] items; }
+        [Serializable] private class PillageResult { public int stolen_ap; public int attacker_new_ap; }
+        [Serializable] private class PillageQueryResult { public PillageResult[] items; }
 
         /// <summary>Pille les Points d'Action du défenseur (ramené à 0) vers l'attaquant, lors d'une
-        /// capture de Zone déjà possédée par un vrai joueur. CORRECTIF 2026-09-13 : filtrait par
-        /// "username=eq." alors que defenderOwnerId/attacker.UserId sont de vrais UUID (colonne
-        /// "id") — ne correspondait donc JAMAIS à une ligne réelle, et la colonne action_points
-        /// elle-même n'existait pas encore avant cette même session (voir schema.sql §10) : ce
-        /// pillage n'avait donc jamais pu fonctionner ne serait-ce qu'une fois en production.
-        /// Prend un simple userId (pas une PlayerConnection, 2026-09-13) : réutilisé par la
-        /// résolution HEADLESS des sièges (MatchSessionManager_Siege.cs), où aucun des deux joueurs
-        /// n'a de connexion live pendant la résolution.</summary>
+        /// capture de Zone déjà possédée par un vrai joueur.
+        /// CORRECTIF 2026-09-19 : Utilisation d'un appel RPC transactionnel (pillage_action_points)
+        /// plutôt qu'un schéma Fetch -> Patch, pour éviter une condition de course permettant
+        /// de dupliquer des AP si un joueur dépensait ses points pile au moment du pillage.
+        /// </summary>
         private IEnumerator LootActionPoints(string attackerUserId, string defenderOwnerId)
         {
-            int stolenAP = 0;
-            yield return FetchActionPoints(defenderOwnerId, ap => stolenAP = ap);
-            if (stolenAP <= 0) yield break;
+            string url = $"{GameServerBootstrap.RestUrl}/rpc/pillage_action_points";
+            string jsonBody = $"{{\"attacker_id\":\"{attackerUserId}\", \"defender_id\":\"{defenderOwnerId}\"}}";
 
-            yield return PostgrestPatch($"/profiles?id=eq.{defenderOwnerId}", "{\"action_points\":0}");
-
-            int attackerAP = 0;
-            yield return FetchActionPoints(attackerUserId, ap => attackerAP = ap);
-            yield return PostgrestPatch($"/profiles?id=eq.{attackerUserId}", "{\"action_points\":" + (attackerAP + stolenAP) + "}");
-
-            Debug.Log($"[Conquête] {attackerUserId} a pillé {stolenAP} AP au joueur {defenderOwnerId} !");
-        }
-
-        private IEnumerator FetchActionPoints(string userId, Action<int> onResult)
-        {
-            string url = $"{GameServerBootstrap.RestUrl}/profiles?id=eq.{userId}&select=action_points";
-            using var req = UnityWebRequest.Get(url);
+            using var req = new UnityWebRequest(url, "POST");
+            byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(jsonBody);
+            req.uploadHandler = new UnityEngine.Networking.UploadHandlerRaw(bodyRaw);
+            req.downloadHandler = new UnityEngine.Networking.DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
             req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
             req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+
             yield return req.SendWebRequest();
 
-            int ap = 0;
-            if (req.result == UnityWebRequest.Result.Success)
+            if (req.result != UnityWebRequest.Result.Success)
             {
-                try
+                Debug.LogWarning($"[Conquête] Pillage échoué : {req.error} / {req.downloadHandler?.text}");
+                yield break;
+            }
+            
+            try
+            {
+                string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                var parsed = JsonUtility.FromJson<PillageQueryResult>(wrapped);
+                if (parsed?.items != null && parsed.items.Length > 0)
                 {
-                    string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
-                    var parsed = JsonUtility.FromJson<ActionPointsQueryResult>(wrapped);
-                    if (parsed?.items != null && parsed.items.Length > 0) ap = parsed.items[0].action_points;
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"[MatchSessionManager] Parsing action_points échoué ({userId}) : {ex.Message}");
+                    int stolenAP = parsed.items[0].stolen_ap;
+                    Debug.Log($"[Conquête] {attackerUserId} a pillé {stolenAP} AP au joueur {defenderOwnerId} !");
                 }
             }
-            onResult(ap);
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Conquête] Parsing pillage échoué : {ex.Message}");
+            }
         }
 
         // Renfort de garnison IA en fonction de la taille du territoire du défenseur (NOUVEAU,
@@ -616,38 +594,22 @@ namespace Novgov.Server
         /// prévue ne doit jamais laisser matchInProgress bloqué à "true" pour toujours.</summary>
         private IEnumerator RunPracticeVsAIGuarded(PlayerConnection player)
         {
-            IEnumerator inner = RunPracticeVsAI(player);
-            while (true)
-            {
-                bool moved = false;
-                bool crashed = false;
-                try
+            return SafeCoroutineRunner.Run(
+                RunPracticeVsAI(player),
+                onComplete: () =>
                 {
-                    moved = inner.MoveNext();
-                }
-                catch (Exception e)
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                },
+                onException: (Exception e) =>
                 {
                     Debug.LogError($"[MatchSessionManager] Exception non gérée pendant un entraînement IA — abandon : {e}");
-                    crashed = true;
-                }
-
-                if (crashed)
-                {
                     try { if (!player.IsDisconnected) player.Send(new NetMessage { type = "match_over", winner_team = 0, reason = "server_error" }); } catch { }
                     try { player.Close(); } catch { }
                     matchInProgress = false;
                     StartCoroutine(ReportInstanceStatus());
-                    yield break;
                 }
-
-                if (!moved)
-                {
-                    matchInProgress = false;
-                    StartCoroutine(ReportInstanceStatus());
-                    yield break;
-                }
-                yield return inner.Current;
-            }
+            );
         }
 
         private IEnumerator RunPracticeVsAI(PlayerConnection player)

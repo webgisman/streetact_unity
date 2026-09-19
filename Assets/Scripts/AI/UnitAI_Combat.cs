@@ -213,7 +213,7 @@ public partial class UnitAI
                 Vector3 end = target.transform.position + Vector3.up * 1.5f;
                 Vector3 dir = (end - start);
 
-                RaycastHit[] hits = Physics.RaycastAll(start, dir.normalized, dist, ~0, QueryTriggerInteraction.Ignore);
+                RaycastHit[] hits = Physics.RaycastAll(start, dir.normalized, dist, UnitAI.WorldGeometryMask, QueryTriggerInteraction.Ignore);
                 bool blocked = false;
 
                 foreach (var h in hits)
@@ -284,7 +284,7 @@ public partial class UnitAI
                 Vector3 rayStart = isGarrisoned ? (transform.position + Vector3.up * 1.3f + transform.forward * 0.5f) : (transform.position + Vector3.up * 1.5f);
                 Vector3 rayDir = (unit.transform.position + Vector3.up * 1.5f) - rayStart;
                 
-                RaycastHit[] hits = Physics.RaycastAll(rayStart, rayDir.normalized, dist);
+                RaycastHit[] hits = Physics.RaycastAll(rayStart, rayDir.normalized, dist, UnitAI.WorldGeometryMask, QueryTriggerInteraction.Ignore);
                 bool hasLineOfSight = true;
                 
                 foreach (var hit in hits)
@@ -405,8 +405,9 @@ public partial class UnitAI
         }
 
         Vector3 hitDirection = (target.transform.position - transform.position).normalized;
-        // Calcul des dégâts équilibrés
-        float damageToDeal = isTank ? (isCanonVehicle ? 75f : 150f) : 15f; 
+        // Calcul des dégâts équilibrés depuis la source de vérité
+        Novgov.Server.UnitTypeStats.Get(Novgov.Server.UnitTypeStats.InferType(this), out _, out _, out int baseDamage, out _, out _, out _);
+        float damageToDeal = baseDamage; 
 
         if (isCamouflaged)
         {

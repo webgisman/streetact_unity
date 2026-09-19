@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Reflection;
+using Novgov.Gestures;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -13,11 +14,12 @@ using UnityEngine;
 /// Ce fichier exécute un VRAI Physics.Raycast contre de VRAIS UnitAI (colliders configurés par leur
 /// vrai UnitAI.Start(), invoqué par réflexion puisqu'il est privé et normalement appelé par Unity
 /// juste avant la première frame — inutile en mode Éditeur hors Play Mode) et appelle directement
-/// TacticalPathManager.ResolveClosestPlayerUnit (extrait de HandlePointerInput le même jour pour
-/// exactement cet usage). Pas besoin du Play Mode ni de l'Input System : OnEnable() (qui inscrit
-/// l'unité dans UnitAI.AllLivingUnits) s'exécute déjà de lui-même à l'AddComponent, même hors Play
-/// Mode — seul Start() (déféré par Unity jusqu'à la première frame, qui n'arrive jamais hors Play
-/// Mode) a besoin d'un coup de pouce par réflexion.
+/// Novgov.Gestures.UnitSelectionResolver.Resolve (Assets/Scripts/AI/Input/UnitSelectionResolver.cs —
+/// extrait de HandlePointerInput le 2026-09-12, réécrit structurellement le 2026-09-19). Pas besoin
+/// du Play Mode ni de l'Input System : OnEnable() (qui inscrit l'unité dans UnitAI.AllLivingUnits)
+/// s'exécute déjà de lui-même à l'AddComponent, même hors Play Mode — seul Start() (déféré par Unity
+/// jusqu'à la première frame, qui n'arrive jamais hors Play Mode) a besoin d'un coup de pouce par
+/// réflexion.
 ///
 /// Usage : "Unity.exe -batchmode -nographics -quit -buildTarget StandaloneWindows64
 /// -standaloneBuildSubtarget Player -projectPath ... -executeMethod TacticalSelectionAutoTest.RunAll
@@ -52,17 +54,19 @@ public static class TacticalSelectionAutoTest
         // qui ne s'attendait à AUCUNE unité proche). Recréer la scène détruit proprement les
         // anciens GameObjects (OnDisable() les retire de AllLivingUnits), jamais de sauvegarde —
         // voir l'en-tête de fichier.
-        RunIsolated("Tap visant un fantassin au sol, à côté d'un char : le fantassin doit gagner (régression 2026-09-12)",
+        EditorAutoTestHarness.RunIsolated("TacticalSelectionAutoTest", "Tap visant un fantassin au sol, à côté d'un char : le fantassin doit gagner (régression 2026-09-12)",
             TestInfantryNextToTankWins, ref passed, ref failed);
-        RunIsolated("Tap direct sur le char lui-même : le char doit toujours gagner (non-régression)",
+        EditorAutoTestHarness.RunIsolated("TacticalSelectionAutoTest", "Tap direct sur le char lui-même : le char doit toujours gagner (non-régression)",
             TestDirectTapOnTankStillWins, ref passed, ref failed);
-        RunIsolated("Aucune unité près du tap : la sélection ne doit rien retourner",
+        EditorAutoTestHarness.RunIsolated("TacticalSelectionAutoTest", "Raycast direct sur le BORD du fantassin doit gagner même si l'ANCRE du char est plus proche en écran (régression 2026-09-19)",
+            TestDirectHitOnInfantryAlwaysWinsOverCloserTankAnchor, ref passed, ref failed);
+        EditorAutoTestHarness.RunIsolated("TacticalSelectionAutoTest", "Aucune unité près du tap : la sélection ne doit rien retourner",
             TestNoUnitNearTapReturnsNull, ref passed, ref failed);
-        RunIsolated("FIN DE TOUR bloque (reste en Planification) si une unité n'a aucun ordre",
+        EditorAutoTestHarness.RunIsolated("TacticalSelectionAutoTest", "FIN DE TOUR bloque (reste en Planification) si une unité n'a aucun ordre",
             TestEndTurnBlocksWithoutOrders, ref passed, ref failed);
-        RunIsolated("FIN DE TOUR passe en Exécution une fois TOUTES les unités ordonnées",
+        EditorAutoTestHarness.RunIsolated("TacticalSelectionAutoTest", "FIN DE TOUR passe en Exécution une fois TOUTES les unités ordonnées",
             TestEndTurnProceedsWhenAllOrdered, ref passed, ref failed);
-        RunIsolated("Barre d'escouade : le cycle passe par toutes les unités du groupe puis boucle",
+        EditorAutoTestHarness.RunIsolated("TacticalSelectionAutoTest", "Barre d'escouade : le cycle passe par toutes les unités du groupe puis boucle",
             TestSquadBarCycleGoesThroughAllUnits, ref passed, ref failed);
 
         Debug.Log($"[TacticalSelectionAutoTest] {passed} réussi(s), {failed} échoué(s).");
@@ -70,25 +74,6 @@ public static class TacticalSelectionAutoTest
         {
             throw new System.Exception($"[TacticalSelectionAutoTest] {failed} test(s) échoué(s) — voir le log ci-dessus pour le détail.");
         }
-    }
-
-    private static void RunIsolated(string label, System.Func<bool> test, ref int passed, ref int failed)
-    {
-        EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-        Run(label, test, ref passed, ref failed);
-    }
-
-    private static void Run(string label, System.Func<bool> test, ref int passed, ref int failed)
-    {
-        bool ok;
-        try { ok = test(); }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"[TacticalSelectionAutoTest] EXCEPTION pendant '{label}' : {e}");
-            ok = false;
-        }
-        if (ok) { passed++; Debug.Log($"[TacticalSelectionAutoTest] OK — {label}"); }
-        else { failed++; Debug.LogError($"[TacticalSelectionAutoTest] ECHEC — {label}"); }
     }
 
     // ---- Fabrique d'unité réelle (colliders/anchor configurés par le vrai UnitAI.Start()) --------
@@ -162,12 +147,46 @@ public static class TacticalSelectionAutoTest
         Vector2 tapScreenPos = cam.WorldToScreenPoint(infantry.transform.position);
 
         UnitAI raycastUnit = RaycastForUnit(cam, tapScreenPos);
-        UnitAI result = TacticalPathManager.ResolveClosestPlayerUnit(tapScreenPos, cam, raycastUnit, 60f);
+        UnitAI result = UnitSelectionResolver.Resolve(tapScreenPos, cam, raycastUnit, 60f);
 
         if (result != infantry)
         {
             Debug.LogError($"[TacticalSelectionAutoTest] Attendu Fantassin, obtenu {(result != null ? result.gameObject.name : "null")} " +
                             $"(raycastUnit brut = {(raycastUnit != null ? raycastUnit.gameObject.name : "null")}, tapScreenPos={tapScreenPos})");
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>Teste directement le CONTRAT du résolveur (pas la géométrie du raycast, déjà
+    /// couverte par TestInfantryNextToTankWins/TestDirectTapOnTankStillWins) : un raycastUnit non
+    /// nul doit TOUJOURS gagner, même quand le pointeur tombe pile sur l'ancre écran d'une AUTRE
+    /// unité (distance 0, gagnant garanti de la boucle tolérante à distance-écran). Avant la
+    /// réécriture structurelle du 2026-09-19, UnitSelectionResolver (ex-
+    /// TacticalPathManager.ResolveClosestPlayerUnit) laissait dans ce cas la boucle tolérante
+    /// l'emporter sur le raycast direct — volant la sélection au fantassin pourtant physiquement
+    /// touché par le tap, un vol de sélection statistiquement plus fréquent pour les petites unités
+    /// (fantassins) que pour les grosses (chars, dont le collider capte presque toujours le raycast
+    /// en premier lieu).</summary>
+    private static bool TestDirectHitOnInfantryAlwaysWinsOverCloserTankAnchor()
+    {
+        UnitAI tank = MakeRealUnit("TestCharLeopard3", new Vector3(0f, 0.95f, 0f), new Vector3(2.2f, 1.9f, 4.5f), 1);
+        UnitAI infantry = MakeRealUnit("TestFantassin3", new Vector3(2.0f, 0.9f, 0f), Vector3.one, 1);
+
+        Camera cam = MakeObliqueCommandCamera(new Vector3(1f, 0f, 0f));
+
+        // Le pointeur vise EXACTEMENT l'ancre écran du char (distance 0 dans la boucle tolérante,
+        // donc son candidat le plus fort possible) — mais un raycast réel a physiquement touché le
+        // FANTASSIN (simulé ici en le passant directement comme raycastUnit, exactement ce que
+        // l'appelant réel calcule depuis un Physics.Raycast).
+        Vector2 tapScreenPos = cam.WorldToScreenPoint(tank.SelectionAnchorWorldPos);
+
+        UnitAI result = UnitSelectionResolver.Resolve(tapScreenPos, cam, infantry, 60f);
+
+        if (result != infantry)
+        {
+            Debug.LogError($"[TacticalSelectionAutoTest] Attendu Fantassin (raycast direct doit toujours gagner, même pointeur sur l'ancre du char), " +
+                            $"obtenu {(result != null ? result.gameObject.name : "null")} (tapScreenPos={tapScreenPos})");
             return false;
         }
         return true;
@@ -186,7 +205,7 @@ public static class TacticalSelectionAutoTest
         Vector2 tapScreenPos = cam.WorldToScreenPoint(tankVisualCenter);
 
         UnitAI raycastUnit = RaycastForUnit(cam, tapScreenPos);
-        UnitAI result = TacticalPathManager.ResolveClosestPlayerUnit(tapScreenPos, cam, raycastUnit, 60f);
+        UnitAI result = UnitSelectionResolver.Resolve(tapScreenPos, cam, raycastUnit, 60f);
 
         if (result != tank)
         {
@@ -213,7 +232,7 @@ public static class TacticalSelectionAutoTest
         Vector2 tapScreenPos = new Vector2(unitScreenPos.x + 500f, unitScreenPos.y + 500f);
 
         UnitAI raycastUnit = RaycastForUnit(cam, tapScreenPos);
-        UnitAI result = TacticalPathManager.ResolveClosestPlayerUnit(tapScreenPos, cam, raycastUnit, 60f);
+        UnitAI result = UnitSelectionResolver.Resolve(tapScreenPos, cam, raycastUnit, 60f);
 
         if (result != null)
         {
@@ -308,8 +327,8 @@ public static class TacticalSelectionAutoTest
         TacticalPathManager mgr = MakeRealManager();
         // SelectionnerUnite (appelée par CycleSelectGroup) lit Camera.main pour son son de
         // confirmation — absent des autres tests de ce fichier, qui n'appellent jamais
-        // SelectionnerUnite directement (seulement ResolveClosestPlayerUnit, une méthode statique
-        // pure). Trouvé en conditions réelles ici même (NullReferenceException sur Camera.main).
+        // SelectionnerUnite directement (seulement UnitSelectionResolver.Resolve, une méthode
+        // statique pure). Trouvé en conditions réelles ici même (NullReferenceException sur Camera.main).
         GameObject camGo = new GameObject("TestCameraForSquadBar");
         camGo.AddComponent<Camera>().tag = "MainCamera";
 

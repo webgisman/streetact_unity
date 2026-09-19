@@ -114,32 +114,22 @@ namespace Novgov.Server
         /// jamais laisser matchInProgress bloqué à "true" pour toujours.</summary>
         private IEnumerator RunSiegeAttackDeployGuarded(PlayerConnection conn, long siegeId, int tileX, int tileY)
         {
-            IEnumerator inner = RunSiegeAttackDeploy(conn, siegeId, tileX, tileY);
-            while (true)
-            {
-                bool moved = false, crashed = false;
-                try { moved = inner.MoveNext(); }
-                catch (Exception e)
+            return SafeCoroutineRunner.Run(
+                RunSiegeAttackDeploy(conn, siegeId, tileX, tileY),
+                onComplete: () =>
+                {
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                },
+                onException: (Exception e) =>
                 {
                     Debug.LogError($"[Siège] Exception pendant le déploiement de l'attaquant (#{siegeId}) : {e}");
-                    crashed = true;
-                }
-                if (crashed)
-                {
                     try { if (!conn.IsDisconnected) conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "server_error" }); } catch { }
                     try { conn.Close(); } catch { }
                     matchInProgress = false;
                     StartCoroutine(ReportInstanceStatus());
-                    yield break;
                 }
-                if (!moved)
-                {
-                    matchInProgress = false;
-                    StartCoroutine(ReportInstanceStatus());
-                    yield break;
-                }
-                yield return inner.Current;
-            }
+            );
         }
 
         private IEnumerator RunSiegeAttackDeploy(PlayerConnection conn, long siegeId, int tileX, int tileY)
@@ -213,32 +203,22 @@ namespace Novgov.Server
 
         private IEnumerator RunSiegeDefendDeployGuarded(PlayerConnection conn, long siegeId, int tileX, int tileY)
         {
-            IEnumerator inner = RunSiegeDefendDeploy(conn, siegeId, tileX, tileY);
-            while (true)
-            {
-                bool moved = false, crashed = false;
-                try { moved = inner.MoveNext(); }
-                catch (Exception e)
+            return SafeCoroutineRunner.Run(
+                RunSiegeDefendDeploy(conn, siegeId, tileX, tileY),
+                onComplete: () =>
+                {
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
+                },
+                onException: (Exception e) =>
                 {
                     Debug.LogError($"[Siège] Exception pendant le déploiement du défenseur (#{siegeId}) : {e}");
-                    crashed = true;
-                }
-                if (crashed)
-                {
                     try { if (!conn.IsDisconnected) conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "server_error" }); } catch { }
                     try { conn.Close(); } catch { }
                     matchInProgress = false;
                     StartCoroutine(ReportInstanceStatus());
-                    yield break;
                 }
-                if (!moved)
-                {
-                    matchInProgress = false;
-                    StartCoroutine(ReportInstanceStatus());
-                    yield break;
-                }
-                yield return inner.Current;
-            }
+            );
         }
 
         private IEnumerator RunSiegeDefendDeploy(PlayerConnection conn, long siegeId, int tileX, int tileY)
@@ -380,24 +360,20 @@ namespace Novgov.Server
 
         private IEnumerator ResolveSiegeNowGuarded(long siegeId)
         {
-            IEnumerator inner = ResolveSiegeNow(siegeId);
-            while (true)
-            {
-                bool moved = false, crashed = false;
-                try { moved = inner.MoveNext(); }
-                catch (Exception e)
-                {
-                    Debug.LogError($"[Siège] Exception pendant la résolution du siège #{siegeId} : {e}");
-                    crashed = true;
-                }
-                if (crashed || !moved)
+            return SafeCoroutineRunner.Run(
+                ResolveSiegeNow(siegeId),
+                onComplete: () =>
                 {
                     matchInProgress = false;
                     StartCoroutine(ReportInstanceStatus());
-                    yield break;
+                },
+                onException: (Exception e) =>
+                {
+                    Debug.LogError($"[Siège] Exception pendant la résolution du siège #{siegeId} : {e}");
+                    matchInProgress = false;
+                    StartCoroutine(ReportInstanceStatus());
                 }
-                yield return inner.Current;
-            }
+            );
         }
 
         // =====================================================================

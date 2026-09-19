@@ -65,39 +65,23 @@ namespace Novgov.Server
         /// démarrer sur ce processus).</summary>
         private IEnumerator RunMatchLiveGuarded(PlayerConnection p1, PlayerConnection p2, string cacheKey)
         {
-            IEnumerator inner = RunMatchLive(p1, p2, cacheKey);
-            while (true)
-            {
-                bool moved = false;
-                bool crashed = false;
-                try
+            return SafeCoroutineRunner.Run(
+                RunMatchLive(p1, p2, cacheKey),
+                onComplete: () =>
                 {
-                    moved = inner.MoveNext();
-                }
-                catch (Exception e)
+                    activeMatchCount--;
+                },
+                onException: (Exception e) =>
                 {
                     Debug.LogError($"[MatchSessionManager] Exception non gérée pendant un match Live — abandon en match nul : {e}");
-                    crashed = true;
-                }
-
-                if (crashed)
-                {
                     AbortMatchSafely(p1);
                     AbortMatchSafely(p2);
                     if (CaptureZone.Instance != null) UnityEngine.Object.Destroy(CaptureZone.Instance.gameObject);
                     matchInProgress = false;
                     activeMatchCount--;
                     StartCoroutine(ReportInstanceStatus());
-                    yield break;
                 }
-
-                if (!moved)
-                {
-                    activeMatchCount--;
-                    yield break;
-                }
-                yield return inner.Current;
-            }
+            );
         }
 
         /// <summary>Équivalent "vivant" de RunMatch (MatchSessionManager_Matchmaking.cs) — même

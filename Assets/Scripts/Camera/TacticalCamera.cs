@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.EnhancedTouch;
+using Novgov.Gestures;
 using Touch = UnityEngine.InputSystem.EnhancedTouch.Touch;
 
 /// <summary>
@@ -264,7 +265,9 @@ public class TacticalCamera : MonoBehaviour
             float curDist = Vector2.Distance(p0, p1);
             float pinchDelta = (curDist - prevDist);
 
-            float dpiScale = (Screen.dpi > 0) ? (Screen.dpi / 160f) : 1f;
+            // Échelle DPI partagée avec la sélection tactile (TacticalPathManager_Input) — voir
+            // GestureScale, auparavant dupliquée ici à l'identique.
+            float dpiScale = GestureScale.TouchDpiScale;
             float pinchThreshold = 1.2f * dpiScale;
 
             if (Mathf.Abs(pinchDelta) > pinchThreshold)

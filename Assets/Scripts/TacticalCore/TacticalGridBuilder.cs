@@ -61,7 +61,12 @@ namespace Novgov.TacticalCore
         /// "Default", voir CityGenerator.CurrentGridCacheKey) — si omis, déduit automatiquement du
         /// CityGenerator de la scène courante (fonctionne aussi bien côté serveur que côté client,
         /// chacun ayant sa propre instance).</summary>
-        public static TacticalWorldState BuildFromScene(float radius = 120f, string cacheKey = null)
+        // Rayon (mètres, autour de l'origine) du monde jouable généré par CityGenerator — seule
+        // définition, réutilisée partout où une borne de carte est nécessaire (ex. clamp de
+        // déploiement côté serveur) pour éviter qu'une copie locale diverge de la valeur réelle.
+        public const float DefaultWorldRadius = 120f;
+
+        public static TacticalWorldState BuildFromScene(float radius = DefaultWorldRadius, string cacheKey = null)
         {
             if (string.IsNullOrEmpty(cacheKey))
             {

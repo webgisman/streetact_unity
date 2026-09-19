@@ -38,7 +38,7 @@
                 <ui:VisualElement class="icon icon-lg" style="background-image: url('/Assets/UI/Icons/crosshair.png');" />
                 <ui:VisualElement class="btn-text-col">
                     <ui:Label text="ATTAQUER (CONQUÊTE)" />
-                    <ui:Label text="Lancer une attaque sur une zone contestée" class="btn-subtitle" />
+                    <ui:Label text="Lancer une attaque sur une garnison IA en zone contestée" class="btn-subtitle" />
                 </ui:VisualElement>
             </ui:Button>
 
@@ -59,6 +59,14 @@
                 <ui:VisualElement class="btn-text-col">
                     <ui:Label text="ZONE DE CONTRÔLE" />
                     <ui:Label text="Combat en direct pour tenir le terrain" class="btn-subtitle" />
+                </ui:VisualElement>
+            </ui:Button>
+
+            <ui:Button name="btn-practice-ai" class="btn-secondary btn-with-icon" style="margin-bottom: 8px; min-height: 80px;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/lightning.png');" />
+                <ui:VisualElement class="btn-text-col">
+                    <ui:Label text="ENTRAÎNEMENT IA" />
+                    <ui:Label text="Pratiquez vos tactiques contre l'ordinateur" class="btn-subtitle" />
                 </ui:VisualElement>
             </ui:Button>
 
