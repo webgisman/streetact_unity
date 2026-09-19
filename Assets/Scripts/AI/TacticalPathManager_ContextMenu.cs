@@ -352,7 +352,13 @@ public partial class TacticalPathManager
 
         if (selectedUnitAI != null && selectedUnitAI.isTank)
         {
-            ShowContextMenu("BLINDÉ : ORDRE DE MANOEUVRE", onCancel,
+            // Titre distinct char/canon (2026-09-19, retour joueur : "j'ai posé un canon, il se
+            // transforme en char") — le modèle 3D et le type réel de l'unité n'ont jamais changé
+            // (voir UnitAI.isCanonVehicle, vérifié fiable de bout en bout), mais ce menu affichait
+            // jusqu'ici le même intitulé générique "BLINDÉ" pour les deux types, laissant croire à
+            // une confusion entre les deux alors qu'il s'agissait seulement d'un libellé partagé.
+            string title = selectedUnitAI.isCanonVehicle ? "VÉHICULE CANON : ORDRE DE MANOEUVRE" : "CHAR : ORDRE DE MANOEUVRE";
+            ShowContextMenu(title, onCancel,
                 ("1. AVANCER (Déplacement)", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
                 ("2. GUETTER (Surveillance)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
                 ("3. ATTENDRE 30 SECONDES", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))

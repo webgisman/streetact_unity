@@ -79,14 +79,20 @@ public class UIScreenManager : MonoBehaviour
             // picking-mode de son propre contenu, ce wrapper ne doit jamais interférer.
             instance.pickingMode = PickingMode.Ignore;
 
-            // La propriété USS "picking-mode: Ignore;" déclarée dans le style inline de chaque
-            // UXML (sur son propre élément "root") ne s'applique pas de façon fiable — vérifié
-            // empiriquement : un clic continue de la trouver en PickingMode.Position malgré la
-            // déclaration USS. On le force donc ici en C#, qui n'a besoin d'aucun parsing de
-            // feuille de style pour être correct. Ne concerne QUE l'élément nommé "root" propre à
-            // l'écran (le contenu réel à l'intérieur gère son propre picking, ex: chaque Button).
-            VisualElement innerRoot = instance.Q<VisualElement>("root");
-            if (innerRoot != null) innerRoot.pickingMode = PickingMode.Ignore;
+            // La propriété USS "picking-mode: ...;" déclarée dans le style inline d'un UXML ne
+            // s'applique pas de façon fiable au premier Instantiate() — vérifié empiriquement : un
+            // clic continue de trouver l'élément en PickingMode.Position malgré une déclaration
+            // "Ignore" dans le UXML. Ce n'était corrigé ici QUE pour l'élément nommé "root" de
+            // chaque écran (une ligne, un nom) — tout le reste de l'arbre de CHAQUE UXML restait
+            // exposé au même bug, silencieusement. Rapport joueur du 2026-09-19 : "top-bar" dans
+            // InMatchHudScreen.uxml (déclaré "picking-mode: Ignore", un simple conteneur de mise en
+            // page autour de la bannière d'équipe) absorbait quand même des taps destinés à la
+            // scène 3D, exactement ce bug, juste sur un nom différent — et rien ne garantit qu'il
+            // soit le seul dans les ~20 écrans du projet. Corrigé une fois pour tous : on relit ici
+            // la valeur RÉELLEMENT déclarée dans le UXML (StyleEnum.keyword informe si "picking-
+            // mode" a été explicitement écrit ou non, indépendamment de sa valeur résolue buguée)
+            // et on la réapplique en C# sur TOUTE l'arborescence, pas seulement "root".
+            ReapplyDeclaredPickingMode(instance);
 
             // Transition d'apparition (2026-09-13) — voir Theme.tss ".screen-fade" pour le pourquoi.
             // État de départ "invisible/légèrement réduit" : Show()/SetVisible() l'amènent à
@@ -101,6 +107,24 @@ public class UIScreenManager : MonoBehaviour
         }
 
         BuildDebugOverlay(root);
+    }
+
+    /// <summary>Relit récursivement, sur TOUTE l'arborescence de <paramref name="element"/>, la
+    /// valeur de "picking-mode" réellement écrite dans son UXML source (via <c>style.pickingMode.
+    /// keyword</c>, qui reste correct même quand la valeur RÉSOLUE au premier Instantiate() ne
+    /// l'est pas — voir le commentaire au point d'appel) et la réapplique explicitement en C#.
+    /// <c>StyleKeyword.Undefined</c> = rien écrit dans ce UXML pour cet élément précis, on ne
+    /// touche à rien (laisse la valeur par défaut/héritée telle quelle).</summary>
+    private static void ReapplyDeclaredPickingMode(VisualElement element)
+    {
+        if (element.style.pickingMode.keyword != StyleKeyword.Undefined)
+        {
+            element.pickingMode = element.style.pickingMode.value;
+        }
+        foreach (VisualElement child in element.Children())
+        {
+            ReapplyDeclaredPickingMode(child);
+        }
     }
 
     // --- Outil de vérification (diagnostic écrans superposés) ---------------------------------
