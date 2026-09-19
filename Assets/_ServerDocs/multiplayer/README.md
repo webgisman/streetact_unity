@@ -11,12 +11,17 @@ tous les modes, deux rythmes de jeu 5 min/6h, notifications) — il fait foi en 
 avec le résumé "Décisions d'architecture" plus bas dans cette page ou avec le document 04, tous les
 deux écrits pour l'architecture précédente (résolveur pur/déterministe, remplacée le 2026-09-13).
 
-**État (2026-09-19) : premier vrai match à 2 joueurs authentifiés joué de bout en bout sur
-novgov.com** (matchmaking → déploiement → tour réel), après avoir découvert et corrigé une
-compilation cassée (voir [13-session-2026-09-19-compile-fixes-real-2p-test.md](13-session-2026-09-19-compile-fixes-real-2p-test.md)).
+**État (2026-09-19, nuit) : premier vrai test à 2 joueurs EN DIRECT (Multiplayer Play Mode contre le
+vrai serveur de production)**, plusieurs bugs réels trouvés et corrigés pendant la partie — voir
+[14-session-2026-09-19-live-playtest-bug-hunt.md](14-session-2026-09-19-live-playtest-bug-hunt.md)
+(cercle de déploiement fantôme, budget de points non désiré, un Véhicule Canon qui se transformait
+en Char après déploiement — course `isCanonVehicle`/`Start()`, verrouillée par un nouveau test —,
+taps absorbés en silence par l'interface — correctif généralisé en liste blanche). Avant ça, la
+compilation avait été trouvée cassée et corrigée, avec le tout premier vrai match à 2 joueurs
+authentifiés joué de bout en bout — voir
+[13-session-2026-09-19-compile-fixes-real-2p-test.md](13-session-2026-09-19-compile-fixes-real-2p-test.md).
 Voir [12-production-deployment-2026-09-13.md](12-production-deployment-2026-09-13.md) pour l'état
-antérieur du déploiement (bascule vers le vrai moteur Unity), et le document 13 pour ce qui a
-réellement été vérifié en jeu depuis.
+antérieur du déploiement (bascule vers le vrai moteur Unity).
 
 <details>
 <summary>État précédent (2026-09-08), avant la bascule du 2026-09-13 — historique, plus à jour</summary>
@@ -73,7 +78,8 @@ fichiers de config serveur (yml, sql, conf) — Unity les ignore au build.
 12. [00-current-architecture-2026-09-13.md](00-current-architecture-2026-09-13.md) — **document de
     référence pour l'état actuel** du calcul de combat/déploiement/rythmes de jeu.
 13. [09-real-unity-combat-investigation-2026-09-13.md](09-real-unity-combat-investigation-2026-09-13.md), [10-deathmatch-zonecontrol-switched-to-live-2026-09-13.md](10-deathmatch-zonecontrol-switched-to-live-2026-09-13.md), [11-real-engine-async-pace-notifications-2026-09-13.md](11-real-engine-async-pace-notifications-2026-09-13.md), [12-production-deployment-2026-09-13.md](12-production-deployment-2026-09-13.md) — la bascule du 2026-09-13, dans l'ordre chronologique.
-14. [13-session-2026-09-19-compile-fixes-real-2p-test.md](13-session-2026-09-19-compile-fixes-real-2p-test.md) — compilation cassée trouvée/corrigée, premier vrai test à 2 joueurs authentifiés, audit serveur (5 constats non corrigés).
+14. [13-session-2026-09-19-compile-fixes-real-2p-test.md](13-session-2026-09-19-compile-fixes-real-2p-test.md) — compilation cassée trouvée/corrigée, premier vrai test à 2 joueurs authentifiés, audit serveur (5 constats, TOUS corrigés le même soir).
+15. [14-session-2026-09-19-live-playtest-bug-hunt.md](14-session-2026-09-19-live-playtest-bug-hunt.md) — chasse aux bugs pendant un vrai test à 2 joueurs EN DIRECT : cercle de déploiement fantôme, budget de points retiré, bug de type d'unité (Canon → Char) trouvé et verrouillé par un test, généralisation de la protection anti-absorption de taps.
 
 ## Identifiants
 
