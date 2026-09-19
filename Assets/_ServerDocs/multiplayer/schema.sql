@@ -513,7 +513,11 @@ create table public.zone_sieges (
     zoom smallint not null,
     attacker_user_id uuid not null references auth.users(id) on delete cascade,
     defender_user_id uuid not null references auth.users(id) on delete cascade,
-    status text not null default 'pending', -- 'pending' | 'resolved'
+    -- 'resolving' (2026-09-19, rapport d'audit §1) : réservation atomique le temps de la résolution
+    -- (voir MatchSessionManager_Siege.ResolveSiegeNow) — sans cet état intermédiaire, deux instances
+    -- du pool recevant chacune un déploiement au même instant pouvaient toutes les deux lire encore
+    -- 'pending' et déclencher une résolution en double.
+    status text not null default 'pending', -- 'pending' | 'resolving' | 'resolved'
     -- Chacun un objet {"units":[{unit_id,unit_type,team_id,x,y,z}, ...]} — même structure que
     -- Network.DeployedUnit côté client/serveur — jamais un tableau JSON nu au premier niveau
     -- (limitation de JsonUtility côté Unity, voir MatchSessionManager_AsyncPause.paused_roster_json
@@ -576,8 +580,10 @@ begin
         raise exception 'Zone protégée jusqu''à %', v_shield;
     end if;
 
+    -- 'resolving' inclus (2026-09-19) : une résolution en cours (voir ResolveSiegeNow) ne doit pas
+    -- laisser cette fenêtre, même brève, ouvrir un second siège sur la même Zone.
     select id into v_existing from public.zone_sieges
-        where tile_x = p_tile_x and tile_y = p_tile_y and zoom = p_zoom and status = 'pending';
+        where tile_x = p_tile_x and tile_y = p_tile_y and zoom = p_zoom and status in ('pending', 'resolving');
     if v_existing is not null then
         raise exception 'Un siège est déjà en cours sur cette zone';
     end if;

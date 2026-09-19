@@ -66,8 +66,12 @@ namespace Novgov.Server
 
             if (claims == null || string.IsNullOrEmpty(claims.sub)) return null;
 
+            // Fail-closed : un jeton sans "exp" (ou exp<=0) doit être REJETÉ, pas traité comme
+            // n'expirant jamais. GoTrue émet toujours "exp" en pratique, mais l'ancienne condition
+            // (`claims.exp > 0 && ...`) sautait entièrement le contrôle d'expiration dans le cas
+            // contraire au lieu d'invalider le jeton — une inversion fail-open classique.
             long nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            if (claims.exp > 0 && nowUnix > claims.exp) return null; // token expiré
+            if (claims.exp <= 0 || nowUnix > claims.exp) return null; // absent, invalide ou expiré
 
             return claims.sub;
         }

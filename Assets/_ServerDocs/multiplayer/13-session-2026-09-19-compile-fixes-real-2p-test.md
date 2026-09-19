@@ -136,41 +136,49 @@ bâtiment" (voir `03-network-protocol.md`), mais l'écart peut être surprenant 
 un point précis près d'un bâtiment dense. Pas de quoi parler de bug sans un vrai retour joueur — à
 garder en tête si ce genre de plainte remonte.
 
-## 6. Audit ciblé du code serveur — 5 constats, non corrigés, à trancher
+## 6. Audit ciblé du code serveur — 5 constats, TOUS corrigés le même soir
 
 Une recherche dédiée (lecture complète des 14 fichiers de `Assets/Scripts/Server/`) a remonté 5
-problèmes concrets, tous confirmés par lecture directe du code (pas de spéculation). **Aucun n'a été
-corrigé cette session** — ce sont des changements de logique de concurrence non triviaux qui
-mériteraient leur propre passage de tests, pas un correctif à la volée en fin de session :
+problèmes concrets, tous confirmés par lecture directe du code (pas de spéculation). Sur demande
+explicite ("j'ai dit corrige tous les bugs"), les 5 ont été corrigés, revalidés (recompile + 5
+suites de tests + rebuild serveur + redéploiement sur les 3 instances + re-test réel à 2 joueurs, à
+nouveau au vert) et commités :
 
-1. **Course de résolution de siège inter-instances** (`MatchSessionManager_Siege.cs`, `ResolveSiegeNow`) —
-   aucune réservation atomique de la ligne `zone_sieges` avant résolution (contrairement au pattern
-   déjà utilisé pour `zones.owner_user_id` dans le même fichier) : un attaquant et un défenseur
-   connectés à deux instances différentes au même moment peuvent chacun déclencher une résolution de
-   combat indépendante, avec des résultats potentiellement contradictoires envoyés aux deux joueurs.
-2. **Un match "async" en pause peut se terminer en nul sur un simple hoquet réseau** — si
-   `FetchPausedRoster` échoue au réveil (`MatchSessionManager_AsyncPause.cs`), aucune unité n'est
-   respawnée pour AUCUNE équipe, et `RunMatchLive` déclare directement match nul — contredisant le
-   commentaire du code ("le match continue quand même").
-3. **`practice_ai` peut bloquer un vrai appariement pendant des heures** — `matchInProgress` est un
-   verrou global PAR INSTANCE partagé par tous les modes ; une partie d'entraînement solo (pensée
-   pour "patienter") peut tenir ce verrou jusqu'à 5h et bloquer deux vrais joueurs qui se mettent en
-   file au même moment sur cette instance.
-4. **Perte de mise à jour sur `profiles.rating`** entre deux parties concurrentes du même joueur
-   (Conquête + Deathmatch simultanés sur deux instances) — lecture-calcul-écriture non atomique,
-   contrairement au pattern déjà utilisé ailleurs dans le même fichier pour `zones.owner_user_id`.
-5. **`JwtValidator.cs:70`** — un jeton sans `exp` (ou `exp=0`) est traité comme "n'expire jamais" au
-   lieu d'être rejeté (`if (claims.exp > 0 && ...)` au lieu de `if (claims.exp <= 0 || ...)`,
-   inversion classique fail-open au lieu de fail-closed). Sans conséquence tant que GoTrue émet
-   toujours `exp`, mais latent.
+1. **Course de résolution de siège inter-instances** (`MatchSessionManager_Siege.cs`,
+   `ResolveSiegeNow`) — un attaquant et un défenseur connectés à deux instances différentes au même
+   moment pouvaient chacun déclencher une résolution de combat indépendante, avec des notifications
+   contradictoires envoyées aux deux joueurs. **Corrigé** : réservation atomique de la ligne
+   (`status: pending -> resolving` via un PATCH conditionnel, même principe que `CaptureZoneInDb`
+   pour `zones.owner_user_id`) avant toute résolution ; l'instance perdante voit 0 ligne affectée et
+   abandonne immédiatement. `start_siege()` (schema.sql, appliqué en production) traite maintenant
+   `'resolving'` comme "siège déjà en cours", pour fermer aussi la fenêtre côté déclaration d'un
+   nouveau siège.
+2. **Un match "async" en pause pouvait se terminer en nul sur un simple hoquet réseau** — si
+   `FetchPausedRoster` échouait au réveil, aucune unité n'était respawnée pour AUCUNE équipe, et
+   `RunMatchLive` déclarait directement match nul. **Corrigé** : nouvelle
+   `FetchPausedRosterWithRetry` (5 tentatives, 2/4/8/16/30s) avant d'abandonner — un blip isolé
+   (le cas réel déjà vu en prod le 2026-09-16) n'entraîne plus la perte du match ; un échec
+   PERSISTANT (~1 minute) reste loggé en erreur explicite plutôt que confondu avec un vrai double
+   anéantissement.
+3. **`practice_ai` pouvait bloquer un vrai appariement pendant des heures** — partageait le plafond
+   de 60 tours des vrais modes (`DeathmatchTurnCap`) sur le même verrou `matchInProgress` par
+   instance. **Corrigé** : nouveau plafond dédié `PracticeAiTurnCap = 15`, sans toucher au plafond
+   des vrais modes — borne le pire cas à ~75 min au lieu de 5h.
+4. **Perte de mise à jour sur `profiles.rating`** entre deux parties concurrentes du même joueur.
+   **Corrigé** : nouveau `ApplyRatingDeltaWithRetry` (verrouillage optimiste — lecture fraîche +
+   écriture conditionnée sur cette même valeur, jusqu'à 5 tentatives), partagé par `UpdateRatings`
+   (ELO complet, Deathmatch/Zone de Contrôle) et `ApplyConquestRatingDelta` (delta fixe, Conquête).
+5. **`JwtValidator.cs:70`** — un jeton sans `exp` était traité comme "n'expire jamais" au lieu
+   d'être rejeté (fail-open). **Corrigé** : `if (claims.exp <= 0 || nowUnix > claims.exp) return
+   null;` (fail-closed).
 
 ## Ce qui reste à faire
 
-- Décider si/quand corriger les 5 points du §6 (aucun n'est urgent pour un usage normal à faible
-  concurrence, mais 1 et 4 deviendront réels dès que plusieurs matchs/sièges tournent en parallèle
-  sur des instances différentes — exactement le scénario que le pool à 3 instances est censé
-  permettre).
 - Le test à 2 joueurs de cette session valide le PROTOCOLE réseau et la boucle de jeu serveur de
   bout en bout, mais PAS le rendu visuel client (caméra, aura, HUD) — un script Python ne "voit"
   rien à l'écran. Les deux correctifs visuels du §2 restent à confirmer par un vrai build client sur
   un appareil/écran.
+- Les correctifs du §6 (course de siège, retry réseau, plafonds, rating) n'ont pas de test
+  automatisé dédié qui reproduit la course elle-même (2 instances réelles en parallèle) — validés
+  par lecture + non-régression du test à 2 joueurs, pas par un test qui provoque explicitement la
+  concurrence. À envisager si un vrai incident de ce type est un jour rapporté.

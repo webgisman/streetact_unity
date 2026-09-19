@@ -37,31 +37,10 @@ namespace Novgov.Server
                 yield break;
             }
 
-            string url = $"{GameServerBootstrap.RestUrl}/profiles?id=eq.{attacker.UserId}&select=rating";
-            using var req = UnityWebRequest.Get(url);
-            req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
-            req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
-            yield return req.SendWebRequest();
-
-            int currentRating = 1000;
-            if (req.result == UnityWebRequest.Result.Success)
-            {
-                try
-                {
-                    string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
-                    var parsed = JsonUtility.FromJson<RatingQueryResult>(wrapped);
-                    if (parsed?.items != null && parsed.items.Length > 0) currentRating = parsed.items[0].rating;
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"[MatchSessionManager] Parsing rating (conquête) échoué : {ex.Message}");
-                }
-            }
-
-            int newRating = Mathf.Max(0, currentRating + delta);
-            attacker.NewRating = newRating;
-            attacker.RatingDelta = newRating - currentRating;
-            yield return PostgrestPatch($"/profiles?id=eq.{attacker.UserId}", "{\"rating\":" + newRating + "}");
+            // Verrouillage optimiste partagé avec UpdateRatings (MatchSessionManager_Persistence.cs)
+            // — ce même joueur peut avoir un Deathmatch qui se termine sur une autre instance à
+            // quelques centaines de ms d'écart (rapport d'audit §4).
+            yield return ApplyRatingDeltaWithRetry(attacker, delta);
         }
 
         // =====================================================================
@@ -561,6 +540,16 @@ namespace Novgov.Server
         private const int MaxConsecutiveMissedTurns = 3;
         private int ConsecutiveMissedTurns = 0;
 
+        // Plafond de tours DÉDIÉ à l'entraînement contre l'IA, distinct de DeathmatchTurnCap (rapport
+        // d'audit §3) : l'entraînement partage le même verrou matchInProgress qu'un vrai match ou une
+        // Conquête (un seul combat "vivant" par instance) — avec le plafond de 60 tours des vrais
+        // modes et PlanningSeconds=300s, un joueur qui délibère réellement à chaque tour pouvait
+        // monopoliser une instance jusqu'à 5h et bloquer un vrai appariement Deathmatch/Zone de
+        // Contrôle en attente sur cette même instance, à l'exact opposé du but de ce mode ("patienter
+        // en attendant un vrai adversaire"). Une garnison IA de base tombe de toute façon en quelques
+        // tours ; 15 borne le pire cas à ~75 min au lieu de 5h sans changer l'équilibrage réel.
+        private const int PracticeAiTurnCap = 15;
+
         // =====================================================================
         // Entraînement contre l'IA (2026-09-02) — permet à un joueur SEUL en file d'attente
         // Deathmatch/Zone de Contrôle de jouer une partie immédiate contre une garnison IA sur la
@@ -684,7 +673,7 @@ namespace Novgov.Server
                     matchOver = true;
                     winnerTeam = (playerAlive == 0 && garrisonAlive == 0) ? 0 : (playerAlive == 0 ? 2 : 1);
                 }
-                else if (turnNumber >= DeathmatchTurnCap)
+                else if (turnNumber >= PracticeAiTurnCap)
                 {
                     matchOver = true;
                     int playerHealth = UnitAI.AllLivingUnits.Where(u => u.teamID == 1).Sum(u => u.health);

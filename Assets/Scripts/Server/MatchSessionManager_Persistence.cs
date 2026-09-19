@@ -162,21 +162,67 @@ namespace Novgov.Server
             float expected1 = 1f / (1f + Mathf.Pow(10f, (rating2 - rating1) / 400f));
             float expected2 = 1f / (1f + Mathf.Pow(10f, (rating1 - rating2) / 400f));
 
-            // Mathf.Max(0, ...) : sans plafond bas, un joueur en série de défaites pouvait voir son
-            // rating calculé descendre sous 0 (voir rapport d'audit §1.9) — un score ELO négatif n'a
-            // pas de sens affiché sur un classement.
-            int newRating1 = Mathf.Max(0, Mathf.RoundToInt(rating1 + EloKFactor * (score1 - expected1)));
-            int newRating2 = Mathf.Max(0, Mathf.RoundToInt(rating2 + EloKFactor * (score2 - expected2)));
+            int delta1 = Mathf.RoundToInt(EloKFactor * (score1 - expected1));
+            int delta2 = Mathf.RoundToInt(EloKFactor * (score2 - expected2));
 
-            p1.NewRating = newRating1;
-            p1.RatingDelta = newRating1 - rating1;
-            p2.NewRating = newRating2;
-            p2.RatingDelta = newRating2 - rating2;
+            yield return ApplyRatingDeltaWithRetry(p1, delta1);
+            yield return ApplyRatingDeltaWithRetry(p2, delta2);
 
-            yield return PostgrestPatch($"/profiles?id=eq.{p1.UserId}", "{\"rating\":" + newRating1 + "}");
-            yield return PostgrestPatch($"/profiles?id=eq.{p2.UserId}", "{\"rating\":" + newRating2 + "}");
+            Debug.Log($"[MatchSessionManager] Ratings mis à jour : {p1.UserId} ->{p1.NewRating} ({(p1.RatingDelta >= 0 ? "+" : "")}{p1.RatingDelta}), {p2.UserId} ->{p2.NewRating} ({(p2.RatingDelta >= 0 ? "+" : "")}{p2.RatingDelta})");
+        }
 
-            Debug.Log($"[MatchSessionManager] Ratings mis à jour : {p1.UserId} {rating1}->{newRating1}, {p2.UserId} {rating2}->{newRating2}");
+        private const int RatingUpdateMaxAttempts = 5;
+
+        /// <summary>Applique <paramref name="delta"/> au rating ACTUEL de <paramref name="player"/>
+        /// avec verrouillage optimiste (lecture fraîche + écriture conditionnée sur cette même
+        /// valeur, voir PostgrestPatchChecked/CaptureZoneInDb pour le même principe déjà utilisé pour
+        /// zones.owner_user_id) — sans ça, deux parties de ce même joueur qui se terminent à
+        /// quelques centaines de ms d'écart sur deux instances différentes (Conquête + Deathmatch,
+        /// rien ne l'empêche) pouvaient voir la seconde écriture écraser la première avec un rating
+        /// déjà obsolète, perdant silencieusement un delta de classement (rapport d'audit §4).
+        /// Utilisé à la fois ici (ELO complet) et par ApplyConquestRatingDelta (delta fixe).</summary>
+        private IEnumerator ApplyRatingDeltaWithRetry(PlayerConnection player, int delta)
+        {
+            for (int attempt = 0; attempt < RatingUpdateMaxAttempts; attempt++)
+            {
+                int currentRating = 1000;
+                bool readOk = false;
+                using (var req = UnityWebRequest.Get($"{GameServerBootstrap.RestUrl}/profiles?id=eq.{player.UserId}&select=rating"))
+                {
+                    req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
+                    req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
+                    yield return req.SendWebRequest();
+                    if (req.result == UnityWebRequest.Result.Success)
+                    {
+                        try
+                        {
+                            string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
+                            var parsed = JsonUtility.FromJson<RatingQueryResult>(wrapped);
+                            if (parsed?.items != null && parsed.items.Length > 0) { currentRating = parsed.items[0].rating; readOk = true; }
+                        }
+                        catch (Exception ex) { Debug.LogWarning($"[MatchSessionManager] Parsing rating ({player.UserId}) échoué : {ex.Message}"); }
+                    }
+                    else Debug.LogWarning($"[MatchSessionManager] Lecture rating ({player.UserId}) échouée : {req.error}");
+                }
+                if (!readOk) yield break; // panne réseau : on abandonne plutôt que de boucler sur une IHM absente
+
+                // Mathf.Max(0, ...) : sans plafond bas, un joueur en série de défaites pouvait voir
+                // son rating calculé descendre sous 0 (rapport d'audit §1.9) — un score négatif n'a
+                // pas de sens affiché sur un classement.
+                int newRating = Mathf.Max(0, currentRating + delta);
+                bool applied = false;
+                yield return PostgrestPatchChecked($"/profiles?id=eq.{player.UserId}&rating=eq.{currentRating}", "{\"rating\":" + newRating + "}", ok => applied = ok);
+                if (applied)
+                {
+                    player.NewRating = newRating;
+                    player.RatingDelta = newRating - currentRating;
+                    yield break;
+                }
+                // Le rating a changé entre notre lecture et notre écriture (une autre partie de ce
+                // même joueur vient de se terminer ailleurs) : on relit la valeur fraîche et retente
+                // plutôt que d'écraser en aveugle.
+            }
+            Debug.LogWarning($"[MatchSessionManager] Mise à jour du rating de {player.UserId} abandonnée après {RatingUpdateMaxAttempts} tentatives (contention répétée).");
         }
 
         [Serializable] private class RatingEntry { public string id; public int rating; }

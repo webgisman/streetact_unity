@@ -124,11 +124,12 @@ namespace Novgov.Server
             Debug.Log($"[AsyncPause] [{matchId}] Effectif ({dto.units.Length} unité(s)) sérialisé (garnison/intérieur/guet/camouflage/toit inclus) — scène libérée pour d'autres matchs.");
         }
 
-        /// <summary>Relit le dernier effectif sérialisé pour ce match — null si jamais mis en pause
-        /// (ne devrait pas arriver pour un match async après son premier tour) ou en cas d'échec réseau
-        /// (le match continue quand même, voir l'appelant : un effectif introuvable revient à un repli
-        /// "aucune unité respawnée", jamais une exception qui planterait le match).</summary>
-        private IEnumerator FetchPausedRoster(string matchId, Action<PausedRosterDto> onResult)
+        /// <summary>Relit le dernier effectif sérialisé pour ce match. <paramref name="onResult"/>
+        /// reçoit (roster, réussi) — "réussi=false" signifie un échec RÉSEAU/parsing (à retenter, voir
+        /// FetchPausedRosterWithRetry), à ne JAMAIS confondre avec "réussi=true, roster=null" (le champ
+        /// est authentiquement absent — ne devrait pas arriver pour un match async après son premier
+        /// tour, mais serait alors une vraie absence de données, pas une panne à retenter).</summary>
+        private IEnumerator FetchPausedRoster(string matchId, Action<PausedRosterDto, bool> onResult)
         {
             string url = $"{GameServerBootstrap.RestUrl}/matches?id=eq.{matchId}&select=paused_roster_json";
             using var req = UnityWebRequest.Get(url);
@@ -139,7 +140,7 @@ namespace Novgov.Server
             if (req.result != UnityWebRequest.Result.Success)
             {
                 Debug.LogWarning($"[AsyncPause] [{matchId}] Lecture de l'effectif en pause échouée : {req.error}");
-                onResult(null);
+                onResult(null, false);
                 yield break;
             }
 
@@ -150,9 +151,9 @@ namespace Novgov.Server
                 // sous-objet avant de le redonner à JsonUtility.
                 string text = req.downloadHandler.text.Trim();
                 int fieldStart = text.IndexOf("\"paused_roster_json\":", StringComparison.Ordinal);
-                if (fieldStart < 0) { onResult(null); yield break; }
+                if (fieldStart < 0) { onResult(null, true); yield break; }
                 int braceStart = text.IndexOf('{', fieldStart);
-                if (braceStart < 0) { onResult(null); yield break; }
+                if (braceStart < 0) { onResult(null, true); yield break; }
                 int depth = 0, i = braceStart;
                 for (; i < text.Length; i++)
                 {
@@ -160,13 +161,44 @@ namespace Novgov.Server
                     else if (text[i] == '}') { depth--; if (depth == 0) break; }
                 }
                 string rosterJson = text.Substring(braceStart, i - braceStart + 1);
-                onResult(JsonUtility.FromJson<PausedRosterDto>(rosterJson));
+                onResult(JsonUtility.FromJson<PausedRosterDto>(rosterJson), true);
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"[AsyncPause] [{matchId}] Parsing de l'effectif en pause échoué : {ex.Message}");
-                onResult(null);
+                onResult(null, false);
             }
+        }
+
+        private static readonly float[] PausedRosterRetryDelaysSeconds = { 2f, 4f, 8f, 16f, 30f };
+
+        /// <summary>Enveloppe FetchPausedRoster avec plusieurs tentatives espacées (2/4/8/16/30s)
+        /// avant d'abandonner — un blip PostgREST isolé (déjà vu en prod le 2026-09-16 pour un autre
+        /// endpoint) ne doit pas se traduire par "aucune unité respawnée pour personne" puis un match
+        /// nul immédiat (rapport d'audit §2) : un match async représente potentiellement des heures
+        /// d'enjeu de classement. <paramref name="onResult"/> reçoit (roster, réussi) — voir
+        /// FetchPausedRoster pour la distinction réussi/échoué.</summary>
+        private IEnumerator FetchPausedRosterWithRetry(string matchId, Action<PausedRosterDto, bool> onResult)
+        {
+            for (int attempt = 0; attempt <= PausedRosterRetryDelaysSeconds.Length; attempt++)
+            {
+                PausedRosterDto roster = null;
+                bool ok = false;
+                yield return FetchPausedRoster(matchId, (r, success) => { roster = r; ok = success; });
+                if (ok)
+                {
+                    onResult(roster, true);
+                    yield break;
+                }
+                if (attempt < PausedRosterRetryDelaysSeconds.Length)
+                {
+                    float delay = PausedRosterRetryDelaysSeconds[attempt];
+                    Debug.LogWarning($"[AsyncPause] [{matchId}] Nouvel essai de lecture de l'effectif en pause dans {delay}s (tentative {attempt + 2}/{PausedRosterRetryDelaysSeconds.Length + 1}).");
+                    yield return new WaitForSeconds(delay);
+                }
+            }
+            Debug.LogError($"[AsyncPause] [{matchId}] Lecture de l'effectif en pause abandonnée après {PausedRosterRetryDelaysSeconds.Length + 1} tentatives — le match va se résoudre comme si les deux camps étaient anéantis, PAS parce que c'est réellement le cas.");
+            onResult(null, false);
         }
 
         /// <summary>Respawn RÉEL (UnitSpawnerUI.SpawnUnitAt, pas une donnée pure) de chaque unité de

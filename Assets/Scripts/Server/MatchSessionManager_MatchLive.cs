@@ -203,7 +203,7 @@ namespace Novgov.Server
                     else if (!defaultMapLoaded) yield return RestoreDefaultMapOnServer();
 
                     PausedRosterDto roster = null;
-                    yield return FetchPausedRoster(matchId, r => roster = r);
+                    yield return FetchPausedRosterWithRetry(matchId, (r, ok) => roster = r);
                     RespawnPausedRoster(roster);
                     // Zone de Contrôle : une CaptureZone fraîche est recréée (l'ancienne a été
                     // détruite avant la pause), mais sa progression est restaurée depuis le roster

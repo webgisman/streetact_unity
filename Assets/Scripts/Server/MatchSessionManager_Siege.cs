@@ -498,7 +498,25 @@ namespace Novgov.Server
         {
             SiegeRowDto siege = null;
             yield return FetchSiegeRow(siegeId, s => siege = s);
-            if (siege == null || siege.status != "pending") yield break; // déjà résolu ailleurs (course improbable) ou disparu
+            if (siege == null || siege.status != "pending") yield break; // déjà résolu ailleurs ou disparu
+
+            // RÉSERVATION ATOMIQUE (rapport d'audit §1, course de résolution inter-instances) :
+            // l'attaquant et le défenseur peuvent soumettre leur déploiement à quelques instances
+            // DIFFÉRENTES du pool (voir RunSiegeAttackDeploy/RunSiegeDefendDeploy) au même instant —
+            // chacune relit alors la même ligne encore "pending" (l'écriture de l'autre est déjà
+            // commitée) et déclencherait sinon sa PROPRE résolution en parallèle : deux simulations
+            // indépendantes (PhysX/NavMesh non déterministe), deux écritures concurrentes de
+            // status/winner_user_id, et des notifications potentiellement CONTRADICTOIRES pour les
+            // deux joueurs. Le PATCH conditionnel ci-dessous (même principe que CaptureZoneInDb pour
+            // zones.owner_user_id) ne peut réussir que pour UNE SEULE instance : la perdante voit 0
+            // ligne affectée et abandonne immédiatement.
+            bool reserved = false;
+            yield return PostgrestPatchChecked($"/zone_sieges?id=eq.{siegeId}&status=eq.pending", "{\"status\":\"resolving\"}", ok => reserved = ok);
+            if (!reserved)
+            {
+                Debug.Log($"[Siège] #{siegeId} déjà réservé par une autre instance pour résolution — abandon ici.");
+                yield break;
+            }
 
             yield return LoadZoneOnServer(siege.tile_x, siege.tile_y);
             UnitSpawnerUI.Instance.ClearAllUnits();
