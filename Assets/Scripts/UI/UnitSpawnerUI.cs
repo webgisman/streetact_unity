@@ -757,6 +757,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
             else if (type == UnitType.VehiculeCanon)
             {
                 ai.isTank = true;
+                ai.isCanonVehicle = true;
                 ai.maxHealth = 250f;
                 ai.health = 250;
             }

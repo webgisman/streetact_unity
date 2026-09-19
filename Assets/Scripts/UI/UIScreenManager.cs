@@ -88,11 +88,9 @@ public class UIScreenManager : MonoBehaviour
             // InMatchHudScreen.uxml (déclaré "picking-mode: Ignore", un simple conteneur de mise en
             // page autour de la bannière d'équipe) absorbait quand même des taps destinés à la
             // scène 3D, exactement ce bug, juste sur un nom différent — et rien ne garantit qu'il
-            // soit le seul dans les ~20 écrans du projet. Corrigé une fois pour tous : on relit ici
-            // la valeur RÉELLEMENT déclarée dans le UXML (StyleEnum.keyword informe si "picking-
-            // mode" a été explicitement écrit ou non, indépendamment de sa valeur résolue buguée)
-            // et on la réapplique en C# sur TOUTE l'arborescence, pas seulement "root".
-            ReapplyDeclaredPickingMode(instance);
+            // soit le seul dans les ~20 écrans du projet — voir ForcePickingModeIgnore ci-dessous
+            // pour pourquoi ceci reste une liste de noms plutôt qu'une détection automatique.
+            ForcePickingModeIgnore(instance, "root", "top-bar");
 
             // Transition d'apparition (2026-09-13) — voir Theme.tss ".screen-fade" pour le pourquoi.
             // État de départ "invisible/légèrement réduit" : Show()/SetVisible() l'amènent à
@@ -109,21 +107,24 @@ public class UIScreenManager : MonoBehaviour
         BuildDebugOverlay(root);
     }
 
-    /// <summary>Relit récursivement, sur TOUTE l'arborescence de <paramref name="element"/>, la
-    /// valeur de "picking-mode" réellement écrite dans son UXML source (via <c>style.pickingMode.
-    /// keyword</c>, qui reste correct même quand la valeur RÉSOLUE au premier Instantiate() ne
-    /// l'est pas — voir le commentaire au point d'appel) et la réapplique explicitement en C#.
-    /// <c>StyleKeyword.Undefined</c> = rien écrit dans ce UXML pour cet élément précis, on ne
-    /// touche à rien (laisse la valeur par défaut/héritée telle quelle).</summary>
-    private static void ReapplyDeclaredPickingMode(VisualElement element)
+    /// <summary>Force <see cref="PickingMode.Ignore"/> en C# sur chacun des éléments nommés
+    /// <paramref name="elementNames"/>, trouvé n'importe où dans l'arborescence de
+    /// <paramref name="instance"/> — la propriété USS "picking-mode" n'est PAS accessible via
+    /// VisualElement.style (IStyle ne l'expose pas, contrairement aux propriétés CSS classiques :
+    /// erreur de compilation constatée en tentant de la relire pour "deviner" automatiquement quels
+    /// éléments corriger). Impossible donc de détecter par le code QUELS éléments d'un UXML
+    /// déclarent "picking-mode: Ignore" sans le réappliquer soi-même : on liste ici, par nom, ceux
+    /// pour lesquels ça a été vérifié empiriquement nécessaire (le "root" de chaque écran, de
+    /// longue date ; "top-bar" de InMatchHudScreen.uxml, rapport joueur du 2026-09-19) — un nom
+    /// introuvable dans un écran donné (ex: "top-bar" absent de DeploymentDock) est silencieusement
+    /// ignoré. Si le diagnostic à l'écran révèle un jour un NOUVEL élément touché par ce même bug
+    /// Unity, l'ajouter ici à la liste plutôt que de créer un nouveau correctif ad hoc.</summary>
+    private static void ForcePickingModeIgnore(VisualElement instance, params string[] elementNames)
     {
-        if (element.style.pickingMode.keyword != StyleKeyword.Undefined)
+        foreach (string elementName in elementNames)
         {
-            element.pickingMode = element.style.pickingMode.value;
-        }
-        foreach (VisualElement child in element.Children())
-        {
-            ReapplyDeclaredPickingMode(child);
+            VisualElement found = instance.Q<VisualElement>(elementName);
+            if (found != null) found.pickingMode = PickingMode.Ignore;
         }
     }
 
