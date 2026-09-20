@@ -248,11 +248,26 @@ public class TacticalCamera : MonoBehaviour
         // CAS 1 : DEUX DOIGTS (PINCH ZOOM, ROTATION 360°, PAN)
         if (count >= 2)
         {
-            isTouching = true;
-            panVelocity = Vector3.zero;
-
             var t0 = activeTouches[0];
             var t1 = activeTouches[1];
+
+            // Correctif 2026-09-20 (retour joueur : "toucher FIN DE TOUR touche aussi la carte") —
+            // ce CAS (2 doigts) n'a jamais eu le garde IsPointerOverOnGUI que le CAS 1 doigt a plus
+            // bas : tenir le téléphone à deux mains pose souvent un second doigt/pouce quelque part
+            // sur l'écran pendant qu'on appuie sur un bouton en coin (FIN DE TOUR, vue 3D...), ce qui
+            // fait basculer count à 2 et déclenchait pan/pinch/rotation de la caméra en même temps
+            // que le tap sur le bouton, SANS AUCUNE vérification d'UI ici. Si l'UN des deux doigts est
+            // sur un élément d'UI, on ignore le geste caméra entier cette frame plutôt que de deviner
+            // lequel des deux "compte vraiment".
+            if (UnitSpawnerUI.Instance != null &&
+                (UnitSpawnerUI.Instance.IsPointerOverOnGUI(t0.screenPosition) || UnitSpawnerUI.Instance.IsPointerOverOnGUI(t1.screenPosition)))
+            {
+                isTouching = false;
+                return;
+            }
+
+            isTouching = true;
+            panVelocity = Vector3.zero;
 
             Vector2 p0 = t0.screenPosition;
             Vector2 p1 = t1.screenPosition;

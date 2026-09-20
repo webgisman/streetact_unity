@@ -147,13 +147,16 @@ public partial class UnitAI
             }
         }
 
-        // Orientation de la barre de vie vers la caméra (Billboard propre)
+        // Orientation de la barre de vie vers la caméra (Billboard propre) — caméra mise en cache
+        // (2026-09-20, retour utilisateur : surchauffe téléphone) : Camera.main fait une recherche
+        // par tag à chaque appel ; sans ce cache, CHAQUE unité vivante refaisait cette recherche à
+        // CHAQUE frame (voir 08-known-issues-and-todo.md §7 "Camera.main non mis en cache").
         if (healthBarBg != null)
         {
-            Camera cam = Camera.main ?? TacticalCamera.Instance?.GetComponent<Camera>();
-            if (cam != null)
+            if (cachedMainCam == null) cachedMainCam = Camera.main ?? TacticalCamera.Instance?.GetComponent<Camera>();
+            if (cachedMainCam != null)
             {
-                healthBarBg.rotation = cam.transform.rotation;
+                healthBarBg.rotation = cachedMainCam.transform.rotation;
             }
         }
 

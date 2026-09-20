@@ -33,9 +33,13 @@ public class GameManagerUI : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     private static void ConfigurePerformanceSettings()
     {
-        // 1. Verrouillage du Framerate à 60 FPS pour éviter la surchauffe et économiser la batterie sur 60Hz/120Hz
+        // 1. Verrouillage du Framerate (2026-09-20, retour utilisateur : "le téléphone chauffe alors
+        // que c'est un simple jeu tour par tour" sur 2 vrais appareils Android) — 30 FPS abaissé
+        // depuis 60 : un rythme tour par tour, sans besoin de fluidité 60 FPS, n'a aucune raison de
+        // faire tourner le rendu (et tout le travail par-frame non mis en cache, voir
+        // 08-known-issues-and-todo.md §7 "Performance client") au double de la vitesse nécessaire.
         QualitySettings.vSyncCount = 0;
-        Application.targetFrameRate = 60;
+        Application.targetFrameRate = 30;
     }
 
     private void Awake()
@@ -48,7 +52,7 @@ public class GameManagerUI : MonoBehaviour
         instance = this;
 
         QualitySettings.vSyncCount = 0;
-        Application.targetFrameRate = 60;
+        Application.targetFrameRate = 30;
 
         // Le Canvas legacy (UnityEngine.UI) encore présent dans la scène (Panel/LoadingPanel/
         // ErrorPanel, actifs par défaut) n'est plus piloté par aucun script depuis la migration

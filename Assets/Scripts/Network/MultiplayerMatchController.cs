@@ -1151,8 +1151,23 @@ namespace Novgov.Network
 
         private IEnumerator PlaySnapshotsBody(NetMessage msg)
         {
-            var unitLookup = FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude)
-                .ToDictionary(u => u.gameObject.name, u => u);
+            // Construction défensive (2026-09-20) : un ToDictionary() direct plantait tout le rejeu
+            // du tour ("An item with the same key has already been added") si jamais deux UnitAI de
+            // la scène partageaient exactement le même nom — normalement empêché en amont désormais
+            // (voir UnitSpawnerUI.SpawnUnitAt, garde anti-doublon sur forcedName), mais une boucle
+            // manuelle qui ignore un doublon résiduel au lieu de lever une exception non rattrapable
+            // garantit que la partie ne se bloque plus jamais pour cette seule raison.
+            var unitLookup = new Dictionary<string, UnitAI>();
+            foreach (var u in FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude))
+            {
+                string key = u.gameObject.name;
+                if (unitLookup.ContainsKey(key))
+                {
+                    Debug.LogWarning($"[MultiplayerMatchController] Unité en double détectée dans la scène pour le nom '{key}' — ignorée pour ne pas bloquer le rejeu du tour.");
+                    continue;
+                }
+                unitLookup[key] = u;
+            }
             var previousPositions = new Dictionary<string, Vector3>();
 
             float intervalSec = Mathf.Max(0.02f, msg.snapshot_interval_ms / 1000f);

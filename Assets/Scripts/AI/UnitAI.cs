@@ -205,6 +205,14 @@ public partial class UnitAI : MonoBehaviour
         }
     }
 
+    // Caméra principale mise en cache (2026-09-20, retour utilisateur : surchauffe téléphone sur 2
+    // appareils Android réels) — Camera.main refait une recherche par tag à chaque accès ; partagée
+    // par toutes les UnitAI (une seule vraie caméra tactique à la fois) plutôt qu'un champ par
+    // instance, voir UnitAI_Combat.UpdateVisuals. Statique, donc remise à null au rechargement de
+    // scène (recherchée à nouveau au premier appel suivant) — jamais une référence obsolète gardée
+    // entre deux scènes.
+    private static Camera cachedMainCam;
+
     void OnEnable()
     {
         if (!AllLivingUnits.Contains(this)) AllLivingUnits.Add(this);

@@ -489,6 +489,32 @@ public partial class UnitSpawnerUI : MonoBehaviour
     /// </param>
     public UnitAI SpawnUnitAt(UnitType type, Vector3 position, int team, string forcedName = null, bool skipSafeSpawnAdjustment = false)
     {
+        // Garde anti-doublon (2026-09-20, retour utilisateur : "Fin de Tour" plantait avec
+        // "An item with the same key has already been added" sur un nom d'unité en double, et des
+        // unités jamais placées apparaissaient sur le terrain). forcedName est TOUJOURS utilisé pour
+        // faire RÉAPPARAÎTRE une unité déjà connue sous ce nom (rejeu de "deployment_result", premier
+        // repérage fog-of-war dans MultiplayerMatchController.PlaySnapshotsBody, ou respawn après
+        // pause async, voir MatchSessionManager_AsyncPause.RespawnPausedRoster) — JAMAIS pour en
+        // créer une deuxième. Si un GameObject vivant porte déjà exactement ce nom, un second appel
+        // (ex: une unité fog-of-war masquée puis "redécouverte" alors qu'elle n'avait en réalité
+        // jamais quitté la scène) créait un VRAI second GameObject de même nom : invisible au
+        // gameplay (santé/équipe) tant qu'aucun code ne le remarquait, mais qui faisait planter le
+        // rejeu du tour SUIVANT dès que MultiplayerMatchController reconstruisait son dictionnaire
+        // par nom (FindObjectsByType + ToDictionary, qui n'accepte pas deux entrées identiques). On
+        // réutilise l'existant (repositionné/réaffecté) plutôt que d'en créer un autre.
+        if (!string.IsNullOrEmpty(forcedName))
+        {
+            foreach (var existing in UnitAI.AllLivingUnits)
+            {
+                if (existing != null && existing.gameObject.name == forcedName)
+                {
+                    existing.transform.position = position;
+                    existing.teamID = team;
+                    return existing;
+                }
+            }
+        }
+
         int teamCount = GetTeamLivingUnitsCount(team);
         if (teamCount >= maxUnitsPerTeam)
         {
@@ -497,6 +523,18 @@ public partial class UnitSpawnerUI : MonoBehaviour
             ShowMessage($"Limite de {maxUnitsPerTeam} unités atteinte pour l'équipe {teamName} !", 3.0f);
             return null;
         }
+
+        // Index de nommage (2026-09-20) : DÉLIBÉRÉMENT distinct de teamCount ci-dessus (qui ne compte
+        // que les vivants, pour le plafond de déploiement). Un nom auto-généré basé sur teamCount+1
+        // pouvait retomber EXACTEMENT sur le nom d'un cadavre déjà présent en scène (jamais détruit,
+        // voir UnitAI.Die) dès qu'une unité du même type mourait puis qu'une autre du même type était
+        // respawnée pour ce camp (renfort de garnison de Conquête, voir AutoDeployTeamFallback/
+        // extraInfantry) — un vrai second GameObject de même nom, avec exactement le même symptôme
+        // que le doublon forcedName corrigé juste au-dessus (plantage de
+        // MultiplayerMatchController.PlaySnapshotsBody au tour suivant). Strictement croissant pour
+        // toute la durée du match, jamais réutilisé même après une mort ; remis à zéro par
+        // ClearAllUnits() au début de chaque nouveau match.
+        int namingIndex = NextUnitNamingIndexForTeam(team);
 
         // Recalage UNIQUE ici, pour TOUS les types y compris Barricade (voir FindSafeSpawnPoint) —
         if (!skipSafeSpawnAdjustment)
@@ -531,7 +569,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
                 newUnitObj.AddComponent<NavMeshAgent>();
                 newUnitObj.AddComponent<UnitAI>();
             }
-            newUnitObj.name = forcedName ?? $"Fantassin_{team}_{(teamCount + 1)}";
+            newUnitObj.name = forcedName ?? $"Fantassin_{team}_{namingIndex}";
         }
         else if (type == UnitType.CharLeopard)
         {
@@ -565,7 +603,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
                     newUnitObj.AddComponent<UnitAI>();
                 }
             }
-            newUnitObj.name = forcedName ?? $"Leopard2_{team}_{(teamCount + 1)}";
+            newUnitObj.name = forcedName ?? $"Leopard2_{team}_{namingIndex}";
         }
         else if (type == UnitType.VehiculeCanon)
         {
@@ -593,7 +631,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
                     newUnitObj.AddComponent<UnitAI>();
                 }
             }
-            newUnitObj.name = forcedName ?? $"Canon_Vehicule_{team}_{(teamCount + 1)}";
+            newUnitObj.name = forcedName ?? $"Canon_Vehicule_{team}_{namingIndex}";
         }
         else if (type == UnitType.Mortier)
         {
@@ -652,7 +690,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
             agent.height = 2f;
             agent.stoppingDistance = 0.5f;
 
-            newUnitObj.name = forcedName ?? $"Mortier_{team}_{(teamCount + 1)}";
+            newUnitObj.name = forcedName ?? $"Mortier_{team}_{namingIndex}";
         }
         else if (type == UnitType.BarricadeRoutiere)
         {
@@ -820,8 +858,22 @@ public partial class UnitSpawnerUI : MonoBehaviour
         return null;
     }
 
+    // Compteur de nommage par camp — voir son usage dans SpawnUnitAt (namingIndex) pour le pourquoi
+    // de sa séparation d'avec GetTeamLivingUnitsCount. Remis à zéro par ClearAllUnits() (nouveau
+    // match), jamais décrémenté ailleurs : c'est justement le point (strictement croissant).
+    private readonly Dictionary<int, int> unitNamingCounterByTeam = new Dictionary<int, int>();
+
+    private int NextUnitNamingIndexForTeam(int team)
+    {
+        unitNamingCounterByTeam.TryGetValue(team, out int current);
+        current++;
+        unitNamingCounterByTeam[team] = current;
+        return current;
+    }
+
     public void ClearAllUnits()
     {
+        unitNamingCounterByTeam.Clear();
         for (int i = UnitAI.AllLivingUnits.Count - 1; i >= 0; i--)
         {
             UnitAI u = UnitAI.AllLivingUnits[i];

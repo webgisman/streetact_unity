@@ -22,6 +22,11 @@ public class RoadBarrier : MonoBehaviour
     private Transform healthBarFill;
     private GameObject healthBarBg;
 
+    // Caméra principale mise en cache (2026-09-20, retour utilisateur : surchauffe téléphone) —
+    // Camera.main refait une recherche par tag à chaque accès ; partagée par toutes les barricades
+    // plutôt qu'un champ par instance, voir Update() ci-dessous.
+    private static Camera cachedMainCam;
+
     void Awake()
     {
         if (!AllBarriers.Contains(this)) AllBarriers.Add(this);
@@ -72,10 +77,14 @@ public class RoadBarrier : MonoBehaviour
 
     void Update()
     {
-        if (healthBarBg != null && Camera.main != null)
+        if (healthBarBg != null)
         {
-            healthBarBg.transform.LookAt(healthBarBg.transform.position + Camera.main.transform.rotation * Vector3.forward,
-                                         Camera.main.transform.rotation * Vector3.up);
+            if (cachedMainCam == null) cachedMainCam = Camera.main;
+            if (cachedMainCam != null)
+            {
+                healthBarBg.transform.LookAt(healthBarBg.transform.position + cachedMainCam.transform.rotation * Vector3.forward,
+                                             cachedMainCam.transform.rotation * Vector3.up);
+            }
         }
     }
 

@@ -18,6 +18,7 @@ public partial class TacticalPathManager
 #if !UNITY_SERVER
     private bool tacticalUiBound = false;
     private VisualElement bottomBarRoot, contextMenuRoot, planGroupEl, execGroupEl, squadBarEl, topActionsRowEl;
+    private VisualElement topDashboardEl;
     private VisualElement buttonContainerEl;
     private Button view3dButtonEl, cancelBtnEl, confirmBtnEl;
     /// <summary>Bouton "annuler le dernier point" (2026-09-07). Voir son commentaire dans
@@ -65,6 +66,7 @@ public partial class TacticalPathManager
             view3dButtonEl = bottomBarRoot.Q<Button>("view3d-button");
             squadBarEl = bottomBarRoot.Q<VisualElement>("squad-bar");
             topActionsRowEl = bottomBarRoot.Q<VisualElement>("top-actions-row");
+            topDashboardEl = bottomBarRoot.Q<VisualElement>("top-dashboard");
             invalidTapToastEl = bottomBarRoot.Q<Label>("invalid-tap-toast");
             if (invalidTapToastEl == null) { Debug.LogError("[TacticalPathManager] Élément 'invalid-tap-toast' introuvable dans le UXML instancié."); return; }
 
@@ -274,10 +276,33 @@ public partial class TacticalPathManager
     /// est recalculé chaque frame à partir de TacticalRadarUI.BottomEdgeScreenY (0 quand le radar
     /// est masqué, ex: vue 3D Action), donc le cluster remonte automatiquement dans ce cas.
     /// </summary>
+    /// <summary>Correctif 2026-09-20 (retour joueur : "l'icône vue 3D est sous l'appareil photo du
+    /// téléphone, impossible d'appuyer dessus"). "top-dashboard" (TacticalBottomBarScreen.uxml) est
+    /// en `position: absolute; top: 0` DANS la racine que UIScreenManager.ApplySafeAreaPadding
+    /// protège déjà par un padding — mais cette même racine documente déjà, pour un AUTRE bouton
+    /// ancré en bord d'écran (voir son commentaire sur lastSafeAreaScreenW/H), un décalage réel entre
+    /// la position visuelle d'un élément absolute et sa zone réellement protégée. Plutôt que de
+    /// dépendre de cet héritage de padding à travers une position absolute imbriquée, on applique ICI
+    /// un inset de sécurité DIRECT sur le HUD haut, recalculé depuis Screen.safeArea à chaque frame où
+    /// la résolution change réellement — indépendant de tout comportement du moteur de layout sur les
+    /// ancêtres.</summary>
+    private int lastClusterSafeAreaW = -1, lastClusterSafeAreaH = -1;
     private void PositionTopRightCluster()
     {
-        // Supprimé pour laisser l'interface UI Toolkit se positionner en haut de l'écran
-        // comme demandé par l'utilisateur ("tous les boutons en haut").
+        if (topDashboardEl == null || topActionsRowEl == null) return;
+        if (Screen.width == lastClusterSafeAreaW && Screen.height == lastClusterSafeAreaH) return;
+        lastClusterSafeAreaW = Screen.width;
+        lastClusterSafeAreaH = Screen.height;
+
+        Rect safe = Screen.safeArea;
+        float topInset = Screen.height - safe.yMax;   // px déjà exclus par une encoche/perforation caméra en haut
+        float rightInset = Screen.width - safe.xMax;   // px exclus côté droit (perforation en coin)
+
+        // Toute la barre haute descend d'abord sous l'encoche...
+        topDashboardEl.style.marginTop = topInset > 0f ? topInset + 6f : 0f;
+        // ...puis le cluster cloche/vue3D/fin-de-tour (côté droit de cette barre) s'écarte en plus
+        // d'une perforation en coin, sans affecter les portraits d'escouade à gauche.
+        topActionsRowEl.style.marginRight = rightInset > 0f ? rightInset + 6f : 0f;
     }
 
     /// <summary>Barre de portraits d'escouade (coin haut-droit, style Commandos: Behind Enemy

@@ -64,8 +64,10 @@ public class CameraStateManager : MonoBehaviour
             commandViewMask = -1;
         }
 
-        // Maximiser le framerate sur mobile
-        Application.targetFrameRate = 60;
+        // Framerate abaissé à 30 (2026-09-20, retour utilisateur : surchauffe sur 2 vrais téléphones
+        // Android pour un jeu tour par tour) — voir GameManagerUI.ConfigurePerformanceSettings, même
+        // valeur, réaffectée ici au cas où ce script s'exécute après et écraserait sinon le réglage.
+        Application.targetFrameRate = 30;
         QualitySettings.vSyncCount = 0;
     }
 

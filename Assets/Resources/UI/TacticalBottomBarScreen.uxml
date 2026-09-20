@@ -43,7 +43,11 @@
                              son fond plein sombre se fondait dans une carte sombre une fois le
                              bandeau noir retiré derrière lui, le rendant quasi invisible. -->
                         <ui:Button name="view3d-button" class="btn-glass btn-icon-only" style="display: none; height: 48px; width: 48px; margin-right: 10px;">
-                            <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/magnifier.png');" />
+                            <!-- Anciennement magnifier.png (loupe) : lu par les joueurs comme "recherche/zoom",
+                                 pas "bascule vers la vue d'action rapprochée" — crosshair.png (viseur) est plus
+                                 proche du sens réel du bouton parmi les icônes déjà présentes dans le projet
+                                 (retour utilisateur 2026-09-20, "il faut changer l'icône"). -->
+                            <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/crosshair.png');" />
                         </ui:Button>
                         <!-- Annuler le dernier point posé. Ajouté le 2026-09-07 : cette action
                              n'existait QUE via le clic droit de la souris (voir
