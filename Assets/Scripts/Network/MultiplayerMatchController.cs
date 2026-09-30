@@ -76,7 +76,7 @@ namespace Novgov.Network
         }
 
 #if !UNITY_SERVER
-        private enum UiState { Hidden, ModeSelect, Login, SignUp, Connecting, Matchmaking, Deployment, InMatch, MatchOver }
+        private enum UiState { Hidden, Hub, Login, SignUp, Connecting, Matchmaking, Deployment, InMatch, MatchOver }
         private UiState uiState = UiState.Hidden;
 
         private string selectedMode = "deathmatch";
@@ -92,7 +92,7 @@ namespace Novgov.Network
         /// pas de combat) — voir Novgov.UI.ZoneMapController, seul abonné actuel, qui affiche le
         /// message sur ZoneResultScreen. Le cas "combat de conquête" (match_found -> déploiement ->
         /// match_over) passe par le flux UiState normal (OnMatchOver), pas par cet event.</summary>
-        public static event System.Action<string> OnZoneResult;
+        public static event System.Action<string, bool> OnZoneResult; // (message, succès) — succès pilote le son joué
 
         private string emailField = "";
         private string passwordField = "";
@@ -200,7 +200,7 @@ namespace Novgov.Network
                 var (ok, _) = await SupabaseAuthClient.TryRestoreSession();
                 if (ok)
                 {
-                    SetUiState(UiState.ModeSelect);
+                    EnterHub();
                     return;
                 }
                 // Session sauvegardée invalide/expirée (ex: > 30 jours) — retour au formulaire normal.
@@ -236,7 +236,7 @@ namespace Novgov.Network
                 return;
             }
             statusMessage = "";
-            SetUiState(UiState.ModeSelect);
+            EnterHub();
         }
 
         private async void HandleSignUp()
@@ -274,7 +274,179 @@ namespace Novgov.Network
                 return;
             }
             statusMessage = "";
-            SetUiState(UiState.ModeSelect);
+            EnterHub();
+        }
+
+        // =====================================================================
+        // Navigation de l'écran CONQUÊTE (refonte du parcours des menus, 2026-09-30)
+        // =====================================================================
+        // État Hub = écran "Conquest" (ConquestScreen.uxml) : onglets CARTE (Novgov.UI.
+        // ZoneMapController) et GESTION (câblé ici, BindUI). Depuis le 2026-09-30 (demande joueur :
+        // "après multijoueur, je veux juste Conquête"), Match à mort / Contrôle de zone /
+        // Entraînement ne sont plus proposés dans l'interface — StartDeathmatch/StartZoneControl/
+        // StartPracticeVsAI restent, sans appelant UI, le protocole et le serveur les gérant toujours.
+
+        // Vrai dès qu'un "match_found" a modifié la scène (autre carte chargée, unités posées,
+        // dock ouvert...) : revenir à la Conquête passe alors par un rechargement de scène propre
+        // (voir ReturnToHub) au lieu d'afficher l'écran par-dessus les restes de la partie.
+        private bool sceneDirtyFromMatch = false;
+
+        // Sièges où je suis DÉFENSEUR, le plus urgent en tête — lu par RefreshHubScreen pour l'alerte
+        // "quartier assiégé" et son bouton DÉFENDRE.
+        private Novgov.Auth.SupabaseDatabaseClient.SiegeInfo mostUrgentDefense;
+
+        /// <summary>Point d'entrée UNIQUE de la Conquête une fois le compte connecté : garantit
+        /// d'abord que le QG du joueur est placé et son quartier chargé (localisation expliquée la
+        /// toute première fois, voir GameManagerUI.EnsureOnlineZoneReady), puis ouvre l'écran. Avant
+        /// le 2026-09-30, le GPS et le chargement de la ville passaient AVANT même la connexion.</summary>
+        private void EnterHub()
+        {
+            GameManagerUI gm = GameManagerUI.Instance;
+            if (gm == null)
+            {
+                SetUiState(UiState.Hub);
+                return;
+            }
+
+            statusMessage = "Préparation de la carte de conquête";
+            SetUiState(UiState.Connecting);
+            gm.EnsureOnlineZoneReady(
+                onReady: () => { statusMessage = ""; SetUiState(UiState.Hub); },
+                onCancelled: () =>
+                {
+                    statusMessage = "";
+                    SetUiState(UiState.Hidden);
+                    GameManagerUI.Instance?.ReturnToStartupMenu();
+                });
+        }
+
+        /// <summary>Ouvre un écran de gestion (Caserne, Mes quartiers, Sièges, Rapports) avec son
+        /// contenu à jour — utilisé par l'onglet GESTION et par les raccourcis de la fiche d'un
+        /// quartier sur la carte (ex: "AMÉLIORER MES QUARTIERS"). Son bouton RETOUR revient à la
+        /// Conquête, sur l'onglet où l'on était.</summary>
+        public void OpenManagementScreen(string screen)
+        {
+            UIScreenManager.Instance.Show(screen);
+            switch (screen)
+            {
+                case "Roster": RefreshRosterScreen(); break;
+                case "Buildings": RefreshBuildingsScreen(); break;
+                case "Sieges": RefreshSiegesScreen(); break;
+                case "Notifications": RefreshNotificationsScreen(); break;
+            }
+        }
+
+        /// <summary>Retour au Quartier Général depuis n'importe quel sous-écran ou résultat (Carte de
+        /// Conquête, résultat de siège, annulation d'une attente...) — remplace les anciens appels à
+        /// GameManagerUI.ReturnToStartupMenu() de ces écrans, qui renvoyaient au menu Solo/En ligne
+        /// alors que leur bouton disait "RETOUR AU HUB". Recharge la scène si une partie l'a modifiée
+        /// (voir sceneDirtyFromMatch).</summary>
+        public void ReturnToHub()
+        {
+            statusMessage = "";
+            if (!sceneDirtyFromMatch)
+            {
+                SetUiState(UiState.Hub);
+                return;
+            }
+
+            // La Zone chargée pour la partie (Zone assiégée, carte de match...) ne doit pas devenir
+            // la position du joueur sur la Carte de Conquête — même restauration que OnMatchOver.
+            if (preMatchExplorationTileX.HasValue && preMatchExplorationTileY.HasValue && Novgov.Generation.ZoneManager.Instance != null)
+            {
+                Novgov.Generation.ZoneManager.Instance.SetCurrentTileWithoutLoading(preMatchExplorationTileX.Value, preMatchExplorationTileY.Value);
+            }
+            preMatchExplorationTileX = null;
+            preMatchExplorationTileY = null;
+            ReloadSceneBackToHub();
+        }
+
+        /// <summary>Vrai si le prochain ReturnToHub rechargera la scène — voir ZoneMapController (le
+        /// bouton OK d'un résultat ne peut revenir directement sur la carte que si ce n'est pas le cas).</summary>
+        public bool ReturnToHubNeedsReload => sceneDirtyFromMatch;
+
+        private void ReloadSceneBackToHub()
+        {
+            // Ce contrôleur survit au rechargement (DontDestroyOnLoad) : une coroutine encore en cours
+            // (rejeu de tour, chargement de carte de match...) continuerait sinon à manipuler les
+            // unités/la ville de la scène détruite. Jamais appelé depuis une de ses coroutines.
+            StopAllCoroutines();
+            isPlayingSnapshots = false;
+            pendingTurnResult = null;
+            awaitingCityVerifyResult = false;
+            sceneDirtyFromMatch = false;
+            IsActive = false;
+            IsDeploymentPhaseActive = false;
+            SetUiState(UiState.Hidden);
+            GameManagerUI.ReloadSceneThen(GameManagerUI.AfterReloadAction.OpenOnlineHub);
+        }
+
+        // Message à afficher UNE fois en tête de la Conquête (ex: raison d'une déconnexion en cours
+        // de partie) — voir lbl-hub-notice dans ConquestScreen.uxml. Effacé dès qu'il a été montré
+        // puis que le joueur quitte l'écran.
+        private string pendingHubNotice = null;
+
+        private bool quitConfirmArmed = false;
+        private Button cancelWaitButton;
+
+        /// <summary>Bouton de l'écran d'attente (2026-09-30) — il n'existait AUCUN moyen de sortir de
+        /// "Recherche d'adversaire..." : sans second joueur en file, le serveur garde la connexion
+        /// indéfiniment (keepalives), le joueur restait bloqué jusqu'à tuer l'application. Avant
+        /// l'appariement : annulation immédiate. Après (carte en chargement, attente du déploiement
+        /// adverse) : c'est un abandon de partie, confirmé par un second appui.</summary>
+        private void OnCancelWaitClicked()
+        {
+            if (uiState != UiState.Matchmaking) return;
+
+            if (sceneDirtyFromMatch && !quitConfirmArmed)
+            {
+                quitConfirmArmed = true;
+                RefreshCancelWaitButton();
+                return;
+            }
+
+            // Coupe toute étape encore en cours de CE contrôleur (requête du serveur libre,
+            // chargement de la carte de match, vérification de géométrie) : aucune ne doit rouvrir
+            // un écran de partie après l'annulation. En état Matchmaking, aucune autre coroutine de
+            // ce contrôleur (rejeu de tour, fin de match) ne tourne.
+            StopAllCoroutines();
+            Novgov.UI.ZoneMapController.Instance?.ForgetPendingAttack();
+            expectingCloseAfterZoneResult = false;
+            awaitingCityVerifyResult = false;
+            IsActive = false;
+            IsDeploymentPhaseActive = false;
+
+            // L'état est quitté AVANT la déconnexion : HandleServerDisconnected (dispatché à la frame
+            // suivante) ignore ainsi cette fermeture volontaire au lieu d'afficher "Connexion perdue".
+            if (sceneDirtyFromMatch)
+            {
+                ReturnToHub(); // abandon d'une partie déjà trouvée : scène rechargée
+                GameServerClient.Instance?.Disconnect("user_quit_match");
+                return;
+            }
+
+            SetUiState(UiState.Hub);
+            GameServerClient.Instance?.Disconnect("user_cancelled_matchmaking");
+        }
+
+        private void RefreshCancelWaitButton()
+        {
+            if (cancelWaitButton == null) return;
+            cancelWaitButton.style.display = uiState == UiState.Matchmaking ? DisplayStyle.Flex : DisplayStyle.None;
+            cancelWaitButton.text = !sceneDirtyFromMatch
+                ? "ANNULER"
+                : (quitConfirmArmed ? "TOUCHEZ À NOUVEAU POUR QUITTER" : "QUITTER LA PARTIE");
+        }
+
+        /// <summary>Quitter une partie EN COURS depuis le menu pause (voir Novgov.UI.
+        /// InGameMenuController) : l'état est quitté avant la déconnexion (même raison que
+        /// OnCancelWaitClicked), puis la scène est rechargée vers le QG. Côté serveur, une connexion
+        /// perdue en cours de partie passe les unités du joueur en garde automatique (Ghost).</summary>
+        public void QuitCurrentMatch()
+        {
+            sceneDirtyFromMatch = true; // ReturnToHub -> ReloadSceneBackToHub coupe aussi les coroutines de rejeu
+            ReturnToHub();
+            GameServerClient.Instance?.Disconnect("user_quit_match");
         }
 
         [System.Serializable] private class ServerInstanceEntry { public string id; public int public_port; }
@@ -369,7 +541,14 @@ namespace Novgov.Network
                 siege_id = pendingSiegeId
             });
 
-            statusMessage = targetsSpecificZone ? $"Attaque de la Zone ({attackTileX},{attackTileY})..." : "Recherche d'adversaire...";
+            // Textes du point de vue du joueur (2026-09-30) — plus de "Attaque de la Zone (66648,44111)".
+            statusMessage = selectedMode switch
+            {
+                "conquest" => "Prise du quartier en cours",
+                "siege_attack_deploy" => "Préparation du siège : chargement du quartier visé",
+                "siege_defend_deploy" => "Préparation de la défense : chargement de votre quartier",
+                _ => "Recherche d'adversaire",
+            };
         }
 
         /// <summary>Demande au serveur d'attaquer/capturer la Zone de Conquête (tileX,tileY) — voir
@@ -416,8 +595,8 @@ namespace Novgov.Network
         /// adversaire vivant) et StartPracticeVsAI (accessible uniquement DEPUIS une file d'attente
         /// déjà ouverte) appelaient ConnectToGameServerCoroutine. Le vrai appariement à deux joueurs
         /// vivants (DetermineMatchCacheKey côté serveur) existait donc dans le protocole sans aucun
-        /// bouton pour l'atteindre. Ajouté ici, appelé par btn-deathmatch/btn-zone-control
-        /// (ModeSelectScreen.uxml, voir BindUI).</summary>
+        /// bouton pour l'atteindre. Ajouté ici — puis retiré de l'interface le 2026-09-30 (demande
+        /// joueur : seule la Conquête est proposée en ligne), voir "Navigation de l'écran CONQUÊTE".</summary>
         public void StartDeathmatch()
         {
             selectedMode = "deathmatch";
@@ -466,17 +645,22 @@ namespace Novgov.Network
 
             if (uiState == UiState.InMatch || uiState == UiState.Matchmaking || uiState == UiState.Deployment)
             {
-                statusMessage = DescribeDisconnectReason(reason);
+                IsActive = false;
+                IsDeploymentPhaseActive = false;
                 if (Novgov.Auth.SupabaseAuthClient.CurrentSession != null && !string.IsNullOrEmpty(Novgov.Auth.SupabaseAuthClient.CurrentSession.access_token))
                 {
-                    SetUiState(UiState.ModeSelect);
+                    // 2026-09-30 : la raison était écrite dans statusMessage, qu'AUCUN élément du hub
+                    // n'affiche — le joueur se retrouvait au menu sans savoir pourquoi. Elle passe
+                    // maintenant par le bandeau d'avis du QG (survit au rechargement de scène que
+                    // ReturnToHub déclenche si la partie avait déjà modifié la carte).
+                    pendingHubNotice = DescribeDisconnectReason(reason);
+                    ReturnToHub();
                 }
                 else
                 {
+                    statusMessage = DescribeDisconnectReason(reason);
                     SetUiState(UiState.Login);
                 }
-                IsActive = false;
-                IsDeploymentPhaseActive = false;
             }
         }
 
@@ -486,6 +670,16 @@ namespace Novgov.Network
 
         private void HandleServerMessage(NetMessage msg)
         {
+            // Un message déjà reçu mais pas encore dispatché au moment où le joueur annule/quitte
+            // (ex: "match_found" arrivé dans la même frame que ANNULER) ne doit pas rouvrir un écran
+            // de partie par-dessus le QG : hors attente serveur/partie, tout message est périmé.
+            if (uiState == UiState.Hidden || uiState == UiState.Hub || uiState == UiState.Connecting
+                || uiState == UiState.Login || uiState == UiState.SignUp)
+            {
+                Debug.Log($"[MultiplayerMatchController] Message serveur '{msg.type}' ignoré (hors partie, état {uiState}).");
+                return;
+            }
+
             switch (msg.type)
             {
                 case "match_found": OnMatchFound(msg); break;
@@ -513,7 +707,7 @@ namespace Novgov.Network
         private void OnZoneCaptured(NetMessage msg)
         {
             expectingCloseAfterZoneResult = true;
-            OnZoneResult?.Invoke($"Zone ({msg.zone_tile_x},{msg.zone_tile_y}) capturée sans résistance ! (+{msg.rating_delta} classement)");
+            OnZoneResult?.Invoke($"Quartier pris ! Il est à vous et vous rapportera des Points d'Action toutes les 5 minutes, même quand vous ne jouez pas.\n\n(+{msg.rating_delta} points au classement)", true);
             // Avancer la vue de la carte locale vers la zone nouvellement capturée
             if (Novgov.Generation.ZoneManager.Instance != null)
             {
@@ -526,18 +720,18 @@ namespace Novgov.Network
             expectingCloseAfterZoneResult = true; // voir expectingCloseAfterZoneResult
             string message = msg.reason switch
             {
-                "already_owned" => "Cette Zone vous appartient déjà.",
-                "server_busy" => "Serveur occupé — réessayez dans un instant.",
+                "already_owned" => "Ce quartier est déjà à vous.",
+                "server_busy" => "Le serveur est très occupé — réessayez dans un instant.",
                 // "not_adjacent" (voir MatchSessionManager.RunConquestRequest) : le serveur vérifie
-                // désormais lui-même la contiguïté du territoire, une Zone lointaine n'est plus
-                // attaquable même via un client modifié.
-                "not_adjacent" => "Cette Zone n'est pas adjacente à votre territoire.",
-                // "zone_taken" : Zone neutre capturée par quelqu'un d'autre entre votre demande et
-                // la réponse du serveur (deux joueurs visant la même Zone neutre au même instant).
-                "zone_taken" => "Trop tard — quelqu'un d'autre vient de capturer cette Zone.",
-                _ => "Attaque de la Zone impossible pour le moment.",
+                // lui-même la contiguïté du territoire, un quartier lointain n'est pas attaquable
+                // même via un client modifié.
+                "not_adjacent" => "Ce quartier ne touche aucun des vôtres : prenez d'abord un quartier situé entre les deux.",
+                // "zone_taken" : quartier libre pris par quelqu'un d'autre entre votre demande et la
+                // réponse du serveur (deux joueurs visant le même quartier libre au même instant).
+                "zone_taken" => "Trop tard : un autre joueur vient de prendre ce quartier juste avant vous.",
+                _ => "Impossible de prendre ce quartier pour le moment. Réessayez dans un instant.",
             };
-            OnZoneResult?.Invoke(message);
+            OnZoneResult?.Invoke(message, false);
         }
 
                 /// (mode="siege_attack_deploy") ou défenseur (mode="siege_defend_deploy") vient de valider
@@ -552,19 +746,19 @@ namespace Novgov.Network
             if (msg.success)
             {
                 message = currentMode == "siege_defend_deploy"
-                    ? "Défense organisée ! Le résultat du siège vous sera notifié."
-                    : "Siège lancé ! Le défenseur a 6 heures pour organiser sa défense — vous serez notifié du résultat.";
+                    ? "Défense en place ! À la fin du siège, la bataille se jouera toute seule avec les troupes que vous venez de placer. Le résultat arrivera dans vos RAPPORTS."
+                    : "Siège lancé ! Le propriétaire a maintenant 6 heures pour organiser sa défense. La bataille se jouera ensuite toute seule : le résultat arrivera dans vos RAPPORTS.";
             }
             else
             {
                 message = msg.reason switch
                 {
-                    "siege_invalid" => "Ce siège n'est plus valide (déjà résolu, expiré, ou vous n'y êtes pour rien).",
-                    "server_busy" => "Serveur occupé — réessayez dans un instant.",
-                    _ => "Impossible de soumettre ce déploiement de siège pour le moment.",
+                    "siege_invalid" => "Ce siège n'existe plus (déjà terminé ou expiré).",
+                    "server_busy" => "Le serveur est très occupé — réessayez dans un instant.",
+                    _ => "Impossible d'envoyer vos troupes pour ce siège pour le moment. Réessayez dans un instant.",
                 };
             }
-            OnZoneResult?.Invoke(message);
+            OnZoneResult?.Invoke(message, msg.success);
         }
 
         private int? preMatchExplorationTileX = null;
@@ -572,6 +766,11 @@ namespace Novgov.Network
 
         private void OnMatchFound(NetMessage msg)
         {
+            // À partir d'ici la scène va être modifiée (carte de match, dock, unités) : tout retour au
+            // QG passe par un rechargement propre, et "ANNULER" devient "QUITTER LA PARTIE".
+            sceneDirtyFromMatch = true;
+            quitConfirmArmed = false;
+            RefreshCancelWaitButton();
             LostUnits.Clear();
             deployedRosterCountByType.Clear();
             localTeamId = msg.team_id;
@@ -599,7 +798,7 @@ namespace Novgov.Network
                 // chargée sur CE client avant d'ouvrir le déploiement — sans ça, le joueur placerait
                 // ses unités sur l'ancienne carte encore affichée à l'écran. Même chargement pour un
                 // déploiement de siège (attaquant ou défenseur) : c'est la même vraie Zone GPS.
-                statusMessage = "Chargement de la Zone attaquée...";
+                statusMessage = "Chargement du quartier visé";
                 StartCoroutine(LoadMatchMapThenOpenDeployment(true, msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
                 return;
             }
@@ -1032,13 +1231,13 @@ namespace Novgov.Network
                 if (msg.winner_team == 0)
                     resultText = "Partie interrompue.";
                 else if (msg.success)
-                    resultText = $"VICTOIRE ! Zone ({msg.zone_tile_x},{msg.zone_tile_y}) conquise.";
+                    resultText = $"VICTOIRE ! Le {Novgov.UI.QuartierText.Name(msg.zone_tile_x, msg.zone_tile_y)} est à vous.";
                 else if (msg.winner_team == localTeamId && msg.reason == "zone_lost_race")
-                    resultText = $"Garnison vaincue, mais un autre joueur a capturé la Zone ({msg.zone_tile_x},{msg.zone_tile_y}) juste avant vous.";
+                    resultText = "Garnison vaincue, mais un autre joueur a pris ce quartier juste avant vous.";
                 else if (msg.winner_team == localTeamId)
                     resultText = "Garnison vaincue.";
                 else
-                    resultText = $"DÉFAITE — la Zone ({msg.zone_tile_x},{msg.zone_tile_y}) reste aux mains de son propriétaire.";
+                    resultText = "DÉFAITE — ce quartier reste aux mains de son propriétaire.";
             }
             else if (currentMode == "practice_ai")
             {
@@ -1337,21 +1536,29 @@ namespace Novgov.Network
         {
             if (Novgov.Auth.SupabaseAuthClient.CurrentSession == null) return;
             await Novgov.Auth.SupabaseDatabaseClient.ClaimDailyBonus();
-            RefreshModeSelectScreen();
+            RefreshHubScreen();
         }
 
-        private async void RefreshModeSelectScreen()
+        private async void RefreshHubScreen()
         {
-            var root = UIScreenManager.Instance.GetScreen("ModeSelect");
+            var root = UIScreenManager.Instance.GetScreen("Conquest");
             if (root == null) return;
             var lblUser = root.Q<Label>("lbl-username");
             var lblAP = root.Q<Label>("lbl-action-points");
+
+            // Avis ponctuel (ex: raison d'une déconnexion en pleine partie) — voir pendingHubNotice.
+            var lblNotice = root.Q<Label>("lbl-hub-notice");
+            if (lblNotice != null)
+            {
+                lblNotice.text = pendingHubNotice ?? "";
+                lblNotice.style.display = string.IsNullOrEmpty(pendingHubNotice) ? DisplayStyle.None : DisplayStyle.Flex;
+            }
 
             var (okProf, prof) = await Novgov.Auth.SupabaseDatabaseClient.GetProfile();
             if (okProf && prof != null)
             {
                 if (lblUser != null) lblUser.text = $"Commandant {prof.username}";
-                if (lblAP != null) lblAP.text = $"Points d'Action : {prof.action_points}";
+                if (lblAP != null) lblAP.text = $"{prof.action_points} PA";
             }
 
             var lblNotifBadge = root.Q<Label>("lbl-notifications-badge");
@@ -1364,6 +1571,53 @@ namespace Novgov.Network
                 // du jeu plutôt qu'un traitement ad hoc propre à cet écran.
                 lblNotifBadge.text = unread > 9 ? "9+" : unread.ToString();
                 lblNotifBadge.style.display = unread > 0 ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+
+            // Alerte "quartier assiégé" + pastilles SIÈGES/GESTION (2026-09-30) : un siège contre le
+            // joueur est la seule chose du jeu qui a une échéance — elle reste visible en tête de la
+            // Conquête (les deux onglets) avec son bouton DÉFENDRE.
+            var siegeAlert = root.Q<VisualElement>("siege-alert");
+            var lblSiegeAlert = root.Q<Label>("lbl-siege-alert");
+            var lblSiegesBadge = root.Q<Label>("lbl-sieges-badge");
+            var lblManageBadge = root.Q<Label>("lbl-manage-badge");
+            string myUserId = Novgov.Auth.SupabaseAuthClient.CurrentSession?.user?.id;
+            var (okSieges, sieges) = await Novgov.Auth.SupabaseDatabaseClient.GetMySieges();
+            int defenseCount = 0;
+            mostUrgentDefense = null;
+            DateTime mostUrgentDeadline = DateTime.MaxValue;
+            if (okSieges && sieges != null)
+            {
+                foreach (var s in sieges)
+                {
+                    if (s.defender_user_id != myUserId) continue;
+                    defenseCount++;
+                    DateTime deadline = DateTime.TryParse(s.deadline, null, System.Globalization.DateTimeStyles.RoundtripKind, out DateTime d) ? d : DateTime.MaxValue;
+                    if (mostUrgentDefense == null || deadline < mostUrgentDeadline)
+                    {
+                        mostUrgentDefense = s;
+                        mostUrgentDeadline = deadline;
+                    }
+                }
+            }
+            if (siegeAlert != null)
+            {
+                siegeAlert.style.display = mostUrgentDefense != null ? DisplayStyle.Flex : DisplayStyle.None;
+                if (mostUrgentDefense != null && lblSiegeAlert != null)
+                {
+                    TimeSpan left = mostUrgentDeadline == DateTime.MaxValue ? TimeSpan.Zero : mostUrgentDeadline - DateTime.UtcNow;
+                    string others = defenseCount > 1 ? $" (+{defenseCount - 1} autre(s) siège(s))" : "";
+                    string rel = Novgov.UI.QuartierText.RelativeToHome(mostUrgentDefense.tile_x, mostUrgentDefense.tile_y);
+                    string headline = rel == "de votre QG" ? "⚔ VOTRE QG EST ASSIÉGÉ" : $"⚔ UN DE VOS QUARTIERS ({rel}) EST ASSIÉGÉ";
+                    lblSiegeAlert.text = left > TimeSpan.Zero
+                        ? $"{headline} ! Il vous reste {(left.TotalHours >= 1 ? $"{(int)left.TotalHours}h{left.Minutes:D2}" : $"{left.Minutes} min")} pour placer vos troupes en défense — sinon votre garnison actuelle se défendra seule.{others}"
+                        : $"{headline} — la bataille va se jouer d'un instant à l'autre.{others}";
+                }
+            }
+            foreach (var badge in new[] { lblSiegesBadge, lblManageBadge })
+            {
+                if (badge == null) continue;
+                badge.text = defenseCount > 9 ? "9+" : defenseCount.ToString();
+                badge.style.display = defenseCount > 0 ? DisplayStyle.Flex : DisplayStyle.None;
             }
         }
 
@@ -1437,7 +1691,7 @@ namespace Novgov.Network
         }
 
                 /// §9) — jusqu'ici le serveur écrivait (WriteNotification) mais rien ne les lisait jamais.
-        /// Pas de push : lues à l'ouverture du HUB (RefreshModeSelectScreen) et sur ce bouton dédié,
+        /// Pas de push : lues à l'ouverture du HUB (RefreshHubScreen) et sur ce bouton dédié,
         /// exactement comme demandé ("le joueur qui lance de temps en temps son appli pour voir la
         /// notif").</summary>
         private async void RefreshNotificationsScreen()
@@ -1455,7 +1709,7 @@ namespace Novgov.Network
             scroll.Clear();
             if (!ok || list == null || list.Length == 0)
             {
-                var lbl = new Label("Aucune notification non lue.");
+                var lbl = new Label("Aucun nouveau rapport. Vous serez prévenu ici quand une de vos Zones est attaquée ou quand un siège se termine.");
                 lbl.AddToClassList("hint");
                 lbl.style.whiteSpace = WhiteSpace.Normal;
                 scroll.Add(lbl);
@@ -1465,17 +1719,37 @@ namespace Novgov.Network
             foreach (var n in list)
             {
                 var row = MakeHubCard();
-                row.Add(MakeTextColumn(n.message));
+                // Texte serveur réécrit à l'affichage ("Zone (66648,44111)" -> "quartier au Nord de
+                // votre QG"), voir Novgov.UI.QuartierText.
+                row.Add(MakeTextColumn(Novgov.UI.QuartierText.HumanizeServerText(n.message)));
+
+                // Un rapport "Zone attaquée" menait jusqu'ici à un simple "Marquer comme lue" : le
+                // joueur devait deviner qu'il fallait revenir au hub puis ouvrir SIÈGES pour réagir.
+                if (n.type == "under_attack")
+                {
+                    var btnGo = new Button();
+                    btnGo.text = "VOIR LE SIÈGE";
+                    btnGo.AddToClassList("btn-primary");
+                    long goId = n.id;
+                    btnGo.clicked += async () =>
+                    {
+                        btnGo.SetEnabled(false);
+                        await Novgov.Auth.SupabaseDatabaseClient.MarkNotificationRead(goId);
+                        UIScreenManager.Instance.Show("Sieges");
+                        RefreshSiegesScreen();
+                    };
+                    row.Add(btnGo);
+                }
 
                 var btnRead = new Button();
-                btnRead.text = "Marquer comme lue";
+                btnRead.text = "Lu";
                 long notifId = n.id;
                 btnRead.clicked += async () =>
                 {
                     btnRead.SetEnabled(false);
                     await Novgov.Auth.SupabaseDatabaseClient.MarkNotificationRead(notifId);
                     RefreshNotificationsScreen();
-                    RefreshModeSelectScreen();
+                    RefreshHubScreen();
                 };
                 row.Add(btnRead);
 
@@ -1503,10 +1777,18 @@ namespace Novgov.Network
             scroll.Clear();
             if (!ok || list == null || list.Length == 0)
             {
-                var lbl = new Label("Aucun siège en cours (ni comme attaquant, ni comme défenseur).");
+                var lbl = new Label("Aucun siège en cours. Pour prendre un quartier tenu par un autre joueur, ouvrez la CARTE et touchez un quartier rouge qui touche le vôtre.");
                 lbl.AddToClassList("hint");
                 lbl.style.whiteSpace = WhiteSpace.Normal;
                 scroll.Add(lbl);
+
+                // Écran vide = cul-de-sac : on donne directement le chemin vers l'action concernée.
+                var btnOpenMap = new Button();
+                btnOpenMap.text = "OUVRIR LA CARTE";
+                btnOpenMap.AddToClassList("btn-secondary");
+                btnOpenMap.style.marginTop = 12;
+                btnOpenMap.clicked += () => Novgov.UI.ZoneMapController.EnsureInstance().Show();
+                scroll.Add(btnOpenMap);
                 return;
             }
 
@@ -1518,8 +1800,10 @@ namespace Novgov.Network
                 var row = MakeHubCard();
                 // Pas d'émoji ici (🛡/🏰 etc.) : plage Unicode "pictographes" sans glyphe de repli
                 var col = MakeTextColumn(
-                    isDefender ? $"⚔ Zone ({s.tile_x},{s.tile_y}) assiégée !" : $"Siège sur ({s.tile_x},{s.tile_y})",
-                    isDefender ? "Vous êtes le défenseur — organisez votre garnison." : "Vous êtes l'attaquant — en attente du défenseur.");
+                    isDefender ? $"⚔ {Novgov.UI.QuartierText.Title(s.tile_x, s.tile_y)} : assiégé !" : $"Votre siège : {Novgov.UI.QuartierText.Name(s.tile_x, s.tile_y)}",
+                    isDefender
+                        ? "On vous attaque. Placez vos troupes en défense avant la fin du compte à rebours — sinon votre garnison actuelle se défendra seule."
+                        : "Vos troupes sont en place. Le propriétaire a jusqu'à la fin du compte à rebours pour se défendre, puis la bataille se joue toute seule.");
                 var lblCountdown = new Label(countdown);
                 lblCountdown.AddToClassList(urgent ? "hub-badge-urgent" : "hub-badge-ok");
                 col.Add(lblCountdown);
@@ -1528,7 +1812,7 @@ namespace Novgov.Network
                 if (isDefender)
                 {
                     var btnDefend = new Button();
-                    btnDefend.text = "Défendre maintenant";
+                    btnDefend.text = "DÉFENDRE";
                     int tileX = s.tile_x, tileY = s.tile_y;
                     long siegeId = s.id;
                     btnDefend.clicked += () => DefendSiege(tileX, tileY, siegeId);
@@ -1554,10 +1838,17 @@ namespace Novgov.Network
             scroll.Clear();
             if (!ok || list == null || list.Length == 0)
             {
-                var lbl = new Label("Vous ne possédez aucun territoire (bâtiment). Partez à la conquête de Zones pour en gagner !");
+                var lbl = new Label("Vous n'avez encore aucun quartier. Sur la CARTE, touchez un quartier LIBRE (personne ne l'occupe) et prenez-le : c'est gratuit, immédiat, et il vous rapportera des Points d'Action.");
                 lbl.AddToClassList("hint");
                 lbl.style.whiteSpace = WhiteSpace.Normal;
                 scroll.Add(lbl);
+
+                var btnOpenMap = new Button();
+                btnOpenMap.text = "OUVRIR LA CARTE";
+                btnOpenMap.AddToClassList("btn-secondary");
+                btnOpenMap.style.marginTop = 12;
+                btnOpenMap.clicked += () => Novgov.UI.ZoneMapController.EnsureInstance().Show();
+                scroll.Add(btnOpenMap);
                 return;
             }
 
@@ -1568,9 +1859,11 @@ namespace Novgov.Network
                 bool shielded = DateTime.TryParse(z.shield_until, null, System.Globalization.DateTimeStyles.RoundtripKind, out DateTime shieldUntil) && shieldUntil > DateTime.UtcNow;
                 int incomePerCycle = z.building_level * 10; // voir MatchSessionManager.ZoneIncomePerZone (10 AP/niveau/5min)
 
+                // Plus de coordonnées de tuile brutes ("Zone (66648,44111)") ni d'index interne
+                // ("Bâtiment HQ #12") : illisibles pour un joueur (2026-09-30).
                 var col = MakeTextColumn(
-                    $"Zone ({z.tile_x},{z.tile_y})",
-                    $"Bâtiment HQ #{z.hq_building_index} — +{incomePerCycle} AP / 5 min");
+                    Novgov.UI.QuartierText.Title(z.tile_x, z.tile_y),
+                    $"Niveau {z.building_level} — rapporte +{incomePerCycle} Points d'Action toutes les 5 min, automatiquement");
                 col.Add(MakePipRow(z.building_level, 3));
                 if (shielded)
                 {
@@ -1584,7 +1877,7 @@ namespace Novgov.Network
                 {
                     var btnUpgrade = new Button();
                     int cost = z.building_level == 1 ? 200 : 500;
-                    btnUpgrade.text = $"Améliorer ({cost} AP)";
+                    btnUpgrade.text = $"Améliorer ({cost} PA)";
                     int tileX = z.tile_x, tileY = z.tile_y;
                     btnUpgrade.clicked += async () =>
                     {
@@ -1617,7 +1910,7 @@ namespace Novgov.Network
 
             var (okProf, prof) = await Novgov.Auth.SupabaseDatabaseClient.GetProfile();
             int currentAp = prof?.action_points ?? 0;
-            if (lblPoints != null) lblPoints.text = $"Solde : {currentAp} AP";
+            if (lblPoints != null) lblPoints.text = $"Solde : {currentAp} PA";
 
             var (ok, roster) = await Novgov.Auth.SupabaseDatabaseClient.GetRoster();
 
@@ -1625,13 +1918,20 @@ namespace Novgov.Network
             int[] unitCosts = Novgov.Auth.SupabaseDatabaseClient.KnownUnitCosts;
             // Un mot court par type pour que la carte se lise sans avoir à connaître le jeu par
             // coeur — jamais une icône chargée à l'exécution (voir Theme.tss ".hub-card").
+            // MÊME ORDRE que KnownUnitTypes (Fantassin, VehiculeCanon, CharLeopard, Mortier, Drone).
+            // 2026-09-30 : les descriptions du véhicule canon et du char étaient INVERSÉES — le Char
+            // Léopard (500 PV, 150 dégâts, voir UnitTypeStats) était présenté comme "rapide, compromis"
+            // et le véhicule canon (250 PV, plus rapide) comme "lourdement blindé".
             string[] unitBlurbs = {
                 "Polyvalente, peu coûteuse — la base de toute escouade.",
-                "Lourdement blindé, dégâts élevés — le poing de votre armée.",
                 "Rapide, bon compromis mobilité/puissance de feu.",
+                "Lourdement blindé, dégâts élevés — le poing de votre armée.",
                 "Tir de zone à longue portée — ne s'engage jamais directement.",
-                "Reconnaissance (pas encore déployable en combat).",
+                "Reconnaissance — pas encore disponible en combat.",
             };
+            // Noms affichés : les identifiants internes ("VehiculeCanon", "CharLeopard") s'affichaient
+            // tels quels.
+            string[] unitDisplayNames = { "Fantassin", "Véhicule canon", "Char Léopard", "Mortier", "Drone" };
 
             for (int i = 0; i < unitTypes.Length; i++)
             {
@@ -1639,16 +1939,19 @@ namespace Novgov.Network
                 int cost = unitCosts[i];
                 var item = roster != null ? System.Linq.Enumerable.FirstOrDefault(roster, r => r.unit_type.Equals(uType, System.StringComparison.OrdinalIgnoreCase)) : null;
                 int qty = item != null ? item.quantity : 0;
-                bool canAfford = currentAp >= cost;
+                // Le drone n'est pas déployable (voir UnitSpawnerUI.UnitType : aucune entrée Drone) :
+                // le vendre revenait à faire dépenser 200 PA pour une unité inutilisable.
+                bool deployable = uType != "Drone";
+                bool canAfford = deployable && currentAp >= cost;
 
                 var row = MakeHubCard();
-                var col = MakeTextColumn(uType, i < unitBlurbs.Length ? unitBlurbs[i] : null);
+                var col = MakeTextColumn(i < unitDisplayNames.Length ? unitDisplayNames[i] : uType, i < unitBlurbs.Length ? unitBlurbs[i] : null);
                 row.Add(col);
 
                 row.Add(MakeCountBadge($"×{qty}"));
 
                 var btnBuy = new Button();
-                btnBuy.text = $"Recruter ({cost} AP)";
+                btnBuy.text = !deployable ? "BIENTÔT" : $"Recruter ({cost} PA)";
                 btnBuy.AddToClassList(canAfford ? "btn-primary" : "btn-secondary");
                 btnBuy.SetEnabled(canAfford);
 
@@ -1681,73 +1984,84 @@ namespace Novgov.Network
             }
             uiBound = true;
 
-            VisualElement modeSelectRoot = UIScreenManager.Instance.GetScreen("ModeSelect");
-            Button conquestBtn = modeSelectRoot?.Q<Button>("btn-conquest");
-            if (conquestBtn != null)
+            // --- CONQUÊTE : en-tête + onglet GESTION (refonte du 2026-09-30, ConquestScreen.uxml) --
+            // L'onglet CARTE et le passage d'un onglet à l'autre sont gérés par
+            // Novgov.UI.ZoneMapController.
+            VisualElement conquestRoot = UIScreenManager.Instance.GetScreen("Conquest");
+
+            Button siegeAlertDefendBtn = conquestRoot?.Q<Button>("btn-siege-alert-defend");
+            if (siegeAlertDefendBtn != null)
             {
-                conquestBtn.clicked += () => Novgov.UI.ZoneMapController.EnsureInstance().Show();
-            }
-            
-            Button zoneMapBtn = modeSelectRoot?.Q<Button>("btn-zone-map");
-            if (zoneMapBtn != null) zoneMapBtn.clicked += () => Novgov.UI.ZoneMapController.EnsureInstance().Show();
-
-            // Seul vrai mode où deux comptes différents s'affrontent en direct, synchronisés par le
-            // même serveur (voir StartDeathmatch/StartZoneControl) — la Conquête ci-dessus est
-            // toujours un joueur seul contre une garnison IA.
-            Button deathmatchBtn = modeSelectRoot?.Q<Button>("btn-deathmatch");
-            if (deathmatchBtn != null) deathmatchBtn.clicked += StartDeathmatch;
-
-            Button zoneControlBtn = modeSelectRoot?.Q<Button>("btn-zone-control");
-            if (zoneControlBtn != null) zoneControlBtn.clicked += StartZoneControl;
-
-            Button practiceAIBtn = modeSelectRoot?.Q<Button>("btn-practice-ai");
-            if (practiceAIBtn != null) practiceAIBtn.clicked += StartPracticeVsAI;
-
-            Button rosterBtn = modeSelectRoot?.Q<Button>("btn-roster");
-            if (rosterBtn != null) rosterBtn.clicked += () => {
-                UIScreenManager.Instance.Show("Roster");
-                RefreshRosterScreen();
-            };
-
-            Button buildingsBtn = modeSelectRoot?.Q<Button>("btn-buildings");
-            if (buildingsBtn != null) buildingsBtn.clicked += () => {
-                UIScreenManager.Instance.Show("Buildings");
-                RefreshBuildingsScreen();
-            };
-
-            Button notificationsBtn = modeSelectRoot?.Q<Button>("btn-notifications");
-            if (notificationsBtn != null) notificationsBtn.clicked += () => {
-                UIScreenManager.Instance.Show("Notifications");
-                RefreshNotificationsScreen();
-            };
-
-            Button siegesBtn = modeSelectRoot?.Q<Button>("btn-sieges");
-            if (siegesBtn != null) siegesBtn.clicked += () => {
-                UIScreenManager.Instance.Show("Sieges");
-                RefreshSiegesScreen();
-            };
-
-            Button backToStartupBtn = modeSelectRoot?.Q<Button>("btn-back-startup");
-            if (backToStartupBtn != null)
-            {
-                backToStartupBtn.clicked += () =>
+                siegeAlertDefendBtn.clicked += () =>
                 {
+                    var s = mostUrgentDefense;
+                    if (s == null) return;
+                    Novgov.UI.UiSfx.Play(Novgov.UI.UiSfx.Sound.RadioRoger);
+                    DefendSiege(s.tile_x, s.tile_y, s.id);
+                };
+            }
+
+            // Retour au menu Solo / En ligne en GARDANT la session (JOUER EN LIGNE ramène ici
+            // directement) — distinct de la vraie déconnexion du compte (onglet GESTION). L'ancien
+            // unique bouton "DÉCONNEXION" faisait le premier en annonçant le second.
+            Button hubBackBtn = conquestRoot?.Q<Button>("btn-hub-back");
+            if (hubBackBtn != null)
+            {
+                hubBackBtn.clicked += () =>
+                {
+                    Novgov.UI.UiSfx.Play(Novgov.UI.UiSfx.Sound.Tap);
                     Novgov.Network.GameServerClient.Instance?.Disconnect("user_left_lobby");
                     SetUiState(UiState.Hidden);
                     GameManagerUI.Instance?.ReturnToStartupMenu();
                 };
             }
+
+            Button signOutBtn = conquestRoot?.Q<Button>("btn-sign-out");
+            if (signOutBtn != null)
+            {
+                signOutBtn.clicked += () =>
+                {
+                    Novgov.Network.GameServerClient.Instance?.Disconnect("user_signed_out");
+                    SupabaseAuthClient.SignOut();
+                    SetUiState(UiState.Hidden);
+                    GameManagerUI.Instance?.ReturnToStartupMenu("Vous êtes déconnecté de votre compte.");
+                };
+            }
+
+            // Cartes de l'onglet GESTION (+ RAPPORTS dans l'en-tête) : chacune ouvre son écran, dont
+            // le bouton RETOUR revient à la Conquête sur le même onglet.
+            foreach (var (buttonName, screenName) in new[] { ("btn-roster", "Roster"), ("btn-buildings", "Buildings"), ("btn-notifications", "Notifications"), ("btn-sieges", "Sieges") })
+            {
+                Button btn = conquestRoot?.Q<Button>(buttonName);
+                if (btn == null) { Debug.LogWarning($"[MultiplayerMatchController] Bouton '{buttonName}' introuvable dans ConquestScreen.uxml."); continue; }
+                btn.clicked += () =>
+                {
+                    Novgov.UI.UiSfx.Play(Novgov.UI.UiSfx.Sound.Tap);
+                    OpenManagementScreen(screenName);
+                };
+            }
+
+            Button leaderboardBtn = conquestRoot?.Q<Button>("btn-leaderboard");
+            if (leaderboardBtn != null)
+            {
+                leaderboardBtn.clicked += () =>
+                {
+                    Novgov.UI.UiSfx.Play(Novgov.UI.UiSfx.Sound.Tap);
+                    LeaderboardController.Show();
+                };
+            }
+
             var rosterRoot = UIScreenManager.Instance.GetScreen("Roster");
-            rosterRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.ModeSelect));
+            rosterRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.Hub));
 
             var bldgRoot = UIScreenManager.Instance.GetScreen("Buildings");
-            bldgRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.ModeSelect));
+            bldgRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.Hub));
 
             var notifRoot = UIScreenManager.Instance.GetScreen("Notifications");
-            notifRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.ModeSelect));
+            notifRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.Hub));
 
             var siegesRoot = UIScreenManager.Instance.GetScreen("Sieges");
-            siegesRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.ModeSelect));
+            siegesRoot?.Q<Button>("btn-close")?.RegisterCallback<ClickEvent>(evt => SetUiState(UiState.Hub));
 
             authRoot = UIScreenManager.Instance.GetScreen("Auth");
             authTitleLabel = authRoot.Q<Label>("title-label");
@@ -1800,6 +2114,9 @@ namespace Novgov.Network
 
             waitingRoot = UIScreenManager.Instance.GetScreen("Waiting");
             waitingStatusLabel = waitingRoot.Q<Label>("status-label");
+            cancelWaitButton = waitingRoot.Q<Button>("btn-cancel-wait");
+            if (cancelWaitButton != null) cancelWaitButton.clicked += OnCancelWaitClicked;
+            else Debug.LogError("[MultiplayerMatchController] Bouton 'btn-cancel-wait' introuvable dans WaitingScreen.uxml — l'attente d'un adversaire ne pourra pas être annulée.");
 
             hudRoot = UIScreenManager.Instance.GetScreen("InMatchHud");
             teamBanner = hudRoot.Q<Label>("team-banner");
@@ -1812,16 +2129,21 @@ namespace Novgov.Network
             matchOverRoot = UIScreenManager.Instance.GetScreen("MatchOver");
             resultLabel = matchOverRoot.Q<Label>("result-label");
             ratingLabel = matchOverRoot.Q<Label>("rating-label");
-            matchOverRoot.Q<Button>("menu-button").clicked += () =>
-            {
-                SetUiState(UiState.Hidden);
-                UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
-            };
+            // 2026-09-30 : "Retour au menu" rechargeait la scène vers le menu Solo/En ligne — le joueur
+            // devait repasser par JOUER EN LIGNE, chargement et reconnexion après CHAQUE partie.
+            // Rechargement toujours nécessaire (état de partie remis à zéro), mais suivi d'un retour
+            // direct à la Conquête (voir GameManagerUI.ReloadSceneThen).
+            matchOverRoot.Q<Button>("menu-button").clicked += ReloadSceneBackToHub;
             matchOverRoot.Q<Button>("leaderboard-button").clicked += () => LeaderboardController.Show();
         }
 
         private void SetUiState(UiState newState)
         {
+            // Avis du QG (voir pendingHubNotice) : consommé en QUITTANT le hub, pas en y entrant —
+            // RefreshHubScreen doit encore pouvoir l'afficher.
+            if (uiState == UiState.Hub && newState != UiState.Hub) pendingHubNotice = null;
+            if (newState != UiState.Matchmaking) quitConfirmArmed = false;
+
             uiState = newState;
             IsFlowActive = newState != UiState.Hidden;
             IsInMatch = newState == UiState.InMatch;
@@ -1832,9 +2154,11 @@ namespace Novgov.Network
                     RefreshAuthScreen();
                     UIScreenManager.Instance.Show("Auth");
                     break;
-                case UiState.ModeSelect:
-                    RefreshModeSelectScreen();
-                    UIScreenManager.Instance.Show("ModeSelect");
+                case UiState.Hub:
+                    RefreshHubScreen();
+                    UIScreenManager.Instance.Show("Conquest");
+                    // Onglet (carte/gestion) et contenu de la carte : voir Novgov.UI.ZoneMapController.
+                    Novgov.UI.ZoneMapController.EnsureInstance().OnHubShown();
                     _ = GrantDailyActionPoints();
                     break;
                 case UiState.Connecting:
@@ -1848,6 +2172,7 @@ namespace Novgov.Network
                     // d'un déploiement rapide).
                     waitingScreenEnteredRealtime = Time.realtimeSinceStartup;
                     waitingStatusLabel.text = RenderWaitingScreenText();
+                    RefreshCancelWaitButton();
                     UIScreenManager.Instance.Show("Waiting");
                     break;
                 case UiState.Deployment:

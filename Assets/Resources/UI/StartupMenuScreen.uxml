@@ -4,19 +4,23 @@
             <ui:VisualElement style="width: 96px; height: 96px; align-self: center; margin-bottom: 12px; background-image: url('/Assets/Icon/NovgovIcon.png'); -unity-background-scale-mode: scale-to-fit;" />
             <ui:Label text="NOVGOV : CHAMP DE BATAILLE" class="title" style="margin-bottom: 24px;" />
 
+            <!-- 2026-09-30 (refonte du parcours des menus) : textes réécrits pour un joueur qui
+                 découvre le jeu — l'ancien "Carte déjà présente — contre l'IA" / "Géolocalisation
+                 GPS puis conquête de Zones en ligne" décrivait l'implémentation, pas ce que le
+                 joueur va vivre. Noms de boutons inchangés (câblés dans GameManagerUI). -->
             <ui:Button name="btn-offline" class="btn-secondary btn-with-icon" style="min-height: 96px; margin-bottom: 10px;">
-                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/city.png');" />
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/robot.png');" />
                 <ui:VisualElement class="btn-text-col">
-                    <ui:Label text="MODE SOLO" />
-                    <ui:Label text="Carte déjà présente — contre l'IA" class="btn-subtitle" />
+                    <ui:Label text="JOUER SOLO" />
+                    <ui:Label text="Une partie contre l'ordinateur — sans compte, sans connexion" class="btn-subtitle" />
                 </ui:VisualElement>
             </ui:Button>
 
             <ui:Button name="btn-multiplayer" class="btn-primary btn-with-icon" style="min-height: 96px; margin-bottom: 14px;">
                 <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/satellite.png'); -unity-background-image-tint-color: var(--color-accent-text);" />
                 <ui:VisualElement class="btn-text-col">
-                    <ui:Label text="CONQUÊTE MULTIJOUEUR" />
-                    <ui:Label text="Géolocalisation GPS puis conquête de Zones en ligne" class="btn-subtitle" />
+                    <ui:Label text="JOUER EN LIGNE" />
+                    <ui:Label text="Conquérez les quartiers de votre vraie ville contre d'autres joueurs" class="btn-subtitle" style="color: var(--color-accent-text);" />
                 </ui:VisualElement>
             </ui:Button>
 

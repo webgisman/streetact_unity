@@ -28,6 +28,14 @@
                          chaque bouton garde son propre picking par-dessus. -->
                     <ui:VisualElement name="top-actions-row" class="hud-action-cluster" style="picking-mode: Position;">
 
+                        <!-- MENU PAUSE (2026-09-30) : seul moyen de quitter/recommencer une partie en
+                             cours — il n'en existait aucun. Hors des groupes planification/exécution,
+                             pour rester accessible pendant toute la partie. Voir
+                             Novgov.UI.InGameMenuController. -->
+                        <ui:Button name="hud-menu-button" class="btn-glass" style="height: 48px; min-height: 48px; padding: 0 12px; margin-right: 10px;">
+                            <ui:Label text="MENU" style="font-size: 16px; -unity-font-style: bold; -unity-text-align: middle-center;" />
+                        </ui:Button>
+
                         <ui:VisualElement name="planification-group" style="picking-mode: Ignore; margin-right: 10px;">
                             <ui:VisualElement name="notif-bell-wrap" style="align-items: center;">
                                 <ui:Button name="notif-bell-button" class="btn-glass btn-icon-only" style="width: 44px; height: 44px; border-radius: 22px;">

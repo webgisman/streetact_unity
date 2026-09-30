@@ -1,0 +1,159 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <Style src="ConquestScreen.uss" />
+    <!-- CONQUÊTE (2026-09-30, demande joueur : "après multijoueur je veux juste Conquête, et dans
+         Conquête la gestion et le mode carte, qui doit être beau, pour choisir le quartier à côté,
+         avec du son"). Remplace l'ancien hub (ModeSelectScreen), la Carte des Zones (ZoneMapScreen)
+         et le choix de bataille (BattleSelectScreen) : Match à mort / Contrôle de zone /
+         Entraînement ne sont plus proposés.
+         - CARTE : les 9 cases (générées en C#, ZoneMapController) sont les VRAIES tuiles
+           OpenStreetMap du quartier du joueur et de ses 8 voisins ; toucher une case ouvre sa fiche
+           ("detail") qui dit en clair ce qu'elle est et ce que le bouton va faire.
+         - GESTION : sièges, caserne, quartiers, classement, aide.
+         "cq-backdrop" porte la classe ui-blocker : aucun tap/glissé sur cet écran n'atteint la scène
+         3D derrière (voir UnitSpawnerUI.IsPointerOverOnGUI). -->
+    <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore;">
+        <ui:VisualElement name="conquest-backdrop" class="cq-backdrop ui-blocker">
+
+            <!-- EN-TÊTE -->
+            <ui:VisualElement class="cq-header">
+                <ui:Button name="btn-hub-back" class="btn-secondary btn-with-icon cq-header-btn">
+                    <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/chevron_left.png'); margin-right: 6px;" />
+                    <ui:Label text="MENU" class="cq-header-btn-label" />
+                </ui:Button>
+                <ui:VisualElement class="cq-profile">
+                    <ui:Label name="lbl-username" text="Commandant" class="cq-username" />
+                    <ui:VisualElement class="cq-resource">
+                        <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/lightning.png'); -unity-background-image-tint-color: var(--color-resource); margin-right: 6px;" />
+                        <ui:Label name="lbl-action-points" text="... PA" class="resource-value cq-resource-label" />
+                    </ui:VisualElement>
+                </ui:VisualElement>
+                <ui:VisualElement class="cq-badge-wrap">
+                    <ui:Button name="btn-notifications" class="btn-secondary btn-with-icon cq-header-btn">
+                        <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/bell.png'); margin-right: 6px;" />
+                        <ui:Label text="RAPPORTS" class="cq-header-btn-label" />
+                    </ui:Button>
+                    <ui:Label name="lbl-notifications-badge" text="" class="notif-badge" style="display: none;" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+
+            <!-- ONGLETS -->
+            <ui:VisualElement class="cq-tabs">
+                <ui:VisualElement class="cq-tab-wrap">
+                    <ui:Button name="tab-map" class="cq-tab cq-tab--active">
+                        <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/flag.png'); margin-right: 10px;" />
+                        <ui:Label text="CARTE" />
+                    </ui:Button>
+                </ui:VisualElement>
+                <ui:VisualElement class="cq-tab-wrap">
+                    <ui:Button name="tab-manage" class="cq-tab">
+                        <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/crate.png'); margin-right: 10px;" />
+                        <ui:Label text="GESTION" />
+                    </ui:Button>
+                    <ui:Label name="lbl-manage-badge" text="" class="notif-badge" style="display: none; top: 2px; right: 8px;" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+
+            <!-- AVIS PONCTUEL (ex: pourquoi la partie vient de s'interrompre) — voir
+                 MultiplayerMatchController.pendingHubNotice. -->
+            <ui:Label name="lbl-hub-notice" text="" class="error-text cq-notice" style="display: none;" />
+
+            <!-- ALERTE : un de VOS quartiers est assiégé (visible sur les deux onglets). -->
+            <ui:VisualElement name="siege-alert" class="hub-alert-banner" style="display: none; flex-shrink: 0;">
+                <ui:Label name="lbl-siege-alert" text="" style="flex-grow: 1; flex-shrink: 1; font-size: 20px; color: var(--color-text);" />
+                <ui:Button name="btn-siege-alert-defend" text="DÉFENDRE" class="btn-primary" style="font-size: 22px; min-height: 56px; margin-left: 12px; padding: 8px 18px;" />
+            </ui:VisualElement>
+
+            <!-- ONGLET CARTE -->
+            <ui:VisualElement name="map-content" class="cq-map-content">
+                <ui:VisualElement name="map-frame" class="cq-map-frame">
+                    <ui:VisualElement name="map-grid" />
+                    <!-- Attribution exigée par la licence des tuiles OpenStreetMap (ODbL). -->
+                    <ui:Label text="Carte © contributeurs OpenStreetMap" class="cq-attribution" />
+                </ui:VisualElement>
+
+                <ui:VisualElement name="map-detail" class="panel cq-detail">
+                  <ui:ScrollView name="detail-scroll" style="flex-grow: 1; flex-shrink: 1;">
+                    <ui:Label name="detail-title" text="VOTRE SECTEUR" class="cq-detail-title" />
+                    <ui:Label name="detail-chip" text="" class="cq-chip" style="display: none;" />
+                    <ui:Label name="detail-text" text="" class="cq-detail-text" />
+                    <ui:Button name="btn-detail-action" text="" class="btn-primary cq-detail-action" style="display: none;" />
+                    <ui:Button name="btn-detail-secondary" text="" class="btn-secondary cq-detail-secondary" style="display: none;" />
+                    <ui:Label name="detail-status" text="" class="cq-detail-status" />
+
+                    <ui:VisualElement class="cq-legend">
+                        <ui:VisualElement class="cq-legend-item">
+                            <ui:VisualElement class="cq-legend-swatch" style="background-color: rgb(64, 104, 48);" />
+                            <ui:Label text="Libre : personne ne l'occupe" class="cq-legend-label" />
+                        </ui:VisualElement>
+                        <ui:VisualElement class="cq-legend-item">
+                            <ui:VisualElement class="cq-legend-swatch" style="background-color: var(--color-team1);" />
+                            <ui:Label text="À vous" class="cq-legend-label" />
+                        </ui:VisualElement>
+                        <ui:VisualElement class="cq-legend-item">
+                            <ui:VisualElement class="cq-legend-swatch" style="background-color: var(--color-team2);" />
+                            <ui:Label text="Tenu par un autre joueur" class="cq-legend-label" />
+                        </ui:VisualElement>
+                        <ui:VisualElement class="cq-legend-item">
+                            <ui:VisualElement class="cq-legend-swatch" style="background-color: rgb(20, 20, 16);" />
+                            <ui:Label text="Hors de portée pour l'instant" class="cq-legend-label" />
+                        </ui:VisualElement>
+                    </ui:VisualElement>
+                  </ui:ScrollView>
+                </ui:VisualElement>
+            </ui:VisualElement>
+
+            <!-- ONGLET GESTION -->
+            <ui:ScrollView name="manage-content" class="cq-manage-content" style="display: none;">
+                <ui:VisualElement class="cq-manage-inner">
+
+                    <ui:VisualElement name="help-box" class="hub-info-banner cq-help">
+                        <ui:Label text="COMMENT ÇA MARCHE ?" class="cq-help-title" />
+                        <ui:Label text="1. Sur la CARTE, prenez les quartiers libres autour du vôtre : c'est gratuit et immédiat." class="cq-help-line" />
+                        <ui:Label text="2. Chaque quartier à vous rapporte des Points d'Action (PA) toutes les 5 minutes, même quand vous ne jouez pas." class="cq-help-line" />
+                        <ui:Label text="3. Dépensez vos PA à la CASERNE pour recruter des troupes, ou pour améliorer vos quartiers." class="cq-help-line" />
+                        <ui:Label text="4. Un quartier tenu par un autre joueur se prend par un SIÈGE : vous placez vos troupes, il a 6 h pour se défendre, puis la bataille se joue toute seule." class="cq-help-line" />
+                    </ui:VisualElement>
+
+                    <ui:VisualElement>
+                        <ui:Button name="btn-sieges" class="btn-secondary btn-with-icon cq-manage-card">
+                            <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/barrier.png');" />
+                            <ui:VisualElement class="btn-text-col">
+                                <ui:Label text="SIÈGES" />
+                                <ui:Label text="Vos quartiers attaqués (à défendre) et vos attaques en cours" class="btn-subtitle" />
+                            </ui:VisualElement>
+                        </ui:Button>
+                        <ui:Label name="lbl-sieges-badge" text="" class="notif-badge" style="display: none; top: 8px; right: 8px;" />
+                    </ui:VisualElement>
+
+                    <ui:Button name="btn-roster" class="btn-secondary btn-with-icon cq-manage-card">
+                        <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/crate.png');" />
+                        <ui:VisualElement class="btn-text-col">
+                            <ui:Label text="CASERNE" />
+                            <ui:Label text="Recruter des troupes avec vos Points d'Action" class="btn-subtitle" />
+                        </ui:VisualElement>
+                    </ui:Button>
+
+                    <ui:Button name="btn-buildings" class="btn-secondary btn-with-icon cq-manage-card">
+                        <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/city.png');" />
+                        <ui:VisualElement class="btn-text-col">
+                            <ui:Label text="MES QUARTIERS" />
+                            <ui:Label text="Ce que chacun vous rapporte, et comment l'améliorer" class="btn-subtitle" />
+                        </ui:VisualElement>
+                    </ui:Button>
+
+                    <ui:Button name="btn-leaderboard" class="btn-secondary btn-with-icon cq-manage-card">
+                        <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/trophy.png');" />
+                        <ui:VisualElement class="btn-text-col">
+                            <ui:Label text="CLASSEMENT" />
+                            <ui:Label text="Les meilleurs commandants" class="btn-subtitle" />
+                        </ui:VisualElement>
+                    </ui:Button>
+
+                    <ui:Button name="btn-sign-out" class="btn-ghost" style="align-self: center; margin-top: 6px;">
+                        <ui:Label text="Se déconnecter du compte" style="font-size: 20px; color: var(--color-text-dim);" />
+                    </ui:Button>
+                </ui:VisualElement>
+            </ui:ScrollView>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

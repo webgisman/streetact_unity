@@ -1,10 +1,10 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.95); picking-mode: Ignore;">
         <ui:VisualElement class="panel" style="width: 80%; max-width: 800px; height: 80%;">
-            <ui:Label text="GESTION DES BÂTIMENTS &amp; RESSOURCES" class="title" style="margin-bottom: 24px;" />
+            <ui:Label text="MES QUARTIERS" class="title" style="margin-bottom: 24px;" />
             
             <ui:VisualElement class="hub-info-banner" style="margin-bottom: 24px;">
-                <ui:Label text="Récupérez les Points d'Action générés par les bâtiments que vous contrôlez sur la carte du monde." />
+                <ui:Label text="Chaque quartier qui vous appartient vous rapporte des Points d'Action toutes les 5 minutes, automatiquement — rien à collecter. Améliorez-le pour qu'il rapporte plus." />
             </ui:VisualElement>
 
             <!-- ScrollView for Buildings List -->
@@ -12,7 +12,7 @@
 
             <ui:Button name="btn-close" class="btn-secondary btn-with-icon" style="min-height: 72px; justify-content: center;">
                 <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/chevron_left.png'); margin-right: 8px;" />
-                <ui:Label text="RETOUR AU HUB" />
+                <ui:Label text="RETOUR" />
             </ui:Button>
         </ui:VisualElement>
     </ui:VisualElement>

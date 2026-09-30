@@ -132,6 +132,15 @@ namespace Novgov.Generation
 
         public void LoadCurrentZone() => LoadZone(CurrentTileX, CurrentTileY);
 
+        /// <summary>Repositionne le joueur sur une Zone SANS la générer — pour juste avant un
+        /// rechargement de scène (voir MultiplayerMatchController.ReturnToHub), qui rechargera de
+        /// toute façon la Zone courante : la générer ici serait un travail jeté immédiatement.</summary>
+        public void SetCurrentTileWithoutLoading(int tileX, int tileY)
+        {
+            CurrentTileX = tileX;
+            CurrentTileY = tileY;
+        }
+
         // Exploration locale (pas de demande serveur) — Slippy Map : tileY augmente vers le Sud.
         public void ExpandNorth() => LoadZone(CurrentTileX, CurrentTileY - 1);
         public void ExpandSouth() => LoadZone(CurrentTileX, CurrentTileY + 1);

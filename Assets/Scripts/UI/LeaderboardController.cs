@@ -21,7 +21,10 @@ public static class LeaderboardController
         if (UIScreenManager.Instance == null) return;
         EnsureRunner();
         BindOnce();
-        UIScreenManager.Instance.Show("Leaderboard");
+        // Superposé (SetVisible, pas Show) : l'écran d'où on l'ouvre (fin de partie) doit rester
+        // en place dessous. Avec Show()+HideAll() à la fermeture (avant le 2026-09-30), "Fermer"
+        // laissait le joueur devant la carte SANS AUCUN écran ni bouton — impasse totale.
+        UIScreenManager.Instance.SetVisible("Leaderboard", true);
         runner.StartCoroutine(FetchAndDisplay());
     }
 
@@ -38,7 +41,7 @@ public static class LeaderboardController
         if (bound) return;
         bound = true;
         VisualElement root = UIScreenManager.Instance.GetScreen("Leaderboard");
-        root.Q<Button>("close-button").clicked += () => UIScreenManager.Instance.HideAll();
+        root.Q<Button>("close-button").clicked += () => UIScreenManager.Instance.SetVisible("Leaderboard", false);
     }
 
     [Serializable] private class ProfileEntry { public string username; public int rating; }

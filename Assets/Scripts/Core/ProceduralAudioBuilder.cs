@@ -65,6 +65,38 @@ public static class ProceduralAudioBuilder
         return clip;
     }
 
+    /// <summary>Petite fanfare montante (do-mi-sol-do) — quartier pris sur la carte de Conquête
+    /// (2026-09-30, voir Novgov.UI.UiSfx).</summary>
+    public static AudioClip CreateVictoryFanfareSound()
+    {
+        float[] notes = { 523.25f, 659.25f, 783.99f, 1046.5f };
+        float noteDuration = 0.13f;
+        float lastNoteDuration = 0.45f;
+        float duration = noteDuration * (notes.Length - 1) + lastNoteDuration;
+        int sampleCount = (int)(sampleRate * duration);
+        float[] samples = new float[sampleCount];
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float t = (float)i / sampleRate;
+            int noteIndex = Mathf.Min((int)(t / noteDuration), notes.Length - 1);
+            float noteStart = noteIndex * noteDuration;
+            float local = t - noteStart;
+            float freq = notes[noteIndex];
+            // Timbre "cuivre" simple : fondamentale + harmoniques, attaque rapide, déclin doux.
+            float tone = Mathf.Sin(local * Mathf.PI * 2 * freq)
+                       + 0.45f * Mathf.Sin(local * Mathf.PI * 2 * freq * 2f)
+                       + 0.2f * Mathf.Sin(local * Mathf.PI * 2 * freq * 3f);
+            float attack = Mathf.Clamp01(local / 0.01f);
+            float decay = Mathf.Exp(-local * (noteIndex == notes.Length - 1 ? 4f : 9f));
+            samples[i] = tone * attack * decay * 0.18f;
+        }
+
+        AudioClip clip = AudioClip.Create("VictoryFanfare", sampleCount, 1, sampleRate, false);
+        clip.SetData(samples, 0);
+        return clip;
+    }
+
     // --- SONS DE MOUVEMENT ---
 
     public static AudioClip CreateFootstepSound()

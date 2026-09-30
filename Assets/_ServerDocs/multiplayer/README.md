@@ -11,6 +11,13 @@ tous les modes, deux rythmes de jeu 5 min/6h, notifications) — il fait foi en 
 avec le résumé "Décisions d'architecture" plus bas dans cette page ou avec le document 04, tous les
 deux écrits pour l'architecture précédente (résolveur pur/déterministe, remplacée le 2026-09-13).
 
+**2026-09-30 : refonte du parcours des menus (client uniquement)** — après la connexion, un seul
+écran CONQUÊTE : onglet CARTE (vraie carte OpenStreetMap du quartier et de ses voisins, sons) et
+onglet GESTION ; « COMBATTRE » et les modes Match à mort / Contrôle de zone / Entraînement retirés de
+l'interface ; vocabulaire « quartier / LIBRE » au lieu de « Zone / neutre » ; plusieurs impasses de
+navigation corrigées (attente sans Annuler, aucun moyen de quitter une partie…) — voir
+[15-menu-flow-redesign-2026-09-30.md](15-menu-flow-redesign-2026-09-30.md).
+
 **État (2026-09-19, nuit) : premier vrai test à 2 joueurs EN DIRECT (Multiplayer Play Mode contre le
 vrai serveur de production)**, plusieurs bugs réels trouvés et corrigés pendant la partie — voir
 [14-session-2026-09-19-live-playtest-bug-hunt.md](14-session-2026-09-19-live-playtest-bug-hunt.md)

@@ -1,7 +1,12 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.85); picking-mode: Ignore;">
-        <ui:VisualElement class="panel" style="width: 70%; max-width: 500px; align-items: center;">
-            <ui:Label name="status-label" text="Connexion..." class="subtitle" style="font-size: 28px; color: rgb(232, 222, 196);" />
+        <ui:VisualElement class="panel" style="width: 70%; max-width: 520px; align-items: stretch;">
+            <ui:Label name="status-label" text="Connexion..." class="subtitle" style="font-size: 28px; color: rgb(232, 222, 196); margin-bottom: 16px;" />
+            <!-- 2026-09-30 : il n'existait AUCUN moyen de sortir de "Recherche d'adversaire..." (voir
+                 MultiplayerMatchController.OnCancelWaitClicked). Affiché seulement pendant une attente
+                 serveur (pas pendant une simple connexion au compte) ; son texte passe à "QUITTER LA
+                 PARTIE" une fois l'adversaire trouvé. -->
+            <ui:Button name="btn-cancel-wait" text="ANNULER" class="btn-secondary" style="display: none; min-height: 64px;" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

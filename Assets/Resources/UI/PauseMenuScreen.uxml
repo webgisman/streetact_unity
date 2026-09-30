@@ -1,0 +1,22 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <!-- MENU EN PARTIE (2026-09-30) — ouvert par le bouton "MENU" du bandeau tactique. Jusqu'ici il
+         n'existait AUCUN moyen de quitter une partie en cours (solo comme en ligne) autrement qu'en
+         tuant l'application, et l'écran de fin de partie solo "Rejouer" renvoyait en fait au menu
+         principal. Superposé (SetVisible, jamais Show) : le HUD reste en place derrière. Le fond
+         "pause-backdrop" est reconnu comme absorbant par UnitSpawnerUI.IsPointerOverOnGUI (liste
+         blanche) et TacticalPathManager ignore tout tap tant que ce menu est ouvert — voir
+         Novgov.UI.InGameMenuController. -->
+    <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore;">
+        <ui:VisualElement name="pause-backdrop" style="position: absolute; left: 0; top: 0; right: 0; bottom: 0; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.85);">
+            <ui:VisualElement class="panel" style="width: 70%; max-width: 520px; align-items: stretch;">
+                <ui:Label text="PAUSE" class="title" style="margin-bottom: 16px;" />
+
+                <ui:Button name="btn-pause-resume" text="REPRENDRE" class="btn-primary" style="min-height: 76px; margin-bottom: 12px;" />
+                <ui:Button name="btn-pause-restart" text="RECOMMENCER LA PARTIE" class="btn-secondary" style="min-height: 68px; margin-bottom: 12px;" />
+                <ui:Button name="btn-pause-quit" text="QUITTER LA PARTIE" class="btn-danger" style="min-height: 68px;" />
+
+                <ui:Label name="lbl-pause-hint" text="" class="hint" style="font-size: 20px; margin-top: 12px; -unity-text-align: middle-center; white-space: normal;" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

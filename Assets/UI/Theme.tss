@@ -232,6 +232,23 @@
     white-space: normal;
 }
 
+/* Alerte ACTIONNABLE en tête du Quartier Général (2026-09-30, ex: "votre Zone est assiégée") —
+   même famille que .hub-info-banner, mais liseré rouge équipe adverse et disposition en ligne
+   (message + bouton d'action à droite) : une information qui demande une réaction ne doit plus
+   être enfouie dans un sous-écran. */
+.hub-alert-banner {
+    flex-direction: row;
+    align-items: center;
+    background-color: rgb(62, 34, 28);
+    border-width: 1px;
+    border-left-width: 6px;
+    border-color: var(--color-panel-border-dim);
+    border-left-color: var(--color-team2);
+    border-radius: 2px;
+    padding: 10px 12px;
+    margin-bottom: 14px;
+}
+
 /* "Chip" compact (profil, jauge de ressource) flottant en haut d'un écran plein cadre — même
    relief que ".panel" mais padding réduit, pensé pour un contenu court sur une ou deux lignes. */
 .hub-chip {

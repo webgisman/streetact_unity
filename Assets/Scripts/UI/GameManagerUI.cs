@@ -29,6 +29,34 @@ public class GameManagerUI : MonoBehaviour
     public bool IsStartupSelectionActive => isMapSelectorOpen;
     private string gpsStatus = "";
     private Label gpsStatusLabel;
+    private Label locationStatusLabel;
+
+    /// <summary>Ce qu'il faut enchaîner automatiquement juste après le PROCHAIN rechargement de
+    /// scène (2026-09-30, refonte du parcours des menus). Le jeu recharge sa scène pour repartir
+    /// d'un état propre après chaque partie — mais ce rechargement ramenait TOUJOURS au menu de
+    /// démarrage Solo/En ligne : "Rejouer" en fin de partie solo n'y rejouait pas, et "Retour au
+    /// menu" en fin de partie en ligne obligeait à repasser par JOUER EN LIGNE -> chargement ->
+    /// reconnexion pour retrouver le Quartier Général. Statique : doit survivre au rechargement,
+    /// comme <see cref="startupButtonsBound"/>.</summary>
+    public enum AfterReloadAction { None, StartSolo, OpenOnlineHub }
+    private static AfterReloadAction pendingAfterReload = AfterReloadAction.None;
+
+    /// <summary>Recharge la scène (état de partie remis à zéro) puis enchaîne directement sur
+    /// <paramref name="then"/> au lieu du menu de démarrage — voir <see cref="pendingAfterReload"/>.
+    /// Masque tout AVANT de recharger : UIScreenManager est persistant, ses écrans survivraient
+    /// sinon intacts par-dessus la scène rechargée (voir TacticalPathManager.ShowSoloGameOver).</summary>
+    public static void ReloadSceneThen(AfterReloadAction then)
+    {
+        pendingAfterReload = then;
+        UIScreenManager.Instance?.HideAll();
+        UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
+    }
+
+    // Vrai une fois la Zone courante du joueur réellement chargée dans CETTE scène pour le jeu en
+    // ligne (voir EnsureOnlineZoneReady) — champ d'instance, donc remis à faux à chaque
+    // rechargement de scène, qui efface aussi la ville générée.
+    private bool onlineZoneLoadedThisScene = false;
+    private Coroutine onlineZoneRoutine;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     private static void ConfigurePerformanceSettings()
@@ -87,6 +115,7 @@ public class GameManagerUI : MonoBehaviour
     private void Update()
     {
         if (gpsStatusLabel != null) gpsStatusLabel.text = gpsStatus;
+        if (locationStatusLabel != null) locationStatusLabel.text = gpsStatus;
 
         // Le bouton "CARTE DES ZONES" n'a de sens qu'une fois une Zone d'origine fixée (voir
         // ZoneManager.InitializeHomeZoneFromGps, appelé au premier "MODE CAMPAGNE MULTIJOUEUR") —
@@ -121,17 +150,30 @@ public class GameManagerUI : MonoBehaviour
                 // Menu réduit à 2 choix : MODE SOLO (carte déjà présente, contre l'IA) et MODE CAMPAGNE
                 // MULTIJOUEUR (géolocalisation GPS — anciennement un 3e bouton séparé "btn-gps" — puis
                 // connexion PvP, anciennement déclenchée directement sans passer par le GPS).
+                // Via GameManagerUI.Instance, JAMAIS via `this` (correctif 2026-09-30) : ce câblage
+                // n'a lieu qu'une fois par lancement de l'app (voir startupButtonsBound), donc `this`
+                // désignait pour toujours l'instance de la PREMIÈRE scène. Après n'importe quel
+                // rechargement (fin de partie, menu pause), "JOUER SOLO" remettait à faux le drapeau
+                // d'une instance détruite : celle de la scène courante gardait isMapSelectorOpen à
+                // vrai, et le dock de déploiement comme la barre tactique restaient masqués.
                 root.Q<UnityEngine.UIElements.Button>("btn-offline").clicked += () =>
                 {
-                    isMapSelectorOpen = false;
+                    GameManagerUI self = GameManagerUI.Instance;
+                    if (self == null) return;
+                    self.isMapSelectorOpen = false;
                     UIScreenManager.Instance.HideAll();
                     MusicManager.SetGameplayVolume();
-                    GameManagerUI.Instance?.OnClickLoadDefaultOfflineMap();
+                    self.OnClickLoadDefaultOfflineMap();
                 };
+                // 2026-09-30 : COMPTE D'ABORD, localisation ENSUITE (et une seule fois, expliquée
+                // avant la boîte système — voir EnsureOnlineZoneReady). Avant, ce bouton lançait
+                // directement le GPS : la demande d'autorisation Android surgissait sans aucune
+                // explication, puis un chargement, et SEULEMENT ENSUITE le formulaire de connexion.
                 root.Q<UnityEngine.UIElements.Button>("btn-multiplayer").clicked += () =>
                 {
+                    if (GameManagerUI.Instance != null) GameManagerUI.Instance.gpsStatus = "";
                     MusicManager.SetGameplayVolume();
-                    GameManagerUI.Instance?.StartCoroutine(GameManagerUI.Instance.StartDeviceGPS(thenConnectMultiplayer: true));
+                    Novgov.Network.MultiplayerMatchController.EnsureInstance().BeginLoginFlow();
                 };
                 startupButtonsBound = true;
             }
@@ -143,11 +185,28 @@ public class GameManagerUI : MonoBehaviour
 
         gpsStatusLabel = root.Q<Label>("gps-status-label");
         zoneMapButton = root.Q<UnityEngine.UIElements.Button>("btn-zone-map");
+        BindLocationPromptOnce();
 
+        // Enchaînement demandé AVANT le rechargement de scène (voir ReloadSceneThen) : on saute le
+        // menu de démarrage au lieu d'y renvoyer le joueur à chaque fin de partie.
+        AfterReloadAction pending = pendingAfterReload;
+        pendingAfterReload = AfterReloadAction.None;
+        if (pending == AfterReloadAction.StartSolo)
+        {
+            isMapSelectorOpen = false;
+            UIScreenManager.Instance.HideAll();
+            MusicManager.SetGameplayVolume();
+            OnClickLoadDefaultOfflineMap();
+        }
+        else if (pending == AfterReloadAction.OpenOnlineHub)
+        {
+            MusicManager.SetGameplayVolume();
+            Novgov.Network.MultiplayerMatchController.EnsureInstance().BeginLoginFlow();
+        }
         // Menu de démarrage prioritaire : ce Show() doit s'exécuter même si l'écran "Error"
         // (non critique) échoue à se lier plus bas — sans ce garde-fou, une seule exception dans
         // le bloc suivant empêchait TOUT le menu de s'afficher (écran totalement vide au lancement).
-        if (isMapSelectorOpen)
+        else if (isMapSelectorOpen)
         {
             UIScreenManager.Instance.Show("StartupMenu");
             MusicManager.SetMenuVolume();
@@ -180,17 +239,125 @@ public class GameManagerUI : MonoBehaviour
         }
     }
 
-    /// <summary>Retour au menu de démarrage (choix hors-ligne/GPS/multijoueur) — appelé depuis le
-    /// bouton RETOUR des boîtes de dialogue de connexion/création de compte
-    /// (voir MultiplayerMatchController), qui ne connaissent pas ce menu directement.</summary>
-    public void ReturnToStartupMenu()
+    /// <summary>Retour au menu de démarrage (Solo / En ligne) — appelé depuis le bouton RETOUR de
+    /// l'écran de connexion, "MENU PRINCIPAL" / "Se déconnecter" du Quartier Général, ou un
+    /// abandon de la mise en place du QG (voir MultiplayerMatchController), qui ne connaissent pas
+    /// ce menu directement. <paramref name="message"/> (facultatif) s'affiche sous les deux boutons,
+    /// ex. la raison d'un échec ; tout message précédent est effacé sinon.</summary>
+    public void ReturnToStartupMenu(string message = null)
     {
+        if (onlineZoneRoutine != null) { StopCoroutine(onlineZoneRoutine); onlineZoneRoutine = null; }
+        gpsStatus = message ?? "";
         isMapSelectorOpen = true;
         if (UIScreenManager.Instance != null)
         {
             UIScreenManager.Instance.Show("StartupMenu");
             MusicManager.SetMenuVolume();
         }
+    }
+
+    // --- Mise en place du QG en ligne (localisation expliquée + chargement de la Zone) -----------
+
+    private System.Action<bool> pendingLocationChoice;
+    private UnityEngine.UIElements.Button locationAllowButton, locationCancelButton;
+
+    /// <summary>Câblé une seule fois (écran persistant, voir startupButtonsBound) : les callbacks
+    /// passent par GameManagerUI.Instance, recréé à chaque rechargement de scène.</summary>
+    private void BindLocationPromptOnce()
+    {
+        VisualElement promptRoot = UIScreenManager.Instance.GetScreen("LocationPrompt");
+        if (promptRoot == null)
+        {
+            Debug.LogWarning("[GameManagerUI] Écran 'LocationPrompt' introuvable (UXML non chargé) — la localisation sera demandée sans explication préalable.");
+            return;
+        }
+        locationStatusLabel = promptRoot.Q<Label>("location-status-label");
+        locationAllowButton = promptRoot.Q<UnityEngine.UIElements.Button>("btn-location-allow");
+        locationCancelButton = promptRoot.Q<UnityEngine.UIElements.Button>("btn-location-cancel");
+        if (locationAllowButton != null && locationAllowButton.userData == null)
+        {
+            locationAllowButton.userData = true;
+            locationAllowButton.clicked += () => GameManagerUI.Instance?.ResolveLocationChoice(true);
+        }
+        if (locationCancelButton != null && locationCancelButton.userData == null)
+        {
+            locationCancelButton.userData = true;
+            locationCancelButton.clicked += () => GameManagerUI.Instance?.ResolveLocationChoice(false);
+        }
+    }
+
+    private void ResolveLocationChoice(bool allow)
+    {
+        var callback = pendingLocationChoice;
+        pendingLocationChoice = null;
+        callback?.Invoke(allow);
+    }
+
+    /// <summary>Garantit, avant d'ouvrir le Quartier Général, que (1) la Zone d'origine du joueur
+    /// est fixée — en expliquant POURQUOI la position est demandée avant la boîte système, la toute
+    /// première fois seulement — et (2) que sa Zone courante est chargée dans cette scène. Appelé
+    /// par MultiplayerMatchController UNE FOIS LE COMPTE CONNECTÉ (le GPS passait avant la connexion
+    /// jusqu'au 2026-09-30). <paramref name="onCancelled"/> : le joueur a renoncé à placer son QG.</summary>
+    public void EnsureOnlineZoneReady(System.Action onReady, System.Action onCancelled)
+    {
+        if (onlineZoneRoutine != null) StopCoroutine(onlineZoneRoutine);
+        onlineZoneRoutine = StartCoroutine(EnsureOnlineZoneReadyRoutine(onReady, onCancelled));
+    }
+
+    private IEnumerator EnsureOnlineZoneReadyRoutine(System.Action onReady, System.Action onCancelled)
+    {
+        Novgov.Generation.ZoneManager zoneManager = Novgov.Generation.ZoneManager.EnsureInstance();
+
+        // Boucle : un échec GPS (signal introuvable, autorisation refusée...) reste affiché SUR cet
+        // écran, avec le bouton pour réessayer — au lieu de renvoyer au menu de démarrage.
+        while (!zoneManager.HasHomeZone)
+        {
+            bool? choice = null;
+            pendingLocationChoice = allow => choice = allow;
+            SetLocationButtonsEnabled(true);
+            // Pas de Show() répété après un échec : il rejouerait l'animation d'apparition de
+            // l'écran déjà affiché (clignotement) au moment où le joueur lit le message d'erreur.
+            if (UIScreenManager.Instance != null && !UIScreenManager.Instance.IsVisible("LocationPrompt"))
+                UIScreenManager.Instance.Show("LocationPrompt");
+            while (choice == null) yield return null;
+
+            if (choice == false)
+            {
+                onlineZoneRoutine = null;
+                gpsStatus = "";
+                onCancelled?.Invoke();
+                yield break;
+            }
+
+            SetLocationButtonsEnabled(false);
+            yield return AcquireHomeZoneFromGps();
+        }
+
+        if (!onlineZoneLoadedThisScene)
+        {
+            isMapSelectorOpen = false;
+            gpsStatus = "";
+            UIScreenManager.Instance?.Show("Loading");
+
+            // Charge la Zone courante du joueur (son origine, ou la dernière Zone visitée) — plus
+            // aucune référence à une position GPS brute ici, uniquement l'index de tuile géré par
+            // ZoneManager. Plus de déploiement automatique : la carte se charge vide.
+            zoneManager.LoadCurrentZone();
+            yield return new WaitForSeconds(0.5f);
+
+            UIScreenManager.Instance?.SetVisible("Loading", false);
+            onlineZoneLoadedThisScene = true;
+        }
+
+        isMapSelectorOpen = false;
+        onlineZoneRoutine = null;
+        onReady?.Invoke();
+    }
+
+    private void SetLocationButtonsEnabled(bool enabled)
+    {
+        locationAllowButton?.SetEnabled(enabled);
+        locationCancelButton?.SetEnabled(enabled);
     }
 #endif
 
@@ -235,6 +402,11 @@ public class GameManagerUI : MonoBehaviour
 
     public void OnClickLoadDefaultOfflineMap()
     {
+#if !UNITY_SERVER
+        // La carte solo remplace la Zone réelle éventuellement chargée pour le jeu en ligne : un
+        // prochain "JOUER EN LIGNE" devra la recharger (voir EnsureOnlineZoneReady).
+        onlineZoneLoadedThisScene = false;
+#endif
         UIScreenManager.Instance?.SetVisible("Error", false);
         UIScreenManager.Instance?.SetVisible("Loading", true);
         StartCoroutine(LoadOfflineRoutine());
@@ -261,13 +433,9 @@ public class GameManagerUI : MonoBehaviour
         UIScreenManager.Instance?.SetVisible("Error", false);
     }
 
-    /// <summary>Géolocalise l'appareil, génère la ville réelle correspondante, puis — si
-    /// <paramref name="thenConnectMultiplayer"/> est vrai (bouton MODE CAMPAGNE MULTIJOUEUR) —
-    /// enchaîne directement sur la connexion PvP une fois la carte prête. En mode solo, le GPS
-    /// n'est jamais utilisé : ce paramètre est donc toujours vrai pour l'unique appelant restant.</summary>
     // Position simulée pour les tests en Éditeur — le service Input.location d'Unity n'est de toute
     // façon jamais fonctionnel dans l'Éditeur (pas de matériel GPS), donc ce court-circuit ne retire
-    // aucune fonctionnalité réelle : sans lui, StartDeviceGPS() finissait systématiquement par
+    // aucune fonctionnalité réelle : sans lui, la lecture GPS finissait systématiquement par
     // échouer après 20s d'attente ("Impossible de capter le signal GPS"), rendant tout test du flux
     // multijoueur en Play Mode impossible sans passer par un vrai appareil.
     //
@@ -337,14 +505,19 @@ public class GameManagerUI : MonoBehaviour
     }
 #endif
 
-    private IEnumerator StartDeviceGPS(bool thenConnectMultiplayer)
+    /// <summary>Lit la position de l'appareil UNE fois et fixe la Zone d'origine (voir
+    /// ZoneManager.InitializeHomeZoneFromGps). En cas d'échec, laisse la raison — formulée avec
+    /// la marche à suivre — dans <see cref="gpsStatus"/>, affiché sur l'écran LocationPrompt où le
+    /// joueur peut réessayer (voir EnsureOnlineZoneReadyRoutine). Le chargement de la ville et la
+    /// connexion au compte, autrefois enchaînés ici (ancien StartDeviceGPS), n'en font plus partie.</summary>
+    private IEnumerator AcquireHomeZoneFromGps()
     {
         Novgov.Generation.ZoneManager zoneManager = Novgov.Generation.ZoneManager.EnsureInstance();
 
         // Le GPS n'est consulté QUE tant qu'aucune Zone d'origine n'a encore été fixée — une fois
         // ZoneManager.InitializeHomeZoneFromGps() appelé une première fois (persisté via
-        // PlayerPrefs, y compris entre deux lancements de l'app), tout ce bloc est sauté et le jeu
-        // ne raisonne plus qu'en (tileX, tileY), voir ZoneManager.
+        // PlayerPrefs, y compris entre deux lancements de l'app), le jeu ne raisonne plus qu'en
+        // (tileX, tileY), voir ZoneManager.
         if (!zoneManager.HasHomeZone)
         {
             float lat, lon;
@@ -356,7 +529,7 @@ public class GameManagerUI : MonoBehaviour
             lon = mockCity.Lon;
             yield return new WaitForSeconds(0.3f);
 #else
-            gpsStatus = "Recherche du signal GPS de l'appareil...";
+            gpsStatus = "Recherche de votre position...";
 
 #if UNITY_ANDROID
             // Android 6+ : la permission déclarée dans le manifeste ne suffit pas, il faut la demander
@@ -365,7 +538,7 @@ public class GameManagerUI : MonoBehaviour
             // il a fallu le faire manuellement pendant les tests.
             if (!Permission.HasUserAuthorizedPermission(Permission.FineLocation))
             {
-                gpsStatus = "Autorise l'accès à la position pour continuer...";
+                gpsStatus = "Autorisez l'accès à la position dans la fenêtre qui s'ouvre...";
                 bool permissionResolved = false;
                 bool permissionGranted = false;
 
@@ -378,7 +551,7 @@ public class GameManagerUI : MonoBehaviour
 
                 if (!permissionGranted)
                 {
-                    gpsStatus = "Autorisation de localisation refusée. Active-la dans les paramètres de l'appareil pour utiliser le GPS.";
+                    gpsStatus = "Localisation refusée. Touchez à nouveau PLACER MON QG ICI et choisissez « Autoriser » (ou activez-la dans les paramètres du téléphone).";
                     yield break;
                 }
             }
@@ -386,7 +559,7 @@ public class GameManagerUI : MonoBehaviour
 
             if (!Input.location.isEnabledByUser)
             {
-                gpsStatus = "GPS désactivé dans les paramètres du téléphone.";
+                gpsStatus = "La localisation du téléphone est désactivée : activez-la, puis touchez à nouveau PLACER MON QG ICI.";
                 yield break;
             }
 
@@ -400,7 +573,7 @@ public class GameManagerUI : MonoBehaviour
 
             if (maxWait < 1 || Input.location.status == LocationServiceStatus.Failed)
             {
-                gpsStatus = "Impossible de capter le signal GPS.";
+                gpsStatus = "Position introuvable pour l'instant (signal GPS faible). Rapprochez-vous d'une fenêtre, puis réessayez.";
                 yield break;
             }
 
@@ -409,35 +582,9 @@ public class GameManagerUI : MonoBehaviour
             Input.location.Stop();
 #endif
 
-            gpsStatus = "Coordonnées acquises ! Zone d'origine fixée.";
+            gpsStatus = "Position trouvée ! Votre QG est installé.";
             zoneManager.InitializeHomeZoneFromGps(lat, lon);
-            yield return new WaitForSeconds(0.3f);
-        }
-
-        gpsStatus = "Génération du champ de bataille...";
-        isMapSelectorOpen = false;
-#if !UNITY_SERVER
-        if (UIScreenManager.Instance != null) UIScreenManager.Instance.HideAll();
-#endif
-
-        UIScreenManager.Instance?.SetVisible("Loading", true);
-
-        // Charge la Zone courante du joueur (son origine, ou la dernière Zone visitée) — plus aucune
-        // référence à une position GPS brute ici, uniquement l'index de tuile géré par ZoneManager.
-        zoneManager.LoadCurrentZone();
-
-        yield return new WaitForSeconds(0.5f);
-
-        // Plus de déploiement automatique : la carte se charge vide, le joueur place lui-même ses
-        // unités via le dock "QG Renforts" (voir UnitSpawnerUI.Start()) — sauf en enchaînement
-        // multijoueur ci-dessous, où c'est l'écran de connexion qui prend immédiatement la main.
-        UIScreenManager.Instance?.SetVisible("Loading", false);
-
-        if (thenConnectMultiplayer)
-        {
-#if !UNITY_SERVER
-            Novgov.Network.MultiplayerMatchController.EnsureInstance().BeginLoginFlow();
-#endif
+            yield return new WaitForSeconds(0.6f);
         }
     }
 }

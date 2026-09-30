@@ -87,6 +87,14 @@ public partial class TacticalPathManager
             if (notifBellBtn == null) { Debug.LogError("[TacticalPathManager] Bouton 'notif-bell-button' introuvable dans le UXML instancié."); return; }
             notifBellBtn.clicked += SelectionnerProchaineUniteBlessee;
 
+#if !UNITY_SERVER
+            // Menu pause (2026-09-30) — facultatif comme undo-node-button : un UXML périmé ne doit pas
+            // faire échouer le reste du câblage.
+            Button hudMenuBtn = bottomBarRoot.Q<Button>("hud-menu-button");
+            if (hudMenuBtn == null) Debug.LogWarning("[TacticalPathManager] Bouton 'hud-menu-button' absent du UXML — menu pause indisponible.");
+            else Novgov.UI.InGameMenuController.BindHudButton(hudMenuBtn);
+#endif
+
             Button skipBtn = bottomBarRoot.Q<Button>("skip-button");
             if (skipBtn == null) { Debug.LogError("[TacticalPathManager] Bouton 'skip-button' introuvable dans le UXML instancié."); return; }
             skipButtonEl = skipBtn;

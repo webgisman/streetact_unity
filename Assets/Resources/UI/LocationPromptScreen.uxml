@@ -1,0 +1,24 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <!-- EXPLICATION AVANT LA DEMANDE DE LOCALISATION (2026-09-30) — affiché UNE SEULE FOIS, juste
+         après la connexion au compte et avant que le système Android/iOS n'affiche sa propre boîte
+         "Autoriser la localisation ?". Avant : cette boîte système surgissait dès le tap sur le
+         bouton multijoueur, avant même le formulaire de connexion, sans aucune explication — un
+         joueur qui ne comprend pas pourquoi refuse, et se retrouve bloqué. Câblé dans
+         GameManagerUI.EnsureOnlineZoneReady. -->
+    <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.92); picking-mode: Ignore;">
+        <ui:VisualElement class="panel" style="width: 75%; max-width: 620px; align-items: stretch;">
+            <ui:VisualElement class="icon icon-lg" style="align-self: center; margin-bottom: 10px; background-image: url('/Assets/UI/Icons/pin.png'); -unity-background-image-tint-color: var(--color-accent);" />
+            <ui:Label text="OÙ INSTALLER VOTRE QG ?" class="title" style="margin-bottom: 14px;" />
+            <ui:Label text="Dans Novgov, le champ de bataille, c'est votre vraie ville : votre Quartier Général est placé dans votre quartier actuel, et vous conquérez ensuite les quartiers autour." style="font-size: 24px; margin-bottom: 10px; -unity-text-align: middle-center;" />
+            <ui:Label text="Votre position n'est lue qu'UNE SEULE FOIS, pour choisir ce quartier. Elle n'est jamais suivie ensuite." class="hint" style="font-size: 20px; margin-bottom: 18px; -unity-text-align: middle-center;" />
+
+            <ui:Button name="btn-location-allow" class="btn-primary btn-with-icon" style="min-height: 80px; margin-bottom: 10px; justify-content: center;">
+                <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/pin.png'); -unity-background-image-tint-color: var(--color-accent-text);" />
+                <ui:Label text="PLACER MON QG ICI" />
+            </ui:Button>
+            <ui:Button name="btn-location-cancel" text="Pas maintenant (retour au menu)" class="btn-ghost" />
+
+            <ui:Label name="location-status-label" text="" style="-unity-text-align: middle-center; color: var(--color-accent); font-size: 22px; margin-top: 10px; white-space: normal;" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

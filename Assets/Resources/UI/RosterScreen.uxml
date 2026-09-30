@@ -1,10 +1,10 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.95); picking-mode: Ignore;">
         <ui:VisualElement class="panel" style="width: 80%; max-width: 800px; height: 80%;">
-            <ui:Label text="CASERNE - PRÉPARATION DES UNITÉS" class="title" style="margin-bottom: 24px;" />
+            <ui:Label text="CASERNE" class="title" style="margin-bottom: 24px;" />
             
             <ui:VisualElement class="hub-info-banner" style="flex-direction: row; justify-content: space-between; align-items: center; margin-bottom: 24px;">
-                <ui:Label text="Recrutez des unités avec vos Points d'Action. Elles seront ajoutées à votre inventaire pour le déploiement." style="flex-shrink: 1;" />
+                <ui:Label text="Recrutez des unités avec vos Points d'Action : elles rejoignent votre armée, et vous les placerez sur la carte au début de chaque bataille." style="flex-shrink: 1;" />
                 <ui:Label name="lbl-action-points" text="Solde : ..." class="resource-value" style="font-size: 20px; min-width: 150px; -unity-text-align: middle-right;" />
             </ui:VisualElement>
 
@@ -13,7 +13,7 @@
 
             <ui:Button name="btn-close" class="btn-secondary btn-with-icon" style="min-height: 72px; justify-content: center;">
                 <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/chevron_left.png'); margin-right: 8px;" />
-                <ui:Label text="RETOUR AU HUB" />
+                <ui:Label text="RETOUR" />
             </ui:Button>
         </ui:VisualElement>
     </ui:VisualElement>

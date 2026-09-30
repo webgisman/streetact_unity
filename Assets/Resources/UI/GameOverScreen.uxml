@@ -3,7 +3,11 @@
         <ui:VisualElement class="panel" style="width: 70%; max-width: 500px; align-items: center;">
             <ui:Label name="result-label" text="" class="title" style="margin-bottom: 12px;" />
             <ui:Label name="detail-label" text="" class="subtitle" style="margin-bottom: 24px;" />
-            <ui:Button name="menu-button" text="Rejouer" class="btn-primary" style="width: 100%;" />
+            <!-- 2026-09-30 : "Rejouer" rechargeait la scène vers le menu principal au lieu de relancer
+                 une partie — il relance maintenant vraiment le solo ; le menu principal a son propre
+                 bouton. Voir TacticalPathManager.ShowSoloGameOver / GameManagerUI.ReloadSceneThen. -->
+            <ui:Button name="menu-button" text="REJOUER" class="btn-primary" style="width: 100%; margin-bottom: 12px;" />
+            <ui:Button name="btn-gameover-main-menu" text="MENU PRINCIPAL" class="btn-secondary" style="width: 100%;" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

@@ -1,13 +1,15 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement name="root" style="flex-grow: 1; align-items: center; justify-content: center; background-color: rgba(8, 10, 12, 0.85); picking-mode: Ignore;">
-        <ui:VisualElement class="panel" style="width: 70%; max-width: 500px; align-items: center;">
+        <ui:VisualElement class="panel" style="width: 70%; max-width: 520px; align-items: center;">
             <ui:Label name="result-label" text="" class="title" style="margin-bottom: 12px;" />
             <ui:Label name="rating-label" text="" class="subtitle" style="margin-bottom: 24px;" />
-            <ui:Button name="leaderboard-button" class="btn-secondary btn-with-icon" style="width: 100%; margin-bottom: 12px; justify-content: center;">
+            <!-- 2026-09-30 : "Retour au menu" renvoyait au menu Solo/En ligne ; ramène maintenant
+                 directement à l'écran Conquête (voir MultiplayerMatchController.ReloadSceneBackToHub). -->
+            <ui:Button name="menu-button" text="RETOUR À LA CONQUÊTE" class="btn-primary" style="width: 100%; margin-bottom: 12px;" />
+            <ui:Button name="leaderboard-button" class="btn-secondary btn-with-icon" style="width: 100%; justify-content: center;">
                 <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/trophy.png'); margin-right: 8px;" />
                 <ui:Label text="Classement" />
             </ui:Button>
-            <ui:Button name="menu-button" text="Retour au menu" class="btn-primary" style="width: 100%;" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

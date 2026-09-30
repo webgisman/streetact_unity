@@ -360,17 +360,23 @@ public partial class TacticalPathManager
             menuButton.userData = true;
             menuButton.clicked += () =>
             {
-                // MASQUER AVANT DE RECHARGER (correctif 2026-09-04). UIScreenManager est en
-                // DontDestroyOnLoad et se détruit lui-même s'une instance existe déjà : ses
-                // VisualElement survivent donc intacts à LoadScene, écran GameOver toujours en
-                // display:Flex. Comme rien n'appelait jamais SetVisible("GameOver", false), le voile
-                // à 85% d'opacité restait collé par-dessus la partie rechargée, y compris par-dessus
-                // le menu de démarrage : le joueur ne pouvait plus rien atteindre et seul un
-                // redémarrage complet de l'application débloquait la situation. Le chemin
-                // multijoueur, lui, encadrait déjà son LoadScene par HideAll().
-                UIScreenManager.Instance.HideAll();
+                // MASQUER AVANT DE RECHARGER (correctif 2026-09-04) — fait par ReloadSceneThen :
+                // UIScreenManager est en DontDestroyOnLoad, sans HideAll() le voile GameOver restait
+                // collé par-dessus la scène rechargée et bloquait tout.
+                // 2026-09-30 : "REJOUER" relance VRAIMENT une partie solo — le rechargement seul
+                // ramenait au menu de démarrage, contrairement au libellé du bouton.
                 IsSoloGameOver = false; // la scène rechargée redémarre une partie jouable
-                UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
+                GameManagerUI.ReloadSceneThen(GameManagerUI.AfterReloadAction.StartSolo);
+            };
+        }
+        var mainMenuButton = root.Q<UnityEngine.UIElements.Button>("btn-gameover-main-menu");
+        if (mainMenuButton != null && mainMenuButton.userData == null)
+        {
+            mainMenuButton.userData = true;
+            mainMenuButton.clicked += () =>
+            {
+                IsSoloGameOver = false;
+                GameManagerUI.ReloadSceneThen(GameManagerUI.AfterReloadAction.None);
             };
         }
         UIScreenManager.Instance.SetVisible("GameOver", true);

@@ -176,6 +176,9 @@ public partial class TacticalPathManager : MonoBehaviour
         // traité — vérifié explicitement ici plutôt que de compter uniquement sur le recouvrement
         // visuel de l'écran GameOver.
         if (IsSoloGameOver) return;
+        // Menu pause ouvert (voir Novgov.UI.InGameMenuController) : même principe, aucun tap ne doit
+        // atteindre la carte derrière lui.
+        if (Novgov.UI.InGameMenuController.IsOpen) return;
 
         // Bloquer l'assignation de nouveaux ordres pendant l'exécution, pendant le placement d'unités,
         // ou tant que le déploiement initial est en cours (dock "QG Renforts" ouvert, voir

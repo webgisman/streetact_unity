@@ -1,0 +1,352 @@
+/* Écran CONQUÊTE (2026-09-30) — seul écran du jeu en ligne après la connexion : onglets CARTE
+   (vraie carte OpenStreetMap du quartier du joueur et de ses 8 voisins) et GESTION. Hérite de
+   Theme.tss (couleurs, boutons, .panel) ; ne définit ici que sa propre mise en page. La
+   disposition carte/fiche bascule ligne (paysage) / colonne (portrait) en C#, voir
+   ZoneMapController.ApplyResponsiveLayout — UI Toolkit n'a pas de media queries. */
+
+.cq-backdrop {
+    position: absolute;
+    left: 0; top: 0; right: 0; bottom: 0;
+    background-color: rgba(10, 11, 9, 0.96);
+    padding: 12px 16px;
+    flex-direction: column;
+}
+
+/* --- En-tête --- */
+.cq-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+}
+
+Button.cq-header-btn {
+    min-height: 52px;
+    padding: 6px 14px;
+}
+
+.cq-header-btn-label {
+    font-size: 20px;
+    -unity-font-style: bold;
+}
+
+.cq-profile {
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    margin: 0 12px;
+}
+
+.cq-username {
+    font-size: 22px;
+    -unity-font-style: bold;
+    margin-right: 16px;
+    -unity-text-align: middle-right;
+}
+
+.cq-resource {
+    flex-direction: row;
+    align-items: center;
+    background-color: rgba(0, 0, 0, 0.35);
+    border-radius: 14px;
+    padding: 4px 12px;
+}
+
+.cq-resource-label {
+    font-size: 22px;
+}
+
+.cq-badge-wrap {
+    align-items: center;
+}
+
+/* --- Onglets --- */
+.cq-tabs {
+    flex-direction: row;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+}
+
+.cq-tab-wrap {
+    flex-grow: 1;
+    flex-basis: 0;
+}
+
+Button.cq-tab {
+    flex-direction: row;
+    align-items: center;
+    flex-grow: 1;
+    min-height: 60px;
+    margin: 0 4px;
+    justify-content: center;
+    background-color: rgb(30, 28, 20);
+    border-width: 0;
+    border-bottom-width: 4px;
+    border-bottom-color: rgb(30, 28, 20);
+    border-radius: 2px;
+}
+
+Button.cq-tab Label {
+    font-size: 24px;
+    color: var(--color-text-dim);
+    -unity-font-definition: var(--font-head);
+    letter-spacing: 2px;
+}
+
+Button.cq-tab .icon {
+    -unity-background-image-tint-color: var(--color-text-dim);
+}
+
+Button.cq-tab--active {
+    background-color: var(--color-panel);
+    border-bottom-color: var(--color-accent);
+}
+
+Button.cq-tab--active Label {
+    color: var(--color-text);
+}
+
+Button.cq-tab--active .icon {
+    -unity-background-image-tint-color: var(--color-text);
+}
+
+.cq-notice {
+    font-size: 22px;
+    -unity-text-align: middle-center;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+/* --- Onglet CARTE --- */
+.cq-map-content {
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+}
+
+.cq-map-frame {
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    background-color: rgb(28, 26, 18);
+    border-width: 2px;
+    border-top-color: var(--color-panel-border);
+    border-left-color: var(--color-panel-border);
+    border-right-color: var(--color-panel-border-dim);
+    border-bottom-color: var(--color-panel-border-dim);
+    border-radius: 2px;
+}
+
+.cq-map-row {
+    flex-direction: row;
+}
+
+/* Une case = un quartier réel. Button (pas VisualElement) : absorbe le tap (liste blanche de
+   UnitSpawnerUI.IsPointerOverOnGUI) et reçoit `clicked`. Le fond est la tuile OpenStreetMap,
+   posée en C# ; la couleur de fond ci-dessous ne se voit que tant qu'elle n'est pas chargée. */
+Button.cq-cell {
+    margin: 2px;
+    padding: 0;
+    min-height: 0;
+    border-width: 3px;
+    border-color: rgba(0, 0, 0, 0.55);
+    border-radius: 2px;
+    background-color: rgb(58, 54, 40);
+    -unity-background-scale-mode: scale-and-crop;
+    overflow: hidden;
+    transition-property: scale, border-color;
+    transition-duration: 0.12s;
+}
+
+Button.cq-cell:hover {
+    border-color: rgba(255, 246, 220, 0.8);
+}
+
+Button.cq-cell:active {
+    scale: 0.96 0.96;
+}
+
+/* Plus spécifique que Button.cq-cell:hover : sur mobile, :hover reste souvent "collé" à la
+   dernière case touchée et ne doit pas effacer le cadre doré de la sélection. */
+Button.cq-cell.cq-cell--selected,
+Button.cq-cell.cq-cell--selected:hover {
+    border-color: rgb(255, 214, 90);
+    border-width: 5px;
+    scale: 1.03 1.03;
+}
+
+.cq-cell-overlay {
+    position: absolute;
+    left: 0; top: 0; right: 0; bottom: 0;
+    align-items: center;
+    justify-content: center;
+}
+
+.cq-overlay--free { background-color: rgba(255, 255, 255, 0.02); }
+.cq-overlay--mine { background-color: rgba(72, 128, 168, 0.50); }
+.cq-overlay--enemy { background-color: rgba(188, 62, 48, 0.52); }
+.cq-overlay--shield { background-color: rgba(60, 60, 64, 0.62); }
+.cq-overlay--far { background-color: rgba(8, 8, 6, 0.55); }
+.cq-overlay--loading { background-color: rgba(8, 8, 6, 0.35); }
+
+/* Pastille de statut lisible sur n'importe quel fond de carte (fond sombre + contour). */
+.cq-cell-tag {
+    font-size: 18px;
+    -unity-font-style: bold;
+    color: white;
+    background-color: rgba(10, 10, 8, 0.78);
+    border-radius: 10px;
+    padding: 3px 10px;
+    -unity-text-align: middle-center;
+    white-space: normal;
+    max-width: 94%;
+}
+
+.cq-cell-tag--free { background-color: rgba(64, 104, 48, 0.92); }
+.cq-cell-tag--mine { background-color: rgba(40, 78, 110, 0.95); }
+.cq-cell-tag--enemy { background-color: rgba(128, 36, 26, 0.95); }
+.cq-cell-tag--here { background-color: rgba(150, 110, 24, 0.95); }
+
+.cq-cell-direction {
+    position: absolute;
+    top: 4px;
+    left: 6px;
+    font-size: 14px;
+    -unity-font-style: bold;
+    color: white;
+    -unity-text-outline-width: 1px;
+    -unity-text-outline-color: black;
+}
+
+.cq-attribution {
+    font-size: 12px;
+    color: var(--color-text-dim);
+    margin-top: 4px;
+    align-self: flex-end;
+}
+
+/* Fiche du quartier touché. */
+.cq-detail {
+    flex-shrink: 1;
+    padding: 16px;
+    justify-content: flex-start;
+}
+
+.cq-detail-title {
+    font-size: 30px;
+    -unity-font-definition: var(--font-head);
+    color: var(--color-text);
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+}
+
+.cq-chip {
+    align-self: flex-start;
+    font-size: 18px;
+    -unity-font-style: bold;
+    color: white;
+    border-radius: 12px;
+    padding: 4px 12px;
+    margin-bottom: 10px;
+    background-color: rgb(80, 74, 56);
+}
+
+.cq-chip--free { background-color: rgb(64, 104, 48); }
+.cq-chip--mine { background-color: var(--color-team1); }
+.cq-chip--enemy { background-color: var(--color-team2); }
+.cq-chip--shield { background-color: rgb(90, 90, 96); }
+.cq-chip--here { background-color: rgb(150, 110, 24); }
+
+.cq-detail-text {
+    font-size: 22px;
+    color: var(--color-text);
+    margin-bottom: 14px;
+    white-space: normal;
+}
+
+Button.cq-detail-action {
+    min-height: 72px;
+    font-size: 28px;
+    margin-bottom: 8px;
+}
+
+Button.cq-detail-secondary {
+    min-height: 56px;
+    font-size: 22px;
+    margin-bottom: 8px;
+}
+
+.cq-detail-status {
+    font-size: 20px;
+    color: var(--color-accent-hover);
+    white-space: normal;
+    -unity-text-align: middle-center;
+    min-height: 26px;
+}
+
+.cq-legend {
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top-width: 1px;
+    border-top-color: var(--color-panel-border-dim);
+}
+
+.cq-legend-item {
+    flex-direction: row;
+    align-items: center;
+    margin-right: 14px;
+    margin-bottom: 4px;
+}
+
+.cq-legend-swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    margin-right: 6px;
+}
+
+.cq-legend-label {
+    font-size: 16px;
+    color: var(--color-text-dim);
+}
+
+/* --- Onglet GESTION --- */
+.cq-manage-content {
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+.cq-manage-inner {
+    width: 100%;
+    max-width: 760px;
+    align-self: center;
+}
+
+Button.cq-manage-card {
+    min-height: 92px;
+    margin-bottom: 10px;
+}
+
+.cq-help {
+    margin-bottom: 14px;
+}
+
+.cq-help-title {
+    font-size: 22px;
+    -unity-font-style: bold;
+    color: var(--color-text);
+    margin-bottom: 6px;
+}
+
+.cq-help-line {
+    font-size: 20px;
+    color: var(--color-text-dim);
+    margin-bottom: 2px;
+}

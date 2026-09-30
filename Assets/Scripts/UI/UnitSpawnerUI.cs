@@ -1550,7 +1550,11 @@ public partial class UnitSpawnerUI : MonoBehaviour
             }
             if (picked.ClassListContains("context-panel") || picked.ClassListContains("dock-panel")
                 || picked.ClassListContains("context-button") || picked.ClassListContains("context-cancel-btn")
-                || picked.ClassListContains("hud-action-cluster") || picked.name == "execution-group")
+                || picked.ClassListContains("hud-action-cluster") || picked.name == "execution-group"
+                || picked.name == "pause-backdrop" // fond du menu pause (PauseMenuScreen.uxml, 2026-09-30)
+                // Écran plein cadre qui ne doit JAMAIS laisser un tap/glissé atteindre la scène 3D
+                // derrière lui (ex: Conquête, 2026-09-30 — la caméra bougeait sous le menu).
+                || picked.ClassListContains("ui-blocker"))
             {
                 reason = $"{picked.GetType().Name} '{picked.name}' (classe {string.Join(",", picked.GetClasses())})";
                 return true;

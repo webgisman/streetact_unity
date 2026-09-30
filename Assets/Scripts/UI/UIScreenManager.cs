@@ -26,12 +26,14 @@ public class UIScreenManager : MonoBehaviour
         ("Loading", "UI/LoadingScreen"),
         ("Error", "UI/ErrorScreen"),
         ("StartupMenu", "UI/StartupMenuScreen"),
-        ("ModeSelect", "UI/ModeSelectScreen"),
+        // Écran CONQUÊTE (2026-09-30) : remplace l'ancien hub "ModeSelect", la carte "ZoneMap" et le
+        // choix de bataille "BattleSelect" — voir ConquestScreen.uxml.
+        ("Conquest", "UI/ConquestScreen"),
+        ("LocationPrompt", "UI/LocationPromptScreen"),
         ("Roster", "UI/RosterScreen"),
         ("Buildings", "UI/BuildingsScreen"),
         ("Notifications", "UI/NotificationsScreen"),
         ("Sieges", "UI/SiegesScreen"),
-        ("ZoneMap", "UI/ZoneMapScreen"),
         ("ZoneResult", "UI/ZoneResultScreen"),
         ("Auth", "UI/AuthScreen"),
         ("Waiting", "UI/WaitingScreen"),
@@ -43,6 +45,9 @@ public class UIScreenManager : MonoBehaviour
         ("TacticalBottomBar", "UI/TacticalBottomBarScreen"),
         ("DeploymentDock", "UI/DeploymentDockScreen"),
         ("ContextMenu", "UI/ContextMenuScreen"),
+        // Déclaré en DERNIER : superposé par SetVisible (jamais Show) par-dessus le HUD tactique,
+        // il doit être ajouté après lui dans l'arbre pour être dessiné au-dessus.
+        ("PauseMenu", "UI/PauseMenuScreen"),
     };
 
     private void Awake()
@@ -271,6 +276,9 @@ public class UIScreenManager : MonoBehaviour
         if (visible == currentlyVisible) return;
         if (visible) FadeIn(el); else HideInstant(el);
     }
+
+    /// <summary>Vrai si l'écran est actuellement affiché (display:Flex).</summary>
+    public bool IsVisible(string name) => screens.TryGetValue(name, out var el) && el.style.display == DisplayStyle.Flex;
 
     public void HideAll()
     {
