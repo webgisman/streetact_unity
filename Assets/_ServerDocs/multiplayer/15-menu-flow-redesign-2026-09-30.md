@@ -85,6 +85,8 @@ le serveur (rapports `siege_won`/`siege_lost`/`under_attack`) sont réécrits à
 ## Vérifié / non vérifié
 
 Vérifié : tests + compile-check des 3 configurations verts, import Unity sans erreur, captures de
-l'écran Conquête relues (voir ci-dessus). **Non vérifié sur un vrai téléphone** (aucun appareil
+l'écran Conquête relues (paysage 2400x1080 et portrait 1080x2400 — la fiche en portrait a été
+corrigée d'après elles), APK de test généré (`build/Android/Novgov-Test.apk`, 155 Mo, 2026-09-30,
+à installer via `adb install -r`). **Non vérifié sur un vrai téléphone** (aucun appareil
 branché ce jour) : le parcours complet compte → localisation Android → Conquête → prise d'un
 quartier, et le son sur appareil.
