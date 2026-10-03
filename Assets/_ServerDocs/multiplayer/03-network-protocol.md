@@ -333,3 +333,35 @@ propres à chaque destinataire (calcul ELO, K=32, voir `MatchSessionManager.Upda
   (`ExecuterOrdres()`, `IsMovingOrActing()`, `HasActiveTargetInRange()`) — aucune duplication de
   la logique de combat/déplacement, zéro modification de `UnitAI_Combat.cs` ou
   `UnitAI_Movement.cs`.
+
+## Bataille de siège au tour par tour (2026-10-03)
+
+Un siège (quartier tenu par un autre joueur) n'est plus résolu en différé par un tour de combat
+headless : c'est une **vraie partie au tour par tour** entre l'attaquant et le défenseur, sur le même
+moteur que Match à mort (`MatchSessionManager.RunMatchLive`). Code : `MatchSessionManager_SiegeBattle.cs`.
+
+1. L'attaquant déclare le siège (RPC `start_siege`, inchangé), puis chaque joueur (attaquant via
+   LANCER UN SIÈGE / REJOINDRE, défenseur via DÉFENDRE) se connecte et envoie :
+   `{"type":"join_matchmaking","mode":"siege_battle","siege_id":<id>,"zone_tile_x":x,"zone_tile_y":y}`.
+2. **Même instance obligatoire** : le client choisit le port parmi les instances vivantes de
+   `server_instances` (mise à jour < 180 s) triées par `id`, indice = `siege_id % nombre`. Les deux
+   clients font le même calcul (instances `busy` incluses : la bataille attend alors que la scène se
+   libère).
+3. Le premier arrivé attend dans la salle d'attente du siège (aucun message spécifique, seulement
+   les `heartbeat` serveur). Refus : `siege_deploy_ack` avec `success=false` et `reason` =
+   `siege_invalid` (siège clos, déjà en bataille, ou joueur étranger au siège) ou `siege_expired`
+   (échéance passée, la résolution automatique prend le relais).
+4. Dès que les deux sont là : `zone_sieges.status` passe à `battle` (réservation atomique), puis
+   protocole de partie habituel — `match_found` (`mode="siege"`, attaquant = équipe 1, défenseur =
+   équipe 2, carte du quartier assiégé), déploiement, tours (`submit_turn` / `turn_result` /
+   `turn_playback_start`), puis `match_over`.
+5. `match_over` porte en plus `success` (le quartier a réellement changé de mains), `reason`
+   (`zone_lost_race`, ou `siege_reopened` si les deux joueurs sont partis : le siège repasse à
+   `pending`) et `zone_tile_x/y`. Égalité = le défenseur garde son quartier. Conséquences (prise,
+   pillage de PA, bouclier 6 h, rapports `siege_won`/`siege_lost`) : `ApplySiegeOutcome`, partagé
+   avec la résolution automatique.
+6. Sans bataille avant l'échéance (6 h), `SiegeResolutionLoop` résout automatiquement avec les
+   troupes des **casernes** des deux joueurs (l'attaquant ne dépose plus de déploiement à l'avance).
+
+Les anciens modes `siege_attack_deploy` / `siege_defend_deploy` restent acceptés par le serveur
+(clients pas encore mis à jour), mais ne sont plus envoyés par le client.

@@ -132,6 +132,20 @@ namespace Novgov.Generation
 
         public void LoadCurrentZone() => LoadZone(CurrentTileX, CurrentTileY);
 
+#if UNITY_EDITOR
+        /// <summary>Éditeur uniquement (Novgov.Network.EditorTestPlayers) : un compte de test a son
+        /// propre quartier, qui devient le QG et la position de CETTE fenêtre — remplace la tuile
+        /// domicile figée par fenêtre, qui ne correspondait à aucun des deux comptes.</summary>
+        public void OverrideHomeZoneForEditorTest(int tileX, int tileY)
+        {
+            PlayerPrefs.SetInt(HomeTileXPrefKey, tileX);
+            PlayerPrefs.SetInt(HomeTileYPrefKey, tileY);
+            PlayerPrefs.Save();
+            CurrentTileX = tileX;
+            CurrentTileY = tileY;
+        }
+#endif
+
         /// <summary>Repositionne le joueur sur une Zone SANS la générer — pour juste avant un
         /// rechargement de scène (voir MultiplayerMatchController.ReturnToHub), qui rechargera de
         /// toute façon la Zone courante : la générer ici serait un travail jeté immédiatement.</summary>

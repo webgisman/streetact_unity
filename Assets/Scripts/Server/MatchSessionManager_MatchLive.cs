@@ -84,11 +84,19 @@ namespace Novgov.Server
             );
         }
 
+        /// <summary>Complément du message "match_over" rempli par <c>onBeforeMatchOver</c> (bataille de
+        /// siège : le quartier a-t-il réellement changé de mains ?).</summary>
+        private class MatchOverExtras { public bool Success; public string Reason; }
+
         /// <summary>Équivalent "vivant" de RunMatch (MatchSessionManager_Matchmaking.cs) — même
         /// protocole réseau côté client (match_found/deployment_result/turn_timer/turn_result/
         /// match_over, voir 03-network-protocol.md, RIEN ne change pour le client), mais orchestre de
-        /// vraies UnitAI/BuildingStructure au lieu de MatchState.World.</summary>
-        private IEnumerator RunMatchLive(PlayerConnection p1, PlayerConnection p2, string cacheKey)
+        /// vraies UnitAI/BuildingStructure au lieu de MatchState.World.
+        /// <paramref name="onBeforeMatchOver"/> (2026-10-03, bataille de siège, voir
+        /// MatchSessionManager_SiegeBattle.cs) : appelé avec (vainqueur, deux départs, extras) juste
+        /// avant le classement et "match_over", pour appliquer les conséquences propres au mode.</summary>
+        private IEnumerator RunMatchLive(PlayerConnection p1, PlayerConnection p2, string cacheKey,
+            Func<int, bool, MatchOverExtras, IEnumerator> onBeforeMatchOver = null)
         {
             string matchId = Guid.NewGuid().ToString();
             p1.TeamId = 1;
@@ -104,6 +112,7 @@ namespace Novgov.Server
                 Debug.LogError("[MatchSessionManager] UnitSpawnerUI.Instance introuvable — la scène serveur est-elle correctement chargée ?");
                 AbortMatchSafely(p1);
                 AbortMatchSafely(p2);
+                matchInProgress = false; // sinon plus aucun match ne pourrait jamais démarrer sur ce processus
                 yield break;
             }
 
@@ -271,10 +280,14 @@ namespace Novgov.Server
                 turnNumber++;
             }
 
+            var extras = new MatchOverExtras();
+            if (onBeforeMatchOver != null)
+                yield return onBeforeMatchOver(winnerTeam, p1.IsDisconnected && p2.IsDisconnected, extras);
+
             yield return UpdateRatings(p1, p2, winnerTeam);
 
-            if (!p1.IsDisconnected) p1.Send(new NetMessage { type = "match_over", winner_team = winnerTeam, your_new_rating = p1.NewRating, rating_delta = p1.RatingDelta });
-            if (!p2.IsDisconnected) p2.Send(new NetMessage { type = "match_over", winner_team = winnerTeam, your_new_rating = p2.NewRating, rating_delta = p2.RatingDelta });
+            if (!p1.IsDisconnected) p1.Send(new NetMessage { type = "match_over", winner_team = winnerTeam, your_new_rating = p1.NewRating, rating_delta = p1.RatingDelta, success = extras.Success, reason = extras.Reason, zone_tile_x = tileX, zone_tile_y = tileY });
+            if (!p2.IsDisconnected) p2.Send(new NetMessage { type = "match_over", winner_team = winnerTeam, your_new_rating = p2.NewRating, rating_delta = p2.RatingDelta, success = extras.Success, reason = extras.Reason, zone_tile_x = tileX, zone_tile_y = tileY });
 
             yield return CloseMatchRecord(matchId, winnerTeam);
 

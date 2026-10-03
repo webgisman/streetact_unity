@@ -111,7 +111,7 @@
                         <ui:Label text="1. Sur la CARTE, prenez les quartiers libres autour du vôtre : c'est gratuit et immédiat." class="cq-help-line" />
                         <ui:Label text="2. Chaque quartier à vous rapporte des Points d'Action (PA) toutes les 5 minutes, même quand vous ne jouez pas." class="cq-help-line" />
                         <ui:Label text="3. Dépensez vos PA à la CASERNE pour recruter des troupes, ou pour améliorer vos quartiers." class="cq-help-line" />
-                        <ui:Label text="4. Un quartier tenu par un autre joueur se prend par un SIÈGE : vous placez vos troupes, il a 6 h pour se défendre, puis la bataille se joue toute seule." class="cq-help-line" />
+                        <ui:Label text="4. Un quartier tenu par un autre joueur se prend par un SIÈGE : une bataille au tour par tour contre lui, dès que vous êtes tous les deux en ligne (sinon, au bout de 6 h, elle se joue automatiquement avec vos casernes)." class="cq-help-line" />
                     </ui:VisualElement>
 
                     <ui:VisualElement>

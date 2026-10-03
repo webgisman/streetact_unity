@@ -25,11 +25,14 @@
             <ui:Button name="toggle-mode-button" text="Pas encore de compte ? Créer un compte" style="background-color: transparent; border-width: 0;" />
 
             <!-- Éditeur uniquement (voir MultiplayerMatchController.BindUI, #if UNITY_EDITOR) : connexion
-                 rapide aux 2 comptes de test pour les sessions Éditeur+téléphone, caché par défaut et
-                 jamais affiché sur un vrai build. -->
-            <ui:VisualElement name="test-accounts-row" style="display: none; flex-direction: row; margin-top: 16px;">
-                <ui:Button name="btn-test-account-1" text="🧪 Compte test 1" class="btn-secondary" style="flex-grow: 1; margin-right: 8px;" />
-                <ui:Button name="btn-test-account-2" text="🧪 Compte test 2" class="btn-secondary" style="flex-grow: 1;" />
+                 en un clic aux 2 comptes de test, cachée par défaut et jamais affichée sur un vrai
+                 build. 2026-10-03 : encadré "MODE TEST" explicite (textes posés en C#, voir
+                 EditorTestPlayers) au lieu de deux boutons "🧪 Compte test 1/2" sans explication. -->
+            <ui:VisualElement name="test-accounts-box" class="hub-info-banner" style="display: none; margin-top: 16px;">
+                <ui:Label text="MODE TEST (ÉDITEUR)" style="font-size: 22px; -unity-font-style: bold; color: var(--color-text); margin-bottom: 6px;" />
+                <ui:Label name="lbl-test-accounts-hint" text="" style="font-size: 18px; margin-bottom: 10px;" />
+                <ui:Button name="btn-test-account-1" text="JOUEUR 1" class="btn-secondary" style="min-height: 60px; margin-bottom: 8px; font-size: 24px;" />
+                <ui:Button name="btn-test-account-2" text="JOUEUR 2" class="btn-secondary" style="min-height: 60px; font-size: 24px;" />
             </ui:VisualElement>
 
             <ui:Label name="status-label" text="" class="error-text" style="margin-top: 12px;" />

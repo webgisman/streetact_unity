@@ -52,10 +52,12 @@ public class GameManagerUI : MonoBehaviour
         UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
     }
 
-    // Vrai une fois la Zone courante du joueur réellement chargée dans CETTE scène pour le jeu en
-    // ligne (voir EnsureOnlineZoneReady) — champ d'instance, donc remis à faux à chaque
-    // rechargement de scène, qui efface aussi la ville générée.
-    private bool onlineZoneLoadedThisScene = false;
+    // Quartier réellement chargé dans CETTE scène pour le jeu en ligne (voir EnsureOnlineZoneReady)
+    // — champ d'instance, donc vidé à chaque rechargement de scène, qui efface aussi la ville
+    // générée. Une tuile (pas un simple booléen, 2026-10-03) : la position peut changer sans
+    // chargement (compte de test de l'Éditeur, voir Novgov.Network.EditorTestPlayers), il faut
+    // alors recharger le bon quartier.
+    private (int x, int y)? onlineZoneLoadedTile = null;
     private Coroutine onlineZoneRoutine;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
@@ -333,7 +335,7 @@ public class GameManagerUI : MonoBehaviour
             yield return AcquireHomeZoneFromGps();
         }
 
-        if (!onlineZoneLoadedThisScene)
+        if (onlineZoneLoadedTile != (zoneManager.CurrentTileX, zoneManager.CurrentTileY))
         {
             isMapSelectorOpen = false;
             gpsStatus = "";
@@ -346,7 +348,7 @@ public class GameManagerUI : MonoBehaviour
             yield return new WaitForSeconds(0.5f);
 
             UIScreenManager.Instance?.SetVisible("Loading", false);
-            onlineZoneLoadedThisScene = true;
+            onlineZoneLoadedTile = (zoneManager.CurrentTileX, zoneManager.CurrentTileY);
         }
 
         isMapSelectorOpen = false;
@@ -405,7 +407,7 @@ public class GameManagerUI : MonoBehaviour
 #if !UNITY_SERVER
         // La carte solo remplace la Zone réelle éventuellement chargée pour le jeu en ligne : un
         // prochain "JOUER EN LIGNE" devra la recharger (voir EnsureOnlineZoneReady).
-        onlineZoneLoadedThisScene = false;
+        onlineZoneLoadedTile = null;
 #endif
         UIScreenManager.Instance?.SetVisible("Error", false);
         UIScreenManager.Instance?.SetVisible("Loading", true);

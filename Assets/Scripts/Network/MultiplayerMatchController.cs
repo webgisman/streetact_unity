@@ -159,7 +159,23 @@ namespace Novgov.Network
             {
                 RefreshHudDynamicFields();
             }
+            else if (uiState == UiState.Hub && Time.realtimeSinceStartup >= nextHubAutoRefreshTime)
+            {
+                // Rafraîchissement périodique de l'écran Conquête (2026-10-03) : un siège peut être
+                // déclaré contre le joueur, ou une bataille se terminer sur le serveur, pendant qu'il
+                // regarde l'écran — sans ça, rien ne bougeait avant de quitter puis rouvrir l'écran
+                // (test à 2 joueurs : le défenseur ne voyait jamais apparaître l'alerte "assiégé").
+                nextHubAutoRefreshTime = Time.realtimeSinceStartup + HubAutoRefreshSeconds;
+                RefreshHubScreen();
+                Novgov.UI.ZoneMapController.Instance?.RefreshMapSilently();
+            }
         }
+
+        private const float HubAutoRefreshSeconds = 15f;
+        private float nextHubAutoRefreshTime = 0f;
+        // Nombre de rapports non lus au dernier rafraîchissement (-1 = pas encore connu) — un
+        // rapport NOUVEAU (ex: résultat d'une bataille de siège) est annoncé en tête de l'écran.
+        private int lastUnreadReportCount = -1;
 
                 /// voir waitingScreenEnteredRealtime pour le contexte complet). <see cref="statusMessage"/>
         /// seul ne changeait jamais tant que le message attendu (match_found/deployment_result)
@@ -183,6 +199,10 @@ namespace Novgov.Network
             // sont MatchSessionManager.MapReadyMaxWaitSeconds/DeploymentSeconds (300s chacune,
             // volontairement généreuses, voir leur commentaire) — jusqu'à 10 minutes dans le pire cas
             // si l'adversaire charge encore sa carte ou n'a pas fini de se déployer.
+            if (elapsed > 15f && selectedMode == "siege_battle" && !sceneDirtyFromMatch)
+            {
+                return text + "\n\nVous pouvez ANNULER : le siège reste ouvert, vous pourrez revenir depuis GESTION > SIÈGES. Sans bataille avant l'échéance, elle se jouera automatiquement avec les troupes des casernes.";
+            }
             if (elapsed > 15f)
             {
                 text += "\n\nCela peut prendre plusieurs minutes si l'adversaire charge encore sa carte — la partie n'est pas bloquée.";
@@ -294,6 +314,7 @@ namespace Novgov.Network
         // Sièges où je suis DÉFENSEUR, le plus urgent en tête — lu par RefreshHubScreen pour l'alerte
         // "quartier assiégé" et son bouton DÉFENDRE.
         private Novgov.Auth.SupabaseDatabaseClient.SiegeInfo mostUrgentDefense;
+        private string mostUrgentDefenseAttackerName = "l'attaquant";
 
         /// <summary>Point d'entrée UNIQUE de la Conquête une fois le compte connecté : garantit
         /// d'abord que le QG du joueur est placé et son quartier chargé (localisation expliquée la
@@ -301,6 +322,14 @@ namespace Novgov.Network
         /// le 2026-09-30, le GPS et le chargement de la ville passaient AVANT même la connexion.</summary>
         private void EnterHub()
         {
+#if UNITY_EDITOR
+            // Compte de test : la carte se place sur le quartier que CE compte possède, voisin de
+            // celui de l'autre compte de test (voir EditorTestPlayers) — et pas de demande de
+            // localisation, sans objet dans l'Éditeur.
+            if (EditorTestPlayers.TryGet(SupabaseAuthClient.CurrentSession?.user?.email, out var testPlayer))
+                Novgov.Generation.ZoneManager.EnsureInstance().OverrideHomeZoneForEditorTest(testPlayer.TileX, testPlayer.TileY);
+#endif
+            lastUnreadReportCount = -1; // nouveau compte/nouvelle session : pas d'annonce "nouveau rapport" pour l'existant
             GameManagerUI gm = GameManagerUI.Instance;
             if (gm == null)
             {
@@ -326,6 +355,7 @@ namespace Novgov.Network
         /// Conquête, sur l'onglet où l'on était.</summary>
         public void OpenManagementScreen(string screen)
         {
+            if (screen == "Notifications") pendingHubNotice = null; // le joueur va lire ses rapports
             UIScreenManager.Instance.Show(screen);
             switch (screen)
             {
@@ -449,7 +479,7 @@ namespace Novgov.Network
             GameServerClient.Instance?.Disconnect("user_quit_match");
         }
 
-        [System.Serializable] private class ServerInstanceEntry { public string id; public int public_port; }
+        [System.Serializable] private class ServerInstanceEntry { public string id; public int public_port; public string updated_at; }
         [System.Serializable] private class ServerInstanceList { public ServerInstanceEntry[] items; }
 
         private const int InstanceStaleSeconds = 60;
@@ -462,6 +492,15 @@ namespace Novgov.Network
             int chosenPort = 7777; // Port robuste par défaut
             string queueColumn = selectedMode == "zone_control" ? "waiting_zone_control" : "waiting_deathmatch";
             string url = $"{SupabaseAuthClient.RestBaseUrl}/server_instances?status=neq.busy&order={queueColumn}.desc,updated_at.desc&limit=1&select=id,public_port";
+            // Bataille de siège (2026-10-03) : l'attaquant et le défenseur DOIVENT tomber sur la même
+            // instance du pool (la salle d'attente du siège vit dans UN processus serveur). Choix
+            // déterministe : instances vivantes triées par id, indice = siege_id modulo leur nombre —
+            // les deux clients font le même calcul. Les instances "busy" ne sont PAS exclues (sinon
+            // les deux joueurs pourraient voir des listes différentes) : la bataille attendra
+            // simplement que l'instance se libère.
+            bool siegeBattle = selectedMode == "siege_battle";
+            if (siegeBattle)
+                url = $"{SupabaseAuthClient.RestBaseUrl}/server_instances?order=id.asc&select=id,public_port,updated_at";
 
             if (SupabaseAuthClient.CurrentSession != null && !string.IsNullOrEmpty(SupabaseAuthClient.CurrentSession.access_token))
             {
@@ -478,7 +517,14 @@ namespace Novgov.Network
                         {
                             string wrapped = "{\"items\":" + req.downloadHandler.text + "}";
                             ServerInstanceEntry[] instances = JsonUtility.FromJson<ServerInstanceList>(wrapped).items;
-                            if (instances != null && instances.Length > 0 && instances[0].public_port > 0)
+                            if (siegeBattle && instances != null)
+                            {
+                                var alive = instances.Where(i => i.public_port > 0
+                                    && DateTime.TryParse(i.updated_at, null, System.Globalization.DateTimeStyles.RoundtripKind, out DateTime seen)
+                                    && (DateTime.UtcNow - seen.ToUniversalTime()).TotalSeconds < InstanceStaleSeconds * 3).ToArray();
+                                if (alive.Length > 0) chosenPort = alive[(int)(pendingSiegeId % alive.Length)].public_port;
+                            }
+                            else if (instances != null && instances.Length > 0 && instances[0].public_port > 0)
                             {
                                 chosenPort = instances[0].public_port;
                             }
@@ -519,7 +565,7 @@ namespace Novgov.Network
             // zone_tile_x/y (attackTileX/Y ci-dessus, une Zone précisément visée, pas un domicile).
             bool hasHomeTile = false;
             int homeTileX = 0, homeTileY = 0;
-            bool targetsSpecificZone = selectedMode == "conquest" || selectedMode == "siege_attack_deploy" || selectedMode == "siege_defend_deploy";
+            bool targetsSpecificZone = selectedMode == "conquest" || selectedMode == "siege_battle";
             if (!targetsSpecificZone)
             {
                 var zoneManager = Novgov.Generation.ZoneManager.Instance;
@@ -545,8 +591,9 @@ namespace Novgov.Network
             statusMessage = selectedMode switch
             {
                 "conquest" => "Prise du quartier en cours",
-                "siege_attack_deploy" => "Préparation du siège : chargement du quartier visé",
-                "siege_defend_deploy" => "Préparation de la défense : chargement de votre quartier",
+                "siege_battle" => siegeAsAttacker
+                    ? $"Siège lancé ! En attente de {siegeOpponentName} : il vient d'être prévenu. La bataille au tour par tour commencera dès qu'il répondra"
+                    : $"En attente de {siegeOpponentName} pour la bataille au tour par tour",
                 _ => "Recherche d'adversaire",
             };
         }
@@ -564,30 +611,26 @@ namespace Novgov.Network
             StartCoroutine(ConnectToGameServerCoroutine());
         }
 
-        /// <summary>Déploiement de l'ATTAQUANT pour un siège déjà déclaré (le siège lui-même doit
-        /// avoir été créé AVANT cet appel via SupabaseDatabaseClient.StartSiege — voir
-        /// Novgov.UI.ZoneMapController). Le serveur ouvre le même dock de déploiement qu'une Conquête
-        /// classique, mais ne fait tourner AUCUN combat immédiatement : voir
-        /// MatchSessionManager_Siege.RunSiegeAttackDeploy, résultat via "siege_deploy_ack"
-        /// (OnSiegeDeployAck), jamais "match_found"->combat->"match_over".</summary>
-        public void SiegeZone(int tileX, int tileY, long siegeId)
-        {
-            selectedMode = "siege_attack_deploy";
-            attackTileX = tileX;
-            attackTileY = tileY;
-            pendingSiegeId = siegeId;
-            StartCoroutine(ConnectToGameServerCoroutine());
-        }
+        // Bataille de siège en cours de connexion : rôle et nom de l'adversaire, pour les textes
+        // d'attente (voir ConnectToGameServerCoroutine/RenderWaitingScreenText).
+        private bool siegeAsAttacker;
+        private string siegeOpponentName = "l'autre joueur";
 
-        /// <summary>Déploiement du DÉFENSEUR pour un siège en cours contre lui (voir la table
-        /// public.zone_sieges / la notification "under_attack" qui l'a informé) — même mécanique que
-        /// SiegeZone, côté défenseur. Voir MatchSessionManager_Siege.RunSiegeDefendDeploy.</summary>
-        public void DefendSiege(int tileX, int tileY, long siegeId)
+        /// <summary>Rejoint la BATAILLE AU TOUR PAR TOUR d'un siège (2026-10-03, voir
+        /// MatchSessionManager_SiegeBattle.cs côté serveur) — en attaquant (juste après start_siege,
+        /// depuis la carte, ou pour revenir sur un siège qu'on a lancé) ou en défenseur (DÉFENDRE).
+        /// Le premier arrivé attend l'autre ; dès que les deux sont là, la partie se joue comme un
+        /// match normal : déploiement, puis planification / fin de tour / simulation / rejeu, jusqu'à
+        /// la victoire. Remplace l'ancien siège "en différé" (SiegeZone/DefendSiege : chaque camp
+        /// déployait seul, puis un unique tour headless tranchait sans que personne ne joue).</summary>
+        public void JoinSiegeBattle(int tileX, int tileY, long siegeId, bool asAttacker, string opponentName)
         {
-            selectedMode = "siege_defend_deploy";
+            selectedMode = "siege_battle";
             attackTileX = tileX;
             attackTileY = tileY;
             pendingSiegeId = siegeId;
+            siegeAsAttacker = asAttacker;
+            siegeOpponentName = string.IsNullOrEmpty(opponentName) ? "l'autre joueur" : opponentName;
             StartCoroutine(ConnectToGameServerCoroutine());
         }
 
@@ -746,14 +789,18 @@ namespace Novgov.Network
             if (msg.success)
             {
                 message = currentMode == "siege_defend_deploy"
-                    ? "Défense en place ! À la fin du siège, la bataille se jouera toute seule avec les troupes que vous venez de placer. Le résultat arrivera dans vos RAPPORTS."
-                    : "Siège lancé ! Le propriétaire a maintenant 6 heures pour organiser sa défense. La bataille se jouera ensuite toute seule : le résultat arrivera dans vos RAPPORTS.";
+                    // Le serveur joue la bataille dès que les DEUX camps ont placé leurs troupes
+                    // (MatchSessionManager_Siege.RunSiegeDefendDeploy -> ResolveSiegeNow) : pour le
+                    // défenseur, c'est presque toujours tout de suite.
+                    ? "Défense en place ! Les deux camps ont placé leurs troupes : la bataille se joue maintenant sur le serveur. Le résultat s'affichera sur l'écran Conquête dans quelques instants (et dans vos RAPPORTS)."
+                    : "Siège lancé ! Le propriétaire a maintenant 6 heures pour placer ses troupes en défense. Dès qu'il l'a fait — ou à la fin du délai — la bataille se joue toute seule : le résultat s'affichera sur l'écran Conquête et dans vos RAPPORTS.";
             }
             else
             {
                 message = msg.reason switch
                 {
-                    "siege_invalid" => "Ce siège n'existe plus (déjà terminé ou expiré).",
+                    "siege_invalid" => "Ce siège n'existe plus (déjà terminé, ou une bataille est déjà en cours).",
+                    "siege_expired" => "Le délai du siège est écoulé : la bataille se joue automatiquement avec les troupes des casernes. Le résultat arrivera dans vos RAPPORTS.",
                     "server_busy" => "Le serveur est très occupé — réessayez dans un instant.",
                     _ => "Impossible d'envoyer vos troupes pour ce siège pour le moment. Réessayez dans un instant.",
                 };
@@ -792,13 +839,15 @@ namespace Novgov.Network
                 preMatchExplorationTileY = Novgov.Generation.ZoneManager.Instance.CurrentTileY;
             }
 
-            if (currentMode == "conquest" || currentMode == "siege_attack_deploy" || currentMode == "siege_defend_deploy")
+            if (currentMode == "conquest" || currentMode == "siege" || currentMode == "siege_attack_deploy" || currentMode == "siege_defend_deploy")
             {
                 // La géométrie RÉELLE de la Zone attaquée (bâtiments + sol + NavMesh) doit être
                 // chargée sur CE client avant d'ouvrir le déploiement — sans ça, le joueur placerait
                 // ses unités sur l'ancienne carte encore affichée à l'écran. Même chargement pour un
                 // déploiement de siège (attaquant ou défenseur) : c'est la même vraie Zone GPS.
-                statusMessage = "Chargement du quartier visé";
+                statusMessage = currentMode == "siege"
+                    ? $"Bataille contre {msg.opponent_username} : chargement du quartier assiégé"
+                    : "Chargement du quartier visé";
                 StartCoroutine(LoadMatchMapThenOpenDeployment(true, msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
                 return;
             }
@@ -1239,6 +1288,23 @@ namespace Novgov.Network
                 else
                     resultText = "DÉFAITE — ce quartier reste aux mains de son propriétaire.";
             }
+            else if (currentMode == "siege")
+            {
+                // Bataille de siège au tour par tour (2026-10-03) : équipe 1 = attaquant, 2 = défenseur.
+                // success = le quartier a réellement changé de mains (voir MatchSessionManager_
+                // SiegeBattle.OnSiegeBattleOver) ; égalité = le défenseur garde son quartier.
+                bool attacker = localTeamId == 1;
+                string place = Novgov.UI.QuartierText.Name(msg.zone_tile_x, msg.zone_tile_y);
+                if (msg.reason == "siege_reopened")
+                    resultText = "Bataille interrompue : les deux joueurs sont partis. Le siège reste ouvert.";
+                else if (attacker)
+                    resultText = msg.success ? $"VICTOIRE ! Le {place} est à vous."
+                        : msg.reason == "zone_lost_race" ? "Victoire, mais le quartier a changé de mains entre-temps."
+                        : "DÉFAITE — le siège a échoué, le quartier reste à son propriétaire.";
+                else
+                    resultText = msg.success ? $"DÉFAITE — vous avez perdu votre {place}."
+                        : $"QUARTIER DÉFENDU ! Votre {place} reste à vous.";
+            }
             else if (currentMode == "practice_ai")
             {
                 // Entraînement hors-score (voir MatchSessionManager.RunPracticeVsAI) : jamais de
@@ -1571,6 +1637,21 @@ namespace Novgov.Network
                 // du jeu plutôt qu'un traitement ad hoc propre à cet écran.
                 lblNotifBadge.text = unread > 9 ? "9+" : unread.ToString();
                 lblNotifBadge.style.display = unread > 0 ? DisplayStyle.Flex : DisplayStyle.None;
+
+                // Nouveau rapport arrivé pendant que le joueur est sur l'écran : son contenu (le plus
+                // récent) s'affiche directement en tête, avec un son — c'est typiquement le résultat
+                // d'une bataille de siège, qui se joue sur le serveur sans que le joueur la voie.
+                if (okNotif && notifs != null)
+                {
+                    if (lastUnreadReportCount >= 0 && unread > lastUnreadReportCount && notifs.Length > 0 && lblNotice != null)
+                    {
+                        pendingHubNotice = "NOUVEAU RAPPORT : " + Novgov.UI.QuartierText.HumanizeServerText(notifs[0].message);
+                        lblNotice.text = pendingHubNotice;
+                        lblNotice.style.display = DisplayStyle.Flex;
+                        Novgov.UI.UiSfx.Play(Novgov.UI.UiSfx.Sound.Success);
+                    }
+                    lastUnreadReportCount = unread;
+                }
             }
 
             // Alerte "quartier assiégé" + pastilles SIÈGES/GESTION (2026-09-30) : un siège contre le
@@ -1606,11 +1687,14 @@ namespace Novgov.Network
                 {
                     TimeSpan left = mostUrgentDeadline == DateTime.MaxValue ? TimeSpan.Zero : mostUrgentDeadline - DateTime.UtcNow;
                     string others = defenseCount > 1 ? $" (+{defenseCount - 1} autre(s) siège(s))" : "";
+                    var attackerNames = await Novgov.Auth.SupabaseDatabaseClient.GetUsernames(new[] { mostUrgentDefense.attacker_user_id });
+                    mostUrgentDefenseAttackerName = attackerNames.TryGetValue(mostUrgentDefense.attacker_user_id, out string an) && !string.IsNullOrEmpty(an) ? an : "l'attaquant";
                     string rel = Novgov.UI.QuartierText.RelativeToHome(mostUrgentDefense.tile_x, mostUrgentDefense.tile_y);
-                    string headline = rel == "de votre QG" ? "⚔ VOTRE QG EST ASSIÉGÉ" : $"⚔ UN DE VOS QUARTIERS ({rel}) EST ASSIÉGÉ";
+                    string headline = rel == "de votre QG" ? $"⚔ {mostUrgentDefenseAttackerName.ToUpperInvariant()} ASSIÈGE VOTRE QG" : $"⚔ {mostUrgentDefenseAttackerName.ToUpperInvariant()} ASSIÈGE UN DE VOS QUARTIERS ({rel})";
+                    // 2026-10-03 : bataille au tour par tour (JoinSiegeBattle) dès que les deux sont en ligne.
                     lblSiegeAlert.text = left > TimeSpan.Zero
-                        ? $"{headline} ! Il vous reste {(left.TotalHours >= 1 ? $"{(int)left.TotalHours}h{left.Minutes:D2}" : $"{left.Minutes} min")} pour placer vos troupes en défense — sinon votre garnison actuelle se défendra seule.{others}"
-                        : $"{headline} — la bataille va se jouer d'un instant à l'autre.{others}";
+                        ? $"{headline} ! Touchez DÉFENDRE pour jouer la bataille au tour par tour. Sinon, dans {(left.TotalHours >= 1 ? $"{(int)left.TotalHours}h{left.Minutes:D2}" : $"{left.Minutes} min")}, elle se jouera automatiquement avec les troupes de votre caserne.{others}"
+                        : $"{headline} — la bataille va se jouer automatiquement d'un instant à l'autre.{others}";
                 }
             }
             foreach (var badge in new[] { lblSiegesBadge, lblManageBadge })
@@ -1792,32 +1876,42 @@ namespace Novgov.Network
                 return;
             }
 
+            var names = await Novgov.Auth.SupabaseDatabaseClient.GetUsernames(
+                list.Select(x => x.defender_user_id == myUserId ? x.attacker_user_id : x.defender_user_id));
+
             foreach (var s in list)
             {
                 bool isDefender = s.defender_user_id == myUserId;
                 string countdown = FormatCountdown(s.deadline, out bool urgent);
+                names.TryGetValue(isDefender ? s.attacker_user_id : s.defender_user_id, out string opponent);
+                if (string.IsNullOrEmpty(opponent)) opponent = "l'autre joueur";
 
                 var row = MakeHubCard();
                 // Pas d'émoji ici (🛡/🏰 etc.) : plage Unicode "pictographes" sans glyphe de repli
                 var col = MakeTextColumn(
                     isDefender ? $"⚔ {Novgov.UI.QuartierText.Title(s.tile_x, s.tile_y)} : assiégé !" : $"Votre siège : {Novgov.UI.QuartierText.Name(s.tile_x, s.tile_y)}",
+                    // 2026-10-03 : la bataille se joue AU TOUR PAR TOUR dès que les deux joueurs sont en
+                    // ligne en même temps (voir JoinSiegeBattle) ; à défaut, automatiquement à l'échéance.
                     isDefender
-                        ? "On vous attaque. Placez vos troupes en défense avant la fin du compte à rebours — sinon votre garnison actuelle se défendra seule."
-                        : "Vos troupes sont en place. Le propriétaire a jusqu'à la fin du compte à rebours pour se défendre, puis la bataille se joue toute seule.");
+                        ? $"{opponent} vous attaque. Touchez DÉFENDRE : dès que vous êtes tous les deux en ligne, la bataille se joue au tour par tour. Sinon, à la fin du compte à rebours, elle se jouera automatiquement avec les troupes de vos casernes."
+                        : $"{opponent} a été prévenu. Touchez REJOINDRE pour l'attendre : la bataille au tour par tour commence dès que vous êtes tous les deux en ligne. Sinon, à la fin du compte à rebours, elle se jouera automatiquement avec les troupes de vos casernes.");
                 var lblCountdown = new Label(countdown);
                 lblCountdown.AddToClassList(urgent ? "hub-badge-urgent" : "hub-badge-ok");
                 col.Add(lblCountdown);
                 row.Add(col);
 
-                if (isDefender)
+                var btnJoin = new Button();
+                btnJoin.text = isDefender ? "DÉFENDRE" : "REJOINDRE";
+                btnJoin.AddToClassList("btn-primary");
+                int tileX = s.tile_x, tileY = s.tile_y;
+                long siegeId = s.id;
+                string opponentName = opponent;
+                btnJoin.clicked += () =>
                 {
-                    var btnDefend = new Button();
-                    btnDefend.text = "DÉFENDRE";
-                    int tileX = s.tile_x, tileY = s.tile_y;
-                    long siegeId = s.id;
-                    btnDefend.clicked += () => DefendSiege(tileX, tileY, siegeId);
-                    row.Add(btnDefend);
-                }
+                    Novgov.UI.UiSfx.Play(Novgov.UI.UiSfx.Sound.RadioRoger);
+                    JoinSiegeBattle(tileX, tileY, siegeId, asAttacker: !isDefender, opponentName);
+                };
+                row.Add(btnJoin);
 
                 scroll.Add(row);
             }
@@ -1997,7 +2091,7 @@ namespace Novgov.Network
                     var s = mostUrgentDefense;
                     if (s == null) return;
                     Novgov.UI.UiSfx.Play(Novgov.UI.UiSfx.Sound.RadioRoger);
-                    DefendSiege(s.tile_x, s.tile_y, s.id);
+                    JoinSiegeBattle(s.tile_x, s.tile_y, s.id, asAttacker: false, mostUrgentDefenseAttackerName);
                 };
             }
 
@@ -2103,12 +2197,23 @@ namespace Novgov.Network
             // 08-known-issues-and-todo.md §10) — évite de ressaisir email/mot de passe à chaque essai
             // en Éditeur. Rangée entière cachée par défaut dans le UXML (display:none) : rendue
             // visible UNIQUEMENT ici, jamais sur un vrai build Android/iOS.
-            VisualElement testAccountsRow = authRoot.Q<VisualElement>("test-accounts-row");
-            if (testAccountsRow != null)
+            // 2026-10-03 ("le mode test multijoueur est incompréhensible") : boutons "JOUEUR 1 / JOUEUR 2"
+            // explicites, le joueur conseillé pour CETTE fenêtre mis en avant (1 = Éditeur principal,
+            // 2 = Joueur Virtuel), et une phrase qui dit quoi faire — voir EditorTestPlayers.
+            VisualElement testAccountsBox = authRoot.Q<VisualElement>("test-accounts-box");
+            if (testAccountsBox != null)
             {
-                testAccountsRow.style.display = DisplayStyle.Flex;
-                BindTestAccountButton(authRoot, "btn-test-account-1", "testlille1@novgov.test", "TestLille1!");
-                BindTestAccountButton(authRoot, "btn-test-account-2", "testlille2@novgov.test", "TestLille2!");
+                testAccountsBox.style.display = DisplayStyle.Flex;
+                int recommended = EditorTestPlayers.RecommendedNumberForThisWindow;
+                BindTestAccountButton(authRoot, "btn-test-account-1", EditorTestPlayers.Player1, recommended == 1);
+                BindTestAccountButton(authRoot, "btn-test-account-2", EditorTestPlayers.Player2, recommended == 2);
+                var hint = authRoot.Q<Label>("lbl-test-accounts-hint");
+                if (hint != null)
+                {
+                    hint.text = recommended == 1
+                        ? "Cette fenêtre est l'Éditeur principal : connectez-la en JOUEUR 1, et la fenêtre « Joueur virtuel » en JOUEUR 2. Leurs quartiers sont voisins (Joueur 2 juste au Nord de Joueur 1)."
+                        : "Cette fenêtre est le Joueur virtuel : connectez-la en JOUEUR 2 (l'Éditeur principal est en JOUEUR 1). Leurs quartiers sont voisins (Joueur 1 juste au Sud de Joueur 2).";
+                }
             }
 #endif
 
@@ -2198,7 +2303,7 @@ namespace Novgov.Network
 #if UNITY_EDITOR
         /// <summary>Remplit email/mot de passe avec un compte de test et connecte directement — voir
         /// le garde #if UNITY_EDITOR ci-dessus, jamais compilé dans un build réel.</summary>
-        private void BindTestAccountButton(VisualElement authRoot, string buttonName, string email, string password)
+        private void BindTestAccountButton(VisualElement authRoot, string buttonName, EditorTestPlayers.TestPlayer player, bool recommended)
         {
             Button btn = authRoot.Q<Button>(buttonName);
             if (btn == null)
@@ -2206,12 +2311,15 @@ namespace Novgov.Network
                 Debug.LogWarning($"[MultiplayerMatchController] Bouton '{buttonName}' introuvable dans AuthScreen.uxml.");
                 return;
             }
+            btn.text = recommended ? $"{player.Label.ToUpperInvariant()} ({player.Username})  ← cette fenêtre" : $"{player.Label.ToUpperInvariant()} ({player.Username})";
+            btn.EnableInClassList("btn-primary", recommended);
+            btn.EnableInClassList("btn-secondary", !recommended);
             btn.clicked += () =>
             {
-                emailField = email;
-                passwordField = password;
-                emailFieldEl.value = email;
-                passwordFieldEl.value = password;
+                emailField = player.Email;
+                passwordField = player.Password;
+                emailFieldEl.value = player.Email;
+                passwordFieldEl.value = player.Password;
                 HandleSignIn();
             };
         }

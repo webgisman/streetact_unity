@@ -239,6 +239,29 @@ namespace Novgov.Auth
             return (arr != null && arr.Length > 0) ? (true, arr[0]) : (false, null);
         }
 
+        [Serializable] private class UsernameEntry { public string id; public string username; }
+
+        /// <summary>Pseudos de plusieurs joueurs (profiles est lisible par tout joueur authentifié) —
+        /// pour dire "en attente de Bob" / "tenu par Bob" plutôt que "l'autre joueur" (2026-10-03).
+        /// Les identifiants introuvables sont simplement absents du dictionnaire.</summary>
+        public static async Task<Dictionary<string, string>> GetUsernames(IEnumerable<string> userIds)
+        {
+            var result = new Dictionary<string, string>();
+            var ids = new HashSet<string>(userIds ?? Array.Empty<string>());
+            ids.RemoveWhere(string.IsNullOrEmpty);
+            if (ids.Count == 0) return result;
+
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/profiles?id=in.({string.Join(",", ids)})&select=id,username";
+            using var req = UnityWebRequest.Get(url);
+            SetupHeaders(req);
+            await req.SendWebRequest();
+            if (req.result != UnityWebRequest.Result.Success) return result;
+
+            var arr = JsonHelper.FromJson<UsernameEntry>(req.downloadHandler.text);
+            if (arr != null) foreach (var e in arr) if (!string.IsNullOrEmpty(e.id)) result[e.id] = e.username;
+            return result;
+        }
+
         /// <summary>Toutes les Zones possédées par le joueur connecté — pour l'écran "Territoires".</summary>
         public static async Task<(bool ok, ZoneInfo[] zones)> GetOwnedZones()
         {

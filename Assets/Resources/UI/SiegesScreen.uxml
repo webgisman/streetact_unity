@@ -4,7 +4,7 @@
             <ui:Label text="SIÈGES EN COURS" class="title" style="margin-bottom: 24px;" />
 
             <ui:VisualElement class="hub-info-banner" style="margin-bottom: 16px; font-size: 20px;">
-                <ui:Label text="Un quartier assiégé se défend tout seul avec votre garnison actuelle au bout de 6 heures. Touchez DÉFENDRE avant la fin du compte à rebours pour placer vous-même vos troupes." />
+                <ui:Label text="Un siège se joue au tour par tour dès que l'attaquant et le défenseur sont en ligne en même temps (DÉFENDRE / REJOINDRE). Sinon, à la fin du compte à rebours, la bataille se joue automatiquement avec les troupes des casernes." />
             </ui:VisualElement>
 
             <ui:ScrollView name="sieges-scroll" style="flex-grow: 1; margin-bottom: 24px; background-color: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px;" />

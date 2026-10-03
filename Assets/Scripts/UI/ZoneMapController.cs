@@ -310,7 +310,18 @@ namespace Novgov.UI
         private void RefreshMap()
         {
             if (refreshRoutine != null) StopCoroutine(refreshRoutine);
-            refreshRoutine = StartCoroutine(RefreshMapRoutine());
+            refreshRoutine = StartCoroutine(RefreshMapRoutine(silent: false));
+        }
+
+        /// <summary>Remet à jour les propriétaires affichés SANS repasser par l'état "chargement"
+        /// (pas de clignotement, sélection conservée) — rafraîchissement périodique de
+        /// MultiplayerMatchController pendant que le joueur regarde la carte (2026-10-03).</summary>
+        public void RefreshMapSilently()
+        {
+            if (!uiBound || lastTab != Tab.Map || refreshRoutine != null || attackInFlight || !mapLoaded) return;
+            ZoneManager zm = ZoneManager.EnsureInstance();
+            if (zm.CurrentTileX != centerX || zm.CurrentTileY != centerY) { RefreshMap(); return; }
+            refreshRoutine = StartCoroutine(RefreshMapRoutine(silent: true));
         }
 
         [System.Serializable] private class ZoneRow { public int tile_x; public int tile_y; public string owner_user_id; public string shield_until; public int building_level = 1; }
@@ -318,23 +329,26 @@ namespace Novgov.UI
         [System.Serializable] private class ProfileRow { public string id; public string username; }
         [System.Serializable] private class ProfileRowList { public ProfileRow[] items; }
 
-        private IEnumerator RefreshMapRoutine()
+        private IEnumerator RefreshMapRoutine(bool silent)
         {
             ZoneManager zm = ZoneManager.EnsureInstance();
             int cx = zm.CurrentTileX, cy = zm.CurrentTileY;
-            if (cx != centerX || cy != centerY) selectedTile = null;
-            centerX = cx; centerY = cy;
-            mapLoaded = false;
-            mapLoadFailed = false;
+            if (!silent)
+            {
+                if (cx != centerX || cy != centerY) selectedTile = null;
+                centerX = cx; centerY = cy;
+                mapLoaded = false;
+                mapLoadFailed = false;
 
-            for (int row = 0; row < 3; row++)
-                for (int col = 0; col < 3; col++)
-                {
-                    cells[row, col].userData = (cx + col - 1, cy + row - 1);
-                    SetCellVisual(row, col, CellKind.Loading, "…");
-                    StartCoroutine(LoadTileImage(cx + col - 1, cy + row - 1, cells[row, col]));
-                }
-            RenderDetail();
+                for (int row = 0; row < 3; row++)
+                    for (int col = 0; col < 3; col++)
+                    {
+                        cells[row, col].userData = (cx + col - 1, cy + row - 1);
+                        SetCellVisual(row, col, CellKind.Loading, "…");
+                        StartCoroutine(LoadTileImage(cx + col - 1, cy + row - 1, cells[row, col]));
+                    }
+                RenderDetail();
+            }
 
             // 1. Propriétaires des 9 quartiers affichés.
             string myUserId = SupabaseAuthClient.CurrentSession?.user?.id;
@@ -356,10 +370,11 @@ namespace Novgov.UI
             }
             if (rows == null)
             {
+                refreshRoutine = null;
+                if (silent) yield break; // rafraîchissement de fond : on garde l'état déjà affiché
                 // Échec réseau affiché comme tel — jamais "tout est libre" par défaut, ce qui serait
                 // une fausse information (voir rapport d'audit interface, défaut bloquant #3).
                 mapLoadFailed = true;
-                refreshRoutine = null;
                 RenderDetail();
                 yield break;
             }
@@ -425,7 +440,9 @@ namespace Novgov.UI
                 selectedTile = (cx, cy);
 
             RefreshSelectionHighlight();
-            RenderDetail();
+            // Rafraîchissement de fond : ne pas réécrire la fiche si une action est en cours (son
+            // message "Ordre transmis..." / "Siège impossible : ..." doit rester lisible).
+            if (!silent || !attackInFlight) RenderDetail();
         }
 
         private IEnumerator LoadTileImage(int tileX, int tileY, Button cell)
@@ -681,7 +698,13 @@ namespace Novgov.UI
 
                 case CellKind.Enemy:
                     SetChip("TENU PAR " + name.ToUpperInvariant(), "cq-chip--enemy");
-                    detailText.text = $"{name} occupe ce quartier. Pour le lui prendre, lancez un SIÈGE :\n\n1. vous placez vos troupes maintenant ;\n2. {name} a 6 heures pour organiser sa défense ;\n3. la bataille se joue ensuite toute seule, et le résultat arrive dans vos RAPPORTS.";
+                    // 2026-10-03 : un siège est désormais une vraie bataille au tour par tour entre
+                    // les deux joueurs (voir MultiplayerMatchController.JoinSiegeBattle).
+                    detailText.text = $"{name} occupe ce quartier. Pour le lui prendre, lancez un SIÈGE :\n\n" +
+                        $"1. {name} est prévenu, et la bataille commence dès que vous êtes tous les deux en ligne ;\n" +
+                        "2. chacun place ses troupes, trace ses trajectoires et termine son tour ;\n" +
+                        "3. le serveur simule le tour et vous regardez la simulation ensemble, jusqu'à la victoire.\n\n" +
+                        "Si vous ne vous retrouvez pas sous 6 h, la bataille se joue automatiquement avec les troupes de vos casernes.";
                     SetActions("LANCER UN SIÈGE", () => Siege(tile.x, tile.y), "RECRUTER DES TROUPES", OpenRoster);
                     break;
 
@@ -750,7 +773,7 @@ namespace Novgov.UI
         private static readonly Regex PostgrestMessage = new Regex("\"message\"\\s*:\\s*\"([^\"]+)\"");
 
         /// <summary>Déclare le siège (RPC start_siege) puis, seulement en cas de succès, ouvre le
-        /// déploiement de l'attaquant (SiegeZone) — jamais l'inverse : un déploiement ne doit jamais
+        /// bataille de l'attaquant (JoinSiegeBattle) — jamais l'inverse : un déploiement ne doit jamais
         /// démarrer pour un siège qui n'a pas pu être créé (bouclier posé entre-temps, siège déjà en
         /// cours...).</summary>
         private IEnumerator StartSiegeThenDeploy(int tileX, int tileY)
@@ -775,7 +798,9 @@ namespace Novgov.UI
                 yield break;
             }
 
-            MultiplayerMatchController.EnsureInstance().SiegeZone(tileX, tileY, siegeId);
+            // 2026-10-03 : le siège déclaré, l'attaquant rejoint la BATAILLE AU TOUR PAR TOUR de ce
+            // siège (salle d'attente côté serveur, voir MatchSessionManager_SiegeBattle.cs).
+            MultiplayerMatchController.EnsureInstance().JoinSiegeBattle(tileX, tileY, siegeId, asAttacker: true, OwnerName((tileX, tileY)));
         }
 
 #if UNITY_EDITOR

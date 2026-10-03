@@ -1,12 +1,15 @@
 using UnityEngine;
 
-#if UNITY_EDITOR
-/// <summary>Panneau de diagnostic Éditeur (jamais compilé dans un build appareil — voir #if
-/// UNITY_EDITOR ci-dessus) : affiche en permanence, dans le coin haut-gauche de CHAQUE instance
-/// (Éditeur principal ou Joueur Virtuel Multiplayer Play Mode), son état réel — compte connecté,
-/// Zone actuelle, ville GPS simulée — pour ne plus avoir à déduire ces informations depuis des
-/// captures d'écran lors des tests multijoueur en Éditeur (2026-09-06, demande explicite : "crée un
-/// menu plus explicatif").</summary>
+#if UNITY_EDITOR && !UNITY_SERVER
+/// <summary>Panneau "MODE TEST" de l'Éditeur (jamais compilé dans un build appareil — voir #if
+/// UNITY_EDITOR ci-dessus), affiché dans CHAQUE fenêtre (Éditeur principal ou Joueur Virtuel
+/// Multiplayer Play Mode).
+///
+/// 2026-10-03, retour joueur : "le mode test multijoueur est incompréhensible". L'ancien panneau
+/// "[DIAGNOSTIC]" listait un email, des coordonnées de tuile brutes "(66648,44111)" et une "ville
+/// simulée" sans dire quoi faire. Il dit maintenant, en clair et selon l'étape où en est CETTE
+/// fenêtre : qui je suis (Joueur 1 / Joueur 2), où est l'adversaire, et les étapes pour tester un
+/// combat entre les deux fenêtres (voir Novgov.Network.EditorTestPlayers).</summary>
 public class EditorDebugOverlay : MonoBehaviour
 {
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -19,47 +22,77 @@ public class EditorDebugOverlay : MonoBehaviour
 
     private GUIStyle boxStyle;
     private GUIStyle labelStyle;
+    private bool collapsed = false;
+
+    private string BuildText()
+    {
+        bool mainWindow = Unity.Multiplayer.PlayMode.CurrentPlayer.IsMainEditor;
+        string window = mainWindow ? "fenêtre principale" : "fenêtre « Joueur virtuel »";
+        string email = Novgov.Auth.SupabaseAuthClient.CurrentSession?.user?.email;
+
+        if (string.IsNullOrEmpty(email))
+        {
+            int n = Novgov.Network.EditorTestPlayers.RecommendedNumberForThisWindow;
+            return
+                $"<b>MODE TEST — {window}</b>\n" +
+                "Pour tester un combat entre 2 joueurs :\n" +
+                $"1. Touchez JOUER EN LIGNE, puis JOUEUR {n} (bouton rouge).\n" +
+                $"2. Dans l'autre fenêtre, faites pareil avec JOUEUR {(n == 1 ? 2 : 1)}.\n" +
+                "Pas d'autre fenêtre ? Menu Window > Multiplayer >\n" +
+                "Multiplayer Play Mode : cochez « Player 2 », puis relancez Play.";
+        }
+
+        if (!Novgov.Network.EditorTestPlayers.TryGet(email, out var me))
+            return $"<b>MODE TEST — {window}</b>\nConnecté avec un compte qui n'est PAS un compte de test :\n{email}\nPour le test à 2 joueurs, utilisez JOUEUR 1 / JOUEUR 2.";
+
+        var other = Novgov.Network.EditorTestPlayers.Opponent(me);
+        return
+            $"<b>MODE TEST — vous êtes {me.Label.ToUpperInvariant()} ({me.Username})</b>\n" +
+            $"Votre quartier : au centre de la CARTE.\n" +
+            $"{other.Label} ({other.Username}) : le quartier juste {Novgov.Network.EditorTestPlayers.Direction(me, other)}.\n" +
+            "\n<b>Tester une bataille au tour par tour :</b>\n" +
+            "1. ATTAQUANT : touchez le quartier de l'autre joueur\n" +
+            "    > LANCER UN SIÈGE (écran « en attente de... »).\n" +
+            "2. DÉFENSEUR (autre fenêtre) : bandeau rouge « assiège »\n" +
+            "    > DÉFENDRE (affiché sous ~15 s).\n" +
+            "3. Les deux : placez vos troupes > CONFIRMER, puis à chaque\n" +
+            "    tour tracez vos trajectoires > FIN DE TOUR, et regardez\n" +
+            "    la simulation, jusqu'à la victoire.\n" +
+            "Après un siège, le quartier visé est protégé 6 h :\n" +
+            "pour un 2e essai, attaquez dans l'autre sens.";
+    }
 
     private void OnGUI()
     {
         if (boxStyle == null)
         {
             boxStyle = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.UpperLeft };
-            labelStyle = new GUIStyle(GUI.skin.label) { fontSize = 13, wordWrap = false, richText = true };
+            labelStyle = new GUIStyle(GUI.skin.label) { fontSize = 14, wordWrap = false, richText = true };
         }
 
-        string playerLabel = Unity.Multiplayer.PlayMode.CurrentPlayer.IsMainEditor ? "Éditeur principal" : "Joueur Virtuel";
-        string account = Novgov.Auth.SupabaseAuthClient.CurrentSession?.user?.email ?? "non connecté";
+        string text = collapsed ? "<b>MODE TEST</b> (cliquer pour afficher)" : BuildText();
 
-        Novgov.Generation.ZoneManager zm = Novgov.Generation.ZoneManager.Instance;
-        string zone = zm != null ? $"({zm.CurrentTileX},{zm.CurrentTileY})" : "aucune";
-
-        var mockCity = GameManagerUI.PickEditorMockCity();
-
-        string text =
-            $"<b>[DIAGNOSTIC] {playerLabel}</b>\n" +
-            $"Compte : {account}\n" +
-            $"Zone actuelle : {zone}\n" +
-            $"Ville simulée : {mockCity.Name}";
-
-        // Ancré à DROITE (2026-09-19, retour explicite "l'affichage du diagnostic couvre les
-        // unités") — la plupart des unités/de l'UI de jeu vivent plutôt à gauche/en bas, jamais
-        // testé à droite jusqu'ici.
-        //
-        // Y ancré SOUS le radar (2026-09-19, second retour le même jour : "les éléments de
-        // diagnostic sont sous le radar" — TacticalRadarUI vit AUSSI en haut-droite ET force
-        // GUI.depth=-100 pour toujours dessiner PAR-DESSUS tout le reste en OnGUI, donc un simple
-        // padding fixe de 8px partait de zéro connaissance de la vraie hauteur du radar (jusqu'à
-        // 230px + bandeau, voir TacticalRadarUI.radarSize) et se faisait recouvrir dès que le radar
-        // était affiché. BottomEdgeScreenY est le même point d'ancrage public déjà utilisé par
-        // TacticalBottomBarScreen pour la même raison ("empiler les boutons sous le radar sans
-        // chevauchement") — vaut 0 si le radar est masqué (vue 3D Action), donc ce panneau remonte
-        // alors naturellement vers le haut de l'écran.
+        // En partie : ancré à DROITE, SOUS le radar tactique (TacticalRadarUI dessine aussi en haut-
+        // droite, par-dessus tout le reste en OnGUI) — voir l'historique de ce panneau (2026-09-19).
+        // Dans les menus : en BAS à droite, pour ne pas couvrir l'en-tête (bouton RAPPORTS) de
+        // l'écran Conquête.
         Vector2 size = labelStyle.CalcSize(new GUIContent(text));
         float x = Screen.width - size.x - 32;
-        float y = TacticalRadarUI.BottomEdgeScreenY + 8f;
-        GUI.Box(new Rect(x, y, size.x + 24, size.y + 16), GUIContent.none, boxStyle);
+        bool inGame = Novgov.Network.MultiplayerMatchController.IsInMatch
+            || Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive
+            || !Novgov.Network.MultiplayerMatchController.IsFlowActive;
+        float y = inGame ? TacticalRadarUI.BottomEdgeScreenY + 8f : Screen.height - size.y - 32f;
+        Rect box = new Rect(x, y, size.x + 24, size.y + 16);
+        GUI.Box(box, GUIContent.none, boxStyle);
+        GUI.Box(box, GUIContent.none, boxStyle); // double passe : fond plus opaque, lisible sur la carte
         GUI.Label(new Rect(x + 10, y + 8, size.x + 12, size.y), text, labelStyle);
+
+        // Un clic sur le panneau le replie/déplie (il peut masquer une partie de la carte).
+        if (Event.current.type == EventType.MouseDown && box.Contains(Event.current.mousePosition))
+        {
+            collapsed = !collapsed;
+            Event.current.Use();
+        }
     }
 }
 #endif

@@ -272,6 +272,14 @@ public class TacticalRadarUI : MonoBehaviour
     {
         if (GameManagerUI.Instance != null && GameManagerUI.Instance.IsStartupSelectionActive) { BottomEdgeScreenY = 0f; BottomEdgeVirtualY = 0f; return; }
 
+        // Menus du jeu en ligne (écran Conquête, gestion, attente...) et menu pause : pas de radar.
+        // Dessiné en OnGUI avec GUI.depth=-100, il passait PAR-DESSUS ces écrans UI Toolkit et
+        // masquait le coin haut-droit (bouton RAPPORTS de la Conquête) — 2026-10-03.
+        bool inOnlineMenus = Novgov.Network.MultiplayerMatchController.IsFlowActive
+            && !Novgov.Network.MultiplayerMatchController.IsInMatch
+            && !Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive;
+        if (inOnlineMenus || Novgov.UI.InGameMenuController.IsOpen) { BottomEdgeScreenY = 0f; BottomEdgeVirtualY = 0f; return; }
+
         // En vue 3D Action, masquer le radar pour garder un écran 100% épuré et immersif
         if (CameraStateManager.Instance != null && CameraStateManager.Instance.CurrentState == CameraStateManager.CameraState.Action) { BottomEdgeScreenY = 0f; BottomEdgeVirtualY = 0f; return; }
 

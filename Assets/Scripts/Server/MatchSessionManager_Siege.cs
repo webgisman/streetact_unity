@@ -403,7 +403,7 @@ namespace Novgov.Server
             }
         }
 
-        private static List<DeployedUnit> ExpandRosterToDeployedUnits(Novgov.Auth.PlayerRosterItem[] roster)
+        private static List<DeployedUnit> ExpandRosterToDeployedUnits(Novgov.Auth.PlayerRosterItem[] roster, int team = 2)
         {
             var list = new List<DeployedUnit>();
             if (roster == null) return list;
@@ -414,7 +414,7 @@ namespace Novgov.Server
                 if (item.unit_type.Equals("CharLeopard", StringComparison.OrdinalIgnoreCase)) ut = UnitSpawnerUI.UnitType.CharLeopard;
                 else if (item.unit_type.Equals("VehiculeCanon", StringComparison.OrdinalIgnoreCase)) ut = UnitSpawnerUI.UnitType.VehiculeCanon;
                 else if (item.unit_type.Equals("Mortier", StringComparison.OrdinalIgnoreCase)) ut = UnitSpawnerUI.UnitType.Mortier;
-                for (int i = 0; i < item.quantity; i++) list.Add(new DeployedUnit { unit_type = (int)ut, team_id = 2 });
+                for (int i = 0; i < item.quantity; i++) list.Add(new DeployedUnit { unit_type = (int)ut, team_id = team });
             }
             return list;
         }
@@ -524,6 +524,16 @@ namespace Novgov.Server
 
             DeployedUnit[] attackerUnits = siege.attacker_deployment_json?.units;
             DeployedUnit[] defenderUnits = siege.defender_deployment_json?.units;
+            if (attackerUnits == null || attackerUnits.Length == 0)
+            {
+                // 2026-10-03 : avec la bataille au tour par tour (MatchSessionManager_SiegeBattle.cs),
+                // l'attaquant ne dépose plus de déploiement à l'avance — si les deux joueurs ne se sont
+                // jamais retrouvés avant l'échéance, ce sont les troupes de SA caserne qui attaquent
+                // (symétrique de la garnison du défenseur ci-dessous).
+                Novgov.Auth.PlayerRosterItem[] attackerRoster = null;
+                yield return FetchPlayerRoster(siege.attacker_user_id, r => attackerRoster = r);
+                attackerUnits = ExpandRosterToDeployedUnits(attackerRoster, team: 1).ToArray();
+            }
 
             if (defenderUnits == null || defenderUnits.Length == 0)
             {
@@ -569,7 +579,21 @@ namespace Novgov.Server
                 winnerTeam = attackerHealth > defenderHealth ? 1 : 2; // égalité -> avantage défenseur
             }
 
-            bool attackerWins = winnerTeam == 1;
+            bool attackerWins = false;
+            yield return ApplySiegeOutcome(siege, winnerTeam == 1, captured => attackerWins = captured);
+
+            UnitSpawnerUI.Instance.ClearAllUnits();
+            Debug.Log($"[Siège] #{siegeId} résolu : {(attackerWins ? "attaquant vainqueur" : "défenseur tient")} — Zone ({siege.tile_x},{siege.tile_y}).");
+        }
+
+        /// <summary>Conséquences d'un siège tranché — partagé par la résolution automatique
+        /// (ResolveSiegeNow, échéance) et la bataille jouée au tour par tour (MatchSessionManager_
+        /// SiegeBattle.OnSiegeBattleOver) : prise du quartier (si l'attaquant a gagné ET que la
+        /// capture est confirmée en base), pillage de PA, bouclier de 6 h, siège clos, rapports aux
+        /// deux joueurs. <paramref name="onDone"/> reçoit vrai si le quartier a réellement changé de mains.</summary>
+        private IEnumerator ApplySiegeOutcome(SiegeRowDto siege, bool attackerWonBattle, Action<bool> onDone)
+        {
+            bool attackerWins = attackerWonBattle;
             bool captureConfirmed = false;
             if (attackerWins)
             {
@@ -584,7 +608,7 @@ namespace Novgov.Server
             yield return PostgrestPatch($"/zones?tile_x=eq.{siege.tile_x}&tile_y=eq.{siege.tile_y}&zoom=eq.{siege.zoom}", "{\"shield_until\":\"" + shieldUntilIso + "\"}");
 
             string winnerUserId = attackerWins ? siege.attacker_user_id : siege.defender_user_id;
-            yield return PostgrestPatch($"/zone_sieges?id=eq.{siegeId}", "{\"status\":\"resolved\",\"winner_user_id\":\"" + winnerUserId + "\",\"resolved_at\":\"" + nowIso + "\"}");
+            yield return PostgrestPatch($"/zone_sieges?id=eq.{siege.id}", "{\"status\":\"resolved\",\"winner_user_id\":\"" + winnerUserId + "\",\"resolved_at\":\"" + nowIso + "\"}");
 
             string attackerName = null, defenderName = null;
             yield return FetchUsernameById(siege.attacker_user_id, n => attackerName = n);
@@ -603,8 +627,7 @@ namespace Novgov.Server
                 yield return WriteSiegeNotification(siege.defender_user_id, "siege_won", $"Vous avez défendu avec succès votre territoire ({siege.tile_x},{siege.tile_y}) contre {attackerName}.");
             }
 
-            UnitSpawnerUI.Instance.ClearAllUnits();
-            Debug.Log($"[Siège] #{siegeId} résolu : {(attackerWins ? "attaquant vainqueur" : "défenseur tient")} — Zone ({siege.tile_x},{siege.tile_y}).");
+            onDone?.Invoke(attackerWins);
         }
     }
 }

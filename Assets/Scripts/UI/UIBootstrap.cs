@@ -22,6 +22,10 @@ public static class UIBootstrap
             return;
         }
 
+        // Copie : l'échelle est ajustée à l'exécution (orientation, voir UIScreenManager.ApplyUiScale)
+        // — modifier l'asset partagé en Play Mode l'aurait réécrit sur le disque.
+        settings = Object.Instantiate(settings);
+
         GameObject go = new GameObject("UIRoot");
         Object.DontDestroyOnLoad(go);
         UIDocument doc = go.AddComponent<UIDocument>();

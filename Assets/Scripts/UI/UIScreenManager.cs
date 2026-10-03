@@ -61,6 +61,7 @@ public class UIScreenManager : MonoBehaviour
         RootVisualElement = root;
         root.style.flexGrow = 1;
         root.pickingMode = PickingMode.Ignore; // laisse passer les clics vers la scène 3D là où aucun écran n'est actif
+        ApplyUiScale();
         ApplySafeAreaPadding(root);
 
         foreach (var (name, resourcePath) in ScreenDefinitions)
@@ -172,7 +173,10 @@ public class UIScreenManager : MonoBehaviour
     private void Update()
     {
         if (Screen.width != lastSafeAreaScreenW || Screen.height != lastSafeAreaScreenH)
+        {
+            ApplyUiScale();
             ApplySafeAreaPadding(RootVisualElement);
+        }
 
         if (debugOverlayLabel == null) return;
         debugOverlayLabel.style.display = DebugOverlayEnabled ? DisplayStyle.Flex : DisplayStyle.None;
@@ -182,6 +186,32 @@ public class UIScreenManager : MonoBehaviour
         foreach (var kv in screens)
             if (kv.Value.style.display == DisplayStyle.Flex) visible.Add(kv.Key);
         debugOverlayLabel.text = "ÉCRANS VISIBLES: " + (visible.Count > 0 ? string.Join(", ", visible) : "(aucun)");
+    }
+
+    /// <summary>Petit côté de l'écran pour lequel toutes les tailles en px des écrans (polices de
+    /// Theme.tss, hauteurs de boutons...) ont été réglées : un téléphone 1080p.</summary>
+    private const float DesignShortSidePx = 1080f;
+
+    /// <summary>
+    /// Échelle de l'UI proportionnelle au PETIT côté de l'écran (2026-10-03, question joueur : "sur
+    /// le PC les icônes et l'écriture paraissent grosses — est-ce parce que le Build Profile est sur
+    /// Android ?" — non : c'était le mode "Constant Pixel Size" du PanelSettings, où 34px de texte
+    /// restent 34px quelle que soit la taille de l'écran ; dans une fenêtre Game de 600px de haut,
+    /// ils prenaient presque deux fois plus de place relative que sur un téléphone 1080p). Ici :
+    /// facteur = petit côté / 1080 — strictement identique à avant sur un téléphone 1080p (x1),
+    /// réduit en proportion dans une petite fenêtre ou sur un téléphone 720p, agrandi sur une
+    /// tablette. Le match largeur/hauteur suit l'orientation pour toujours viser le petit côté. Le
+    /// code qui convertit écran <-> UI (RuntimePanelUtils.ScreenToPanel, TacticalRadarUI.uiScale)
+    /// gère déjà une échelle différente de 1.
+    /// </summary>
+    private void ApplyUiScale()
+    {
+        PanelSettings settings = GetComponent<UIDocument>()?.panelSettings;
+        if (settings == null || Screen.width <= 0 || Screen.height <= 0) return;
+        settings.scaleMode = PanelScaleMode.ScaleWithScreenSize;
+        settings.screenMatchMode = PanelScreenMatchMode.MatchWidthOrHeight;
+        settings.referenceResolution = new Vector2Int((int)DesignShortSidePx, (int)DesignShortSidePx);
+        settings.match = Screen.width >= Screen.height ? 1f : 0f; // 1 = hauteur (paysage), 0 = largeur (portrait)
     }
 
     /// <summary>

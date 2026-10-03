@@ -359,6 +359,14 @@ namespace Novgov.Server
                         HandleSiegeDefendDeployMessage(conn, msg);
                         break;
                     }
+                    // Bataille de siège au tour par tour (2026-10-03) : salle d'attente propre à CE
+                    // siège, l'attaquant et le défenseur y sont appariés — voir
+                    // MatchSessionManager_SiegeBattle.cs.
+                    if (conn.Mode == "siege_battle")
+                    {
+                        HandleSiegeBattleMessage(conn, msg);
+                        break;
+                    }
 
                     bool isAsync = conn.TurnPace == "async";
                     var targetList = conn.Mode == "zone_control"
@@ -388,6 +396,7 @@ namespace Novgov.Server
             // capture de géométrie comme avant l'Option B). TryStartMatchLive gère lui-même ce garde
             // en tête — rien à vérifier ici, les deux files patientent simplement si un match tourne
             // déjà (Deathmatch, Zone de Contrôle ou Conquête).
+            PumpSiegeLobbies();
             TryStartMatchLive(waitingDeathmatch);
             TryStartMatchLive(waitingZoneControl);
             TryStartMatchLive(waitingDeathmatchAsync);
