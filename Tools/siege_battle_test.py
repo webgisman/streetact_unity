@@ -42,10 +42,19 @@ def send(sock, msg):
     sock.sendall(struct.pack("<i", len(payload)) + payload)
 
 
-def recv_all(sock, seconds):
+def recv_all(sock, seconds, until=None, keepalive=()):
+    """Lit les messages de `sock` pendant `seconds` (ou jusqu'à ce que `until(msg)` soit vrai).
+    Envoie un "heartbeat" toutes les 5 s sur `sock` et sur `keepalive`, comme le vrai client : le
+    serveur ferme toute connexion muette depuis 20 s (ReceiveTimeout, GameServerBootstrap)."""
     sock.settimeout(0.5)
-    out, buf, end = [], b"", time.time() + seconds
+    out, buf, end, last_hb = [], b"", time.time() + seconds, 0.0
     while time.time() < end:
+        if time.time() - last_hb >= 5:
+            for k in (sock, *keepalive):
+                send(k, {"type": "heartbeat"})
+            last_hb = time.time()
+        if until and any(until(m) for m in out):
+            break
         try:
             chunk = sock.recv(65536)
             if not chunk:
@@ -98,8 +107,9 @@ print("attaquant seul en salle d'attente, messages reçus :", sorted({m.get("typ
 assert not any(m.get("type") == "match_found" for m in early), "la bataille ne doit pas démarrer sans le défenseur"
 
 defender = connect(t2)
-msgs_a = recv_all(attacker, 25)
-msgs_d = recv_all(defender, 1)
+is_match_found = lambda m: m.get("type") == "match_found"
+msgs_a = recv_all(attacker, 25, until=is_match_found, keepalive=[defender])
+msgs_d = recv_all(defender, 5, until=is_match_found, keepalive=[attacker])
 mf_a = [m for m in msgs_a if m.get("type") == "match_found"]
 mf_d = [m for m in msgs_d if m.get("type") == "match_found"]
 for name, mf in (("attaquant", mf_a), ("défenseur", mf_d)):
@@ -114,7 +124,8 @@ for name, mf in (("attaquant", mf_a), ("défenseur", mf_d)):
 verify_ok = False
 if mf_a:
     send(attacker, {"type": "city_verify", "city_building_hash": 1, "city_building_count": 0})
-    replies = [m for m in recv_all(attacker, 10) if m.get("type") == "city_verify_result"]
+    is_verify = lambda m: m.get("type") == "city_verify_result"
+    replies = [m for m in recv_all(attacker, 10, until=is_verify, keepalive=[defender]) if is_verify(m)]
     if replies:
         r = replies[0]
         nb = len(r.get("city_buildings") or [])
