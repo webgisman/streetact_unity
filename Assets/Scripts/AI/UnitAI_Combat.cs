@@ -9,6 +9,8 @@ public partial class UnitAI
     // ==========================================
 
     private UnitAI currentLookTarget = null;
+    /// <summary>Ennemi actuellement visé (lecture seule, pour les tests et diagnostics).</summary>
+    public UnitAI CurrentTarget => currentLookTarget;
     private float lookUpdateTimer = 0f;
 
     /// <summary>

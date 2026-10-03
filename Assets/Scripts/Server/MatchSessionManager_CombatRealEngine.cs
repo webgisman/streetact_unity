@@ -64,25 +64,23 @@ namespace Novgov.Server
             return false;
         }
 
-        /// <summary>Équivalent "vrai moteur" de RunExecutionPhase (MatchSessionManager_CombatLive.cs,
-        /// laissée intacte, plus appelée par RunMatchLive depuis ce changement). Ne calcule PLUS rien
-        /// via TacticalResolver.Resolve() — lance la VRAIE exécution (UnitAI.ExecuterOrdres(), NavMesh
-        /// + tir temps réel) et échantillonne l'état réel des UnitAI à intervalle régulier, exactement
-        /// comme le fait déjà le Solo (TacticalPathManager_Execution.cs), jamais touché ici.
-        ///
-        /// IMPORTANT : appelant responsable de s'assurer qu'AUCUNE UnitAI des deux camps n'a
-        /// isPlayerControlled=false avant cet appel (voir RunMatchLive) — ExecuterOrdres() ne planifie
-        /// lui-même RIEN, mais une unité restée isPlayerControlled=false ailleurs dans le pipeline
-        /// pourrait rester intégralement passive (ni ordre humain ni IA), un silence différent du
-        /// "tenir la position en se défendant" voulu pour un joueur ghosté.
-        ///
-        /// p1 PEUT être null depuis 2026-09-13 (résolution HEADLESS d'un siège de Zone, voir
-        /// MatchSessionManager_Siege.ResolveSiegeNow — ni l'attaquant ni le défenseur n'ont de
-        /// connexion live pendant la résolution, la simulation elle-même n'en a jamais eu besoin,
-        /// seul l'envoi des snapshots en fin de tour en dépendait).</summary>
+        /// <summary>Exécute un tour avec le vrai moteur (UnitAI.ExecuterOrdres, NavMesh, tir en temps
+        /// réel), comme le Solo (TacticalPathManager_Execution.cs), et échantillonne l'état des unités
+        /// à intervalle régulier pour le rejeu des deux clients. Toutes les UnitAI doivent être
+        /// isPlayerControlled (voir RunMatchLive) : aucune IA en ligne.
+        /// p1/p2 peuvent être null : résolution automatique d'un siège à l'échéance
+        /// (MatchSessionManager_Siege.ResolveSiegeNow), sans joueur connecté.</summary>
         private IEnumerator RunExecutionPhaseRealEngine(int turnNumber, PlayerConnection p1, PlayerConnection p2)
         {
             DateTime executionStartUtc = DateTime.UtcNow;
+
+            // Phase d'exécution du moteur, comme en Solo (TacticalPathManager.LancerExecutionTour) :
+            // c'est elle qui autorise TOUTES les unités à tirer, y compris celles sans ordre ou déjà
+            // arrivées (UnitAI_Combat, isExecutionPhase). Jusqu'au 2026-10-03 le serveur ne l'activait
+            // jamais : une unité ne tirait que pendant son propre trajet, et les unités d'un joueur
+            // absent, ou dont l'ordre avait été refusé, se faisaient abattre sans riposter.
+            TacticalPathManager phaseOwner = TacticalPathManager.Instance;
+            if (phaseOwner != null) phaseOwner.phaseActuelle = TacticalPathManager.GamePhase.Execution;
 
             var allUnits = FindObjectsByType<UnitAI>(FindObjectsInactive.Exclude).Where(u => !u.isDead).ToList();
             var unitById = allUnits.ToDictionary(u => u.gameObject.name);
@@ -141,6 +139,8 @@ namespace Novgov.Server
             {
                 snapshots.Add(CaptureRealEngineSnapshot(0, allUnits, buildingsSnapshot, wasDestroyed, barriersSnapshot, barrierNames, barrierWasDestroyed));
             }
+
+            if (phaseOwner != null) phaseOwner.phaseActuelle = TacticalPathManager.GamePhase.Planification;
 
             foreach (var unit in allUnits)
             {
