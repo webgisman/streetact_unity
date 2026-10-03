@@ -78,7 +78,19 @@ séparé par une rue. Code de sortie 0 = vert ; détail dans les lignes `[RoofPl
 Contre-épreuve faite le 2026-10-03 : l'ancien code échoue à 6 vérifications sur 8 (descente posée sur
 le toit voisin, à 28,7 m de la cible).
 
-## 6. Sur téléphone
+## 6. Partie Solo complète, jouée toute seule
+
+```
+Unity.exe -batchmode -projectPath "<projet>" -executeMethod SoloSkirmishPlaytest.Run -logFile solo.log
+```
+
+Lance une partie Solo comme un joueur (armée de l'IA en place, PLACEMENT AUTOMATIQUE, COMMENCER LA
+BATAILLE), puis à chaque tour envoie toutes les unités du joueur sur l'ennemi le plus proche, en
+accéléré, jusqu'à la victoire ou la défaite. Vérifie qu'une partie Solo a un adversaire, des combats
+et un écran de fin (lignes `[SoloPlaytest]`, code de sortie 0). Le 2026-10-03 : victoire en 4 tours,
+avec 3 pertes sur 4 côté joueur.
+
+## 7. Sur téléphone
 
 APK de test : `AndroidTestBuildScript.BuildDebugApk` (voir `01-deployment-vps.md` §10 pour la commande),
 sortie `build/Android/Novgov-Test.apk`, installation `adb install -r build/Android/Novgov-Test.apk`.

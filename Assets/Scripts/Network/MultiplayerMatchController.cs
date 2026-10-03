@@ -1032,12 +1032,9 @@ namespace Novgov.Network
 
             UnitSpawnerUI.Instance.ClearAllUnits();
 
-            // Le dock de déploiement plafonnait volontairement à 4 (voir OpenDeploymentDock) pour
-            // empêcher LE JOUEUR de placer plus que son budget — mais ce plafond partagé bloquerait
-            // aussi l'apparition dynamique d'une garnison de conquête renforcée (jusqu'à 4+3=7 unités,
-            // voir MatchSessionManager.GarrisonExtraInfantryForZoneCount) au moment où ses unités sont
-            // repérées en jeu (voir PlaySnapshotsCoroutine). Relevé une fois le déploiement soumis :
-            // le joueur ne peut de toute façon plus placer de nouvelles unités passé ce point.
+            // Plafond relevé une fois le placement terminé : la limite du dock (6 unités de combat)
+            // ne doit jamais empêcher les unités adverses d'apparaître quand elles sont repérées en
+            // cours de partie (PlaySnapshotsCoroutine).
             UnitSpawnerUI.Instance.maxUnitsPerTeam = 8;
 
             if (msg.deployed_units != null)

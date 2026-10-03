@@ -1126,20 +1126,18 @@ public partial class UnitSpawnerUI : MonoBehaviour
     public void AutoDeployTeamFallback(int team)
     {
         Vector3 anchor = FindGroundLevelNavPoint(team == 1 ? SoloPlayerBase : SoloEnemyBase, 40f);
-        if (team == 1)
-        {
-            SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(-2f, 0, -2f), 1);
-            SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(2f, 0, 2f), 1);
-            SpawnUnitAt(UnitType.CharLeopard, anchor + new Vector3(5f, 0, -3f), 1);
-            SpawnUnitAt(UnitType.Mortier, anchor + new Vector3(-5f, 0, -4f), 1);
-        }
-        else
-        {
-            SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(-3f, 0, 3f), 2);
-            SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(3f, 0, -3f), 2);
-            SpawnUnitAt(UnitType.CharLeopard, anchor + new Vector3(6f, 0, 4f), 2);
-            SpawnUnitAt(UnitType.Mortier, anchor + new Vector3(-6f, 0, 5f), 2);
-        }
+
+        // Formation tournée vers l'ennemi, 8 à 12 m entre les unités : char devant, fantassins sur
+        // les flancs, mortier en arrière. Les unités étaient jusqu'au 2026-10-03 serrées sur 3 à 6 m,
+        // si bien qu'une seule salve de mortier touchait toute l'escouade.
+        Vector3 forward = Vector3.zero - anchor;
+        forward.y = 0f;
+        forward = forward.sqrMagnitude > 0.01f ? forward.normalized : Vector3.forward;
+        Vector3 side = Vector3.Cross(Vector3.up, forward);
+        SpawnUnitAt(UnitType.CharLeopard, FindGroundLevelNavPoint(anchor + forward * 8f, 8f), team);
+        SpawnUnitAt(UnitType.Fantassin, FindGroundLevelNavPoint(anchor + forward * 3f + side * 8f, 8f), team);
+        SpawnUnitAt(UnitType.Fantassin, FindGroundLevelNavPoint(anchor + forward * 3f - side * 8f, 8f), team);
+        SpawnUnitAt(UnitType.Mortier, FindGroundLevelNavPoint(anchor - forward * 8f, 8f), team);
 
         if (team == 2)
         {

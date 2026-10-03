@@ -39,20 +39,17 @@ namespace Novgov.Server
             }
         }
 
-        /// <summary>p2 peut être null (garnison IA de conquête, voir RunConquestSkirmish) : dans ce
-        /// cas aucune ligne n'est insérée pour l'équipe 2 (une IA n'a pas de user_id).</summary>
+        /// <summary>Enregistre la bataille et ses deux joueurs (équipe 1 = attaquant, 2 = défenseur).</summary>
         private IEnumerator CreateMatchRecord(string matchId, PlayerConnection p1, PlayerConnection p2, string mode)
         {
             string nowIso = DateTime.UtcNow.ToString("o");
             string matchJson = "{\"id\":\"" + matchId + "\",\"status\":\"active\",\"mode\":\"" + mode + "\",\"started_at\":\"" + nowIso + "\"}";
             yield return PostgrestPost("/matches", matchJson);
 
-            string participantsJson = p2 != null
-                ? "[" +
-                    "{\"match_id\":\"" + matchId + "\",\"user_id\":\"" + p1.UserId + "\",\"team_id\":1}," +
-                    "{\"match_id\":\"" + matchId + "\",\"user_id\":\"" + p2.UserId + "\",\"team_id\":2}" +
-                  "]"
-                : "[{\"match_id\":\"" + matchId + "\",\"user_id\":\"" + p1.UserId + "\",\"team_id\":1}]";
+            string participantsJson = "[" +
+                "{\"match_id\":\"" + matchId + "\",\"user_id\":\"" + p1.UserId + "\",\"team_id\":1}," +
+                "{\"match_id\":\"" + matchId + "\",\"user_id\":\"" + p2.UserId + "\",\"team_id\":2}" +
+              "]";
             yield return PostgrestPost("/match_participants", participantsJson);
         }
 

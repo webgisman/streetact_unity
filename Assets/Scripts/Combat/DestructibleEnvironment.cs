@@ -245,43 +245,21 @@ public class DestructibleEnvironment : MonoBehaviour
                 }
             }
 
-            // Empreinte locale (alignée sur la rotation réelle du bâtiment) plutôt que l'AABB monde
-            // de totalBounds : Collider.bounds est TOUJOURS un AABB monde même pour un collider
-            // tourné, donc pour un bâtiment à ~45° ce test surestimait largement la silhouette
-            // réelle et tuait des unités clairement à l'extérieur des décombres visuels.
-            Bounds localFootprint = new Bounds(Vector3.zero, Vector3.zero);
-            bool hasLocalFootprint = false;
-            foreach (var c in allCols)
-            {
-                if (c == null) continue;
-                Bounds wb = c.bounds;
-                for (int cx = 0; cx <= 1; cx++)
-                for (int cy = 0; cy <= 1; cy++)
-                for (int cz = 0; cz <= 1; cz++)
-                {
-                    Vector3 corner = new Vector3(
-                        cx == 0 ? wb.min.x : wb.max.x,
-                        cy == 0 ? wb.min.y : wb.max.y,
-                        cz == 0 ? wb.min.z : wb.max.z);
-                    Vector3 localCorner = transform.InverseTransformPoint(corner);
-                    if (!hasLocalFootprint) { localFootprint = new Bounds(localCorner, Vector3.zero); hasLocalFootprint = true; }
-                    else localFootprint.Encapsulate(localCorner);
-                }
-            }
-
+            // Écrasés : les unités DANS l'empreinte réelle de l'immeuble, ou à moins d'un mètre de ses
+            // murs. Jusqu'au 2026-10-03 le test portait sur la boîte englobante des colliders (+1 m) :
+            // pour un immeuble en L ou en biais, elle couvre une large part de la rue, et un char ou des
+            // fantassins qui passaient À CÔTÉ mouraient sous des gravats qui ne les touchaient pas
+            // (constaté en Solo : toute l'armée de l'IA tuée par l'effondrement d'un seul immeuble).
+            const float wallMargin = 1.0f;
+            List<Vector2> footprint = buildingStructure.polygonFootprint;
             for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
             {
                 UnitAI u = UnitAI.AllLivingUnits[i];
-                if (u != null && !u.isDead && !casualties.Contains(u))
-                {
-                    Vector3 localPos = transform.InverseTransformPoint(u.transform.position);
-                    if (hasLocalFootprint &&
-                        localPos.x >= localFootprint.min.x - 1.0f && localPos.x <= localFootprint.max.x + 1.0f &&
-                        localPos.z >= localFootprint.min.z - 1.0f && localPos.z <= localFootprint.max.z + 1.0f)
-                    {
-                        casualties.Add(u);
-                    }
-                }
+                if (u == null || u.isDead || casualties.Contains(u)) continue;
+                Vector2 p = new Vector2(u.transform.position.x, u.transform.position.z);
+                bool crushed = buildingStructure.ContainsPoint2D(p)
+                    || Novgov.TacticalCore.GeometryMath.SqrDistanceToPolygonEdge(footprint, p) <= wallMargin * wallMargin;
+                if (crushed) casualties.Add(u);
             }
 
             foreach (var victim in casualties)

@@ -37,6 +37,20 @@ namespace Novgov.TacticalCore
             return dx * dx + dy * dy;
         }
 
+        /// <summary>Distance au carré d'un point au CONTOUR d'un polygone (0 s'il est pile dessus).
+        /// Ne dit RIEN de l'intérieur/extérieur — combiner avec PointInPolygon si besoin.</summary>
+        public static float SqrDistanceToPolygonEdge(System.Collections.Generic.List<Vector2> polygon, Vector2 pt)
+        {
+            if (polygon == null || polygon.Count < 2) return float.MaxValue;
+            float best = float.MaxValue;
+            for (int i = 0, j = polygon.Count - 1; i < polygon.Count; j = i++)
+            {
+                float d = SqrDistancePointToSegment(pt, polygon[j], polygon[i]);
+                if (d < best) best = d;
+            }
+            return best;
+        }
+
         /// <summary>Point-dans-polygone 2D (ray casting), même algorithme que
         /// BuildingStructure.ContainsPoint2D — dupliqué ici pour que TacticalCore n'ait aucune
         /// dépendance vers les composants de scène Unity (voir en-tête de TacticalTypes.cs).</summary>
