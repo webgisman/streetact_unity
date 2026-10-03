@@ -208,22 +208,10 @@ namespace Novgov.Server
             yield return EnsureHqBuildingIndex(tileX, tileY);
         }
 
-        /// <summary>Désigne UNE FOIS, en base (public.zones.hq_building_index), le bâtiment "HQ" de
-        /// cette Zone — le plus grand par emprise au sol, un choix déterministe qui donne le MÊME
-        /// résultat à chaque appel tant que la géométrie de la tuile ne change pas. Remplace
-        /// l'ancien MultiplayerMatchController.ClaimBuildingAsync (index tiré au hasard côté client,
-        /// écrit uniquement dans le PlayerPrefs local de CET appareil — jamais partagé, d'où le
-        /// bâtiment jaune incohérent entre les deux joueurs d'un même match). L'index utilisé est
-        /// la position du bâtiment dans BuildingStructure.AllBuildings au moment de la génération —
-        /// la MÊME numérotation que CityGenerator.lotIndex côté rendu (les deux parcourent les
-        /// mêmes données OSM dans le même ordre, déjà l'hypothèse retenue ailleurs pour la
-        /// vérification de hash de géométrie, voir city_verify) et que TacticalBuilding.id côté
-        /// TacticalGridBuilder.
-        ///
-        /// Toujours réécrit (pas seulement "si absent") : le calcul est déterministe à partir de la
-        /// géométrie de la tuile, donc idempotent — appeler ceci plusieurs fois sur la même tuile
-        /// redonne toujours le même index, un upsert répété est donc sans risque et plus simple qu'un
-        /// aller-retour de lecture préalable.</summary>
+        /// <summary>Désigne une fois en base (zones.hq_building_index) le bâtiment QG du quartier : le plus
+        /// grand par emprise au sol, un choix déterministe. L'index est la position du bâtiment dans
+        /// BuildingStructure.AllBuildings, même numérotation côté client (même JSON OSM, même ordre). Réécrit
+        /// à chaque appel : le résultat est toujours le même.</summary>
         private IEnumerator EnsureHqBuildingIndex(int tileX, int tileY)
         {
             var buildings = BuildingStructure.AllBuildings;

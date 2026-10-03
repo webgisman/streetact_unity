@@ -90,7 +90,23 @@ accéléré, jusqu'à la victoire ou la défaite. Vérifie qu'une partie Solo a 
 et un écran de fin (lignes `[SoloPlaytest]`, code de sortie 0). Le 2026-10-03 : victoire en 4 tours,
 avec 3 pertes sur 4 côté joueur.
 
-## 7. Sur téléphone
+## 7. Un tour de bataille avec le code du serveur
+
+```
+Unity.exe -batchmode -buildTarget Android -projectPath "<projet>" -executeMethod SiegeDuelPlaytest.Run -logFile duel.log
+```
+
+Joue un tour avec `MatchSessionManager.RunExecutionPhaseRealEngine` tel quel (composant ajouté
+DÉSACTIVÉ : son Start écrirait dans la base de production), camp 1 sans ordre, camp 2 qui avance.
+Le camp sans ordre doit riposter. Contre-épreuve du 2026-10-03 : sans la correction du serveur, 0 tir
+contre 18. En production, `python Tools/siege_battle_test.py --tours N` joue N vrais tours entre les
+deux comptes de test (attention : la bataille peut se terminer et clore le siège).
+
+**Piège** : un build du serveur bascule le projet en cible « Dedicated Server », où les outils de test
+client (`#if !UNITY_SERVER`) ne sont pas compilés (« executeMethod class … could not be found »).
+Toujours passer `-buildTarget Android` aux tests Play Mode ci-dessus après un build serveur.
+
+## 8. Sur téléphone
 
 APK de test : `AndroidTestBuildScript.BuildDebugApk` (voir `01-deployment-vps.md` §10 pour la commande),
 sortie `build/Android/Novgov-Test.apk`, installation `adb install -r build/Android/Novgov-Test.apk`.

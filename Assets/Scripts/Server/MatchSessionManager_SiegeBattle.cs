@@ -8,33 +8,14 @@ using UnityEngine;
 namespace Novgov.Server
 {
     /// <summary>
-    /// BATAILLE DE SIÈGE AU TOUR PAR TOUR (2026-10-03, demande joueur : "c'est un jeu tour par tour où
-    /// je planifie mes trajectoires et je fais fin de tour, l'autre joueur aussi, puis le serveur
-    /// vérifie, simule et rend la simulation aux joueurs pour qu'ils la regardent, et ainsi de suite
-    /// jusqu'à la fin"). Remplace, pour les clients à jour, le siège "en différé" de
-    /// MatchSessionManager_Siege.cs, qui ne garde plus que la résolution automatique à l'échéance.
-    ///
-    /// Règle choisie par le joueur pour un adversaire absent : LE PREMIER ARRIVÉ ATTEND L'AUTRE.
-    ///   1. L'attaquant déclare le siège (RPC start_siege, côté client) puis se connecte avec
-    ///      mode="siege_battle" + siege_id ; le défenseur fait de même via DÉFENDRE. Chacun entre dans
-    ///      la "salle d'attente" de CE siège (siegeLobbies) et y patiente (signal de vie centralisé de
-    ///      PlayerConnection, il peut annuler à tout moment — le siège reste alors ouvert).
-    ///   2. Dès que l'attaquant ET le défenseur sont dans la salle (et que la scène est libre), la
-    ///      bataille démarre : RunMatchLive, EXACTEMENT le moteur au tour par tour de Match à mort
-    ///      (déploiement des deux camps, puis à chaque tour planification -> fin de tour -> simulation
-    ///      serveur au vrai moteur -> rejeu synchronisé chez les deux joueurs), sur la carte du quartier
-    ///      assiégé, attaquant = équipe 1, défenseur = équipe 2.
-    ///   3. Fin de partie : victoire de l'attaquant = le quartier change de propriétaire (et pillage de
-    ///      PA, bouclier 6 h) ; égalité ou victoire du défenseur = il garde son quartier. Voir
-    ///      ApplySiegeOutcome, partagé avec la résolution automatique.
-    ///   4. S'ils ne se retrouvent pas avant l'échéance (6 h), SiegeResolutionLoop joue la bataille
-    ///      automatiquement avec les troupes de leurs casernes (MatchSessionManager_Siege.ResolveSiegeNow).
-    ///
-    /// Avant le 2026-10-03, le siège se jouait « en différé » (chaque camp déployait séparément, puis
-    /// un unique tour headless tranchait) — ce mode a été supprimé.
-    ///
-    /// Les DEUX joueurs doivent se connecter à la MÊME instance du pool : le client la choisit de façon
-    /// déterministe à partir du siege_id (voir MultiplayerMatchController.ConnectToGameServerCoroutine).
+    /// Bataille de siège au tour par tour entre l'attaquant et le défenseur (2026-10-03). Le premier
+    /// arrivé ATTEND l'autre dans la salle d'attente du siège (siegeLobbies) ; il peut annuler, le siège
+    /// reste ouvert. Dès que les deux sont là (et la scène libre) : RunMatchLive sur la carte du quartier,
+    /// attaquant = équipe 1, défenseur = équipe 2. Victoire de l'attaquant : le quartier change de
+    /// propriétaire (pillage de PA, protection 6 h) ; égalité ou victoire du défenseur : il le garde
+    /// (ApplySiegeOutcome). Sans rencontre avant l'échéance (6 h), SiegeResolutionLoop joue la bataille
+    /// automatiquement avec les casernes (ResolveSiegeNow). Les deux joueurs rejoignent la MÊME instance
+    /// du pool, choisie à partir du siege_id (MultiplayerMatchController.ConnectToGameServerCoroutine).
     /// </summary>
     public partial class MatchSessionManager
     {

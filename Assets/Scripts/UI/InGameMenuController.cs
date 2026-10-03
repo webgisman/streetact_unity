@@ -6,19 +6,12 @@ using UnityEngine.UIElements;
 namespace Novgov.UI
 {
     /// <summary>
-    /// Menu PAUSE en partie (Assets/Resources/UI/PauseMenuScreen.uxml), ouvert par le bouton "MENU"
-    /// du bandeau tactique (TacticalBottomBarScreen.uxml, "hud-menu-button") — 2026-09-30, refonte du
-    /// parcours des menus. Jusqu'ici, une fois une partie lancée (solo comme en ligne), il n'existait
-    /// AUCUN moyen d'en sortir autrement qu'en tuant l'application.
-    ///
+    /// Menu PAUSE (PauseMenuScreen.uxml), ouvert par le bouton MENU du bandeau de bataille.
     /// - Solo : vraie pause (Time.timeScale = 0), RECOMMENCER, MENU PRINCIPAL.
-    /// - En ligne : le temps n'est JAMAIS gelé (le serveur arbitre le tour), seul QUITTER est proposé
-    ///   — la connexion coupée fait passer les unités du joueur en garde automatique côté serveur.
-    /// Toute action destructrice demande un second appui (texte "TOUCHEZ À NOUVEAU...").
-    ///
-    /// Tant que le menu est ouvert, TacticalPathManager ignore tout tap (voir <see cref="IsOpen"/>) et
-    /// son fond "pause-backdrop" absorbe les taps (liste blanche de UnitSpawnerUI.IsPointerOverOnGUI,
-    /// qui protège aussi la caméra).
+    /// - En ligne : le temps n'est jamais gelé (le serveur arbitre le tour), seul QUITTER est proposé ;
+    ///   les unités d'un joueur parti tiennent leur position et ripostent.
+    /// Toute action destructrice demande un second appui. Tant que le menu est ouvert, les taps sur la
+    /// carte sont ignorés (IsOpen).
     /// </summary>
     public static class InGameMenuController
     {

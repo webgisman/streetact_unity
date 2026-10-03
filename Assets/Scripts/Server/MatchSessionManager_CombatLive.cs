@@ -73,21 +73,9 @@ namespace Novgov.Server
                     if (float.IsInfinity(node.x) || float.IsInfinity(node.y) || float.IsInfinity(node.z)) continue;
                     if (!Enum.IsDefined(typeof(TacticalPathManager.NodeAction), node.action)) continue;
 
-                    // DURCISSEMENT SERVEUR (2026-09-19) — miroir de TacticalPathManager_ContextMenu.
-                    // TryFallbackAuSolPourBlinde côté client (voir sa doc pour la root cause complète) :
-                    // le NavMesh, ici comme là-bas, marche à tort sur l'intérieur de chaque bâtiment
-                    // (son sol 2D "Footprint_2D" est un vrai collider plein bake par NavMeshSurface,
-                    // voir CityGenerator.cs), donc rien n'empêche STRUCTURELLEMENT un char/canon-
-                    // véhicule/mortier de recevoir un nœud de chemin dont les coordonnées XZ tombent
-                    // dans l'empreinte d'un bâtiment. Le client corrigé n'en soumettra plus, mais ce
-                    // chemin réseau reste atteignable par un client modifié qui saute le menu — le
-                    // serveur (autorité finale du mouvement réel via NavMeshAgent, voir
-                    // RunExecutionPhaseRealEngine) ne doit pas non plus faire confiance au client sur
-                    // ce point. Un blindé ne peut, par construction, ni entrer dans un bâtiment ni
-                    // monter sur un toit (voir TacticalPathManager_TapActionRouter) — un point XZ dans
-                    // UNE empreinte de bâtiment est donc TOUJOURS invalide pour lui, quelle que soit
-                    // l'action demandée ou la hauteur Y (une position sur le toit partage la même
-                    // empreinte XZ que l'intérieur).
+                    // Un blindé ne peut ni entrer dans un bâtiment ni monter sur un toit : tout point dont la position au
+                    // sol tombe dans une empreinte est refusé pour lui (le NavMesh couvre à tort l'intérieur des
+                    // bâtiments, et un client modifié pourrait envoyer un tel point).
                     if (unit.isTank && BuildingStructure.FindBuildingAt(new Vector3(node.x, node.y, node.z)) != null)
                     {
                         continue;

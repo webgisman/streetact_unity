@@ -86,7 +86,7 @@ namespace Novgov.Server
             // TacticalGridBuilder.DefaultWorldRadius, le même rayon utilisé pour construire la grille
             // tactique) pour éviter qu'un client modifié déploie hors du monde. Un ±25 en dur ici
             // aurait à tort recadré des placements légitimes bien à l'intérieur de la vraie carte
-            // (le rayon réel est 120, pas 25) — voir l'historique git (ancien journal 08).
+            // (le rayon réel est 120, pas 25) — voir l'historique git.
             float r = Novgov.TacticalCore.TacticalGridBuilder.DefaultWorldRadius;
             return new Vector3(Mathf.Clamp(pos.x, -r, r), pos.y, Mathf.Clamp(pos.z, -r, r));
         }

@@ -20,30 +20,10 @@ public partial class UnitAI
 
         navMeshReady = true;
 
-        // MULTIJOUEUR : NE JAMAIS réactiver l'agent ni recaler l'unité (2026-09-07).
-        //
-        // En réseau, le serveur est seul maître de la position : le client se contente d'écrire
-        // transform.position à chaque snapshot (MultiplayerMatchController.PlaySnapshotsBody), et
-        // désactive délibérément le NavMeshAgent de chaque unité qu'il fait apparaître — même raison
-        // que le `skipSafeSpawnAdjustment: true` du 2026-09-06 : une position déjà authentifiée par
-        // le serveur ne doit plus JAMAIS être recalculée localement.
-        // Or cette méthode défaisait les deux, systématiquement et sans que personne le voie :
-        //   - `AutoCheckNavMeshCoroutine` l'appelle 0.2s après CHAQUE apparition d'unité (UnitAI.cs),
-        //     et CityGenerator la rappelle sur TOUTES les unités après chaque bake de NavMesh ;
-        //   - elle réactivait l'agent (qui reprend alors la main sur le transform et se met à lutter
-        //     contre les positions envoyées par le serveur — d'où les unités qui "glissent" sans
-        //     animation de marche) ;
-        //   - puis elle appelait `agent.Warp()` vers le point de NavMesh le plus proche dans un rayon
-        //     de 50 MÈTRES, téléportant l'unité loin de l'endroit où le serveur (et donc l'autre
-        //     joueur) la voit.
-        // C'était une seconde cause, indépendante et jamais identifiée, du symptôme déjà signalé
-        // "unités affichées ailleurs qu'à leur position réelle".
-        // Le test porte sur "une partie EN RÉSEAU est en cours" (déploiement PvP ou match), jamais
-        // sur IsFlowActive : celui-ci est vrai pour TOUT écran multijoueur, écrans de login et de
-        // choix de mode compris, et plusieurs retours au menu de démarrage (ZoneMapController
-        // "RETOUR"/"OK", ce fichier-ci n'y peut rien) ne repassent jamais l'état à Hidden. Une partie
-        // SOLO lancée après un simple passage par le menu multijoueur aurait alors trouvé toutes ses
-        // unités avec un NavMeshAgent désactivé — donc parfaitement immobiles.
+        // En ligne, le serveur seul fixe la position des unités (le client écrit transform.position à chaque
+        // snapshot) : ne jamais réactiver l'agent ni recaler l'unité sur le NavMesh, sinon elle « glisse »
+        // ou se téléporte loin de sa position réelle. Test sur une partie EN COURS (IsActive ou déploiement),
+        // jamais sur IsFlowActive, vrai dans tous les menus en ligne.
         if (Novgov.Network.MultiplayerMatchController.IsActive
             || Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive)
         {
@@ -352,15 +332,8 @@ public partial class UnitAI
                 continue;
             }
 
-            // Se déplacer vers le prochain checkpoint rompt toute posture de Guet/Embuscade active
-            // (voir isGuarding, mis à "true" par les branches Guetter/Embuscade plus bas mais JAMAIS
-            // remis à "false" nulle part dans le projet avant ce correctif — une unité qui avait
-            // guetté UNE SEULE FOIS gardait le bonus défensif -50% dégâts de TakeDamage() À VIE,
-            // trouvé en auditant l'historique git (ancien journal 08) §19.9.7, "postures à sens unique", dont
-            // le correctif documenté visait TacticalResolver.Resolve — supprimé depuis le passage au
-            // vrai moteur du 2026-09-13, ce qui avait fait regresser le bug en silence). Même principe
-            // que isCamouflaged, qui a lui déjà ses propres conditions de rupture (subir un impact,
-            // tirer) : bouger à nouveau est la rupture naturelle pour une posture statique.
+            // Repartir vers le point suivant rompt la posture de guet/embuscade (sinon son bonus défensif
+            // -50 % restait acquis pour toute la partie).
             isGuarding = false;
 
             agent.isStopped = false;
@@ -627,22 +600,9 @@ public partial class UnitAI
         isMortarFiringMode = false;
     }
 
-    /// <summary>
-    /// Coroutine gérant l'ascension verticale le long de la façade extérieure (sans traverser l'intérieur du polygone)
-    /// puis le rétablissement sur le toit avec l'animation Freehang Climb.
-    /// </summary>
-    /// <summary>
-    /// Marche jusqu'à <paramref name="destination"/> via le NavMesh, en ATTENDANT d'abord le calcul
-    /// du chemin et avec un plafond de durée.
-    ///
-    /// Les approches de porte, d'entrée, de sortie et de fenêtre partageaient deux défauts :
-    ///   - elles testaient agent.hasPath dès la frame du SetDestination, où il est encore false
-    ///     (pathPending) : la boucle pouvait donc se terminer immédiatement et l'unité était ensuite
-    ///     repositionnée d'un bloc, sans avoir marché ;
-    ///   - elles n'avaient aucun plafond : un seuil de porte inatteignable (bloqué par des décombres,
-    ///     une barricade, un autre corps) gelait la phase d'exécution entière jusqu'au filet de
-    ///     sécurité du tour, en immobilisant aussi toutes les autres unités.
-    /// </summary>
+    /// <summary>Marche jusqu'à <paramref name="destination"/> via le NavMesh : attend le calcul du chemin
+    /// (pathPending) avant de surveiller l'arrivée, avec une durée maximale pour qu'une destination
+    /// inatteignable ne bloque jamais le tour.</summary>
     private IEnumerator WalkAgentTo(Vector3 destination, float arriveDistance)
     {
         if (agent == null || !agent.isActiveAndEnabled || !agent.isOnNavMesh) yield break;
@@ -675,24 +635,10 @@ public partial class UnitAI
         }
     }
 
-    /// <summary>
-    /// Marche sur la SURFACE d'un toit en la suivant réellement, sans jamais quitter l'empreinte du
-    /// bâtiment sur lequel l'unité se tient.
-    ///
-    /// Remplace un simple Vector3.MoveTowards en ligne droite qui cumulait quatre défauts, tous
-    /// visibles en jeu :
-    ///   (a) la hauteur n'était sondée QU'UNE fois, à la destination, sur 8m — si la sonde ne
-    ///       touchait rien (cible hors du toit, ou immeuble plus haut que la fenêtre de sonde),
-    ///       l'unité gardait son Y et s'éloignait EN L'AIR au-dessus de la rue, où elle restait ;
-    ///   (b) la hauteur était interpolée linéairement du départ à l'arrivée, donc l'unité traversait
-    ///       le faîtage des toits à pans (CityGenerator.CreateHipRoofMesh : coursive plate de 2.5m
-    ///       puis pente jusqu'à +1m) au lieu de marcher dessus ;
-    ///   (c) le bord du toit n'était jamais testé, d'où la traversée du vide d'un immeuble à l'autre ;
-    ///   (d) aucun garde-fou de durée.
-    ///
+    /// <summary>Marche sur la SURFACE réelle d'un toit (hauteur sondée à chaque pas, arrêt au bord, durée
+    /// maximale), sans quitter l'empreinte du bâtiment.
     /// <paramref name="stayOnStandingRoof"/> = false : l'appelant a vérifié que les toits sont
-    /// mitoyens jusqu'à la cible (IsRoofWalkContinuous) — l'unité passe alors d'un toit à l'autre.
-    /// </summary>
+    /// mitoyens jusqu'à la cible (IsRoofWalkContinuous) — l'unité passe alors d'un toit à l'autre.</summary>
     private IEnumerator WalkAcrossRooftop(Vector3 requestedTarget, bool stayOnStandingRoof = true)
     {
         BuildingStructure roofBuilding = BuildingStructure.FindBuildingAt(transform.position);

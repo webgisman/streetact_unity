@@ -472,19 +472,9 @@ public partial class UnitSpawnerUI : MonoBehaviour
     /// </param>
     public UnitAI SpawnUnitAt(UnitType type, Vector3 position, int team, string forcedName = null, bool skipSafeSpawnAdjustment = false)
     {
-        // Garde anti-doublon (2026-09-20, retour utilisateur : "Fin de Tour" plantait avec
-        // "An item with the same key has already been added" sur un nom d'unité en double, et des
-        // unités jamais placées apparaissaient sur le terrain). forcedName est TOUJOURS utilisé pour
-        // faire RÉAPPARAÎTRE une unité déjà connue sous ce nom (rejeu de "deployment_result", premier
-        // repérage fog-of-war dans MultiplayerMatchController.PlaySnapshotsBody, ou respawn après
-        // pause async, voir MatchSessionManager_AsyncPause.RespawnPausedRoster) — JAMAIS pour en
-        // créer une deuxième. Si un GameObject vivant porte déjà exactement ce nom, un second appel
-        // (ex: une unité fog-of-war masquée puis "redécouverte" alors qu'elle n'avait en réalité
-        // jamais quitté la scène) créait un VRAI second GameObject de même nom : invisible au
-        // gameplay (santé/équipe) tant qu'aucun code ne le remarquait, mais qui faisait planter le
-        // rejeu du tour SUIVANT dès que MultiplayerMatchController reconstruisait son dictionnaire
-        // par nom (FindObjectsByType + ToDictionary, qui n'accepte pas deux entrées identiques). On
-        // réutilise l'existant (repositionné/réaffecté) plutôt que d'en créer un autre.
+        // Anti-doublon : forcedName fait RÉAPPARAÎTRE une unité déjà connue (rejeu de "deployment_result",
+        // premier repérage dans le brouillard). Si un objet vivant porte déjà ce nom, on le réutilise au lieu
+        // d'en créer un second (le rejeu du tour suivant plantait sur un nom en double).
         if (!string.IsNullOrEmpty(forcedName))
         {
             foreach (var existing in UnitAI.AllLivingUnits)
@@ -729,18 +719,8 @@ public partial class UnitSpawnerUI : MonoBehaviour
             {
                 ai.teamID = team;
                 ai.teamAssignedBySpawner = true;
-                // En multijoueur, "mon" camp n'est pas toujours l'équipe 1 (voir
-                // MultiplayerMatchController.LocalTeamId — le 2e joueur à rejoindre est l'équipe 2) :
-                // (team == 1) codé en dur marquait alors les unités du joueur équipe 2, posées sur SON
-                // PROPRE dock de déploiement (OpenDockForMultiplayerDeployment(localTeamId)), comme
-                // NON jouables dès leur pose. Sans conséquence pour le combat lui-même (le résultat
-                // serveur/snapshot est de toute façon recorrigé juste après, voir
-                // MultiplayerMatchController.OnDeploymentResult/PlaySnapshotsBody), mais faussait déjà
-                // isPlayerControlled pendant la PRÉVISUALISATION de placement. En solo, l'équipe 1
-                // reste toujours celle du joueur (pas de LocalTeamId), d'où le repli inchangé.
-                // LocalTeamId n'existe que côté CLIENT (voir le #if !UNITY_SERVER englobant tout
-                // MultiplayerMatchController sauf ses membres statiques) — le serveur, qui n'a de
-                // toute façon aucun tap/caméra à raisonner, garde le seul repli (team == 1).
+                // En ligne, « mon » camp n'est pas toujours l'équipe 1 (MultiplayerMatchController.LocalTeamId) ;
+                // en Solo et sur le serveur, l'équipe 1 est celle du joueur.
 #if !UNITY_SERVER
                 bool isMultiplayerContext = Novgov.Network.MultiplayerMatchController.IsActive
                     || Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive;
@@ -1447,19 +1427,9 @@ public partial class UnitSpawnerUI : MonoBehaviour
         {
             if (picked == uiDoc.rootVisualElement) break;
 
-            // LISTE BLANCHE (2026-09-19, retour joueur répété : des taps absorbés en silence sans
-            // le moindre bouton visé — "top-bar" en particulier, un simple conteneur de mise en
-            // page). Remplace l'ancienne liste noire ("tout ce qui a picking-mode == Position
-            // absorbe, sauf les cas déjà repérés") : le picking-mode RÉSOLU d'un élément ne reflète
-            // pas de façon fiable ce qui a été déclaré dans son UXML (bug Unity déjà documenté dans
-            // UIScreenManager.cs pour l'élément "root" de chaque écran) — un conteneur purement
-            // décoratif peut donc se retrouver Position sans que rien ne l'ait jamais voulu. Plutôt
-            // que de rallonger indéfiniment une liste noire à chaque nouveau conteneur touché par ce
-            // bug, seuls les éléments RÉELLEMENT interactifs (grep-confirmé dans tout le projet)
-            // absorbent désormais : Button/ScrollView/TextField, et les 4 seuls conteneurs
-            // d'absorption intentionnelle du projet (fond de ContextMenu, cluster de boutons tactile
-            // du bas, groupe de boutons d'exécution) — un `picked.pickingMode == Position` isolé,
-            // sur n'importe quel autre élément, n'a plus aucun effet.
+            // LISTE BLANCHE : seuls les éléments réellement interactifs absorbent un tap (Button, ScrollView,
+            // TextField, et les quelques conteneurs d'absorption voulus). Le picking-mode résolu d'un simple
+            // conteneur n'est pas fiable (voir UIScreenManager.ForcePickingModeIgnore).
             if (picked is Button || picked is ScrollView || picked is TextField)
             {
                 reason = $"{picked.GetType().Name} '{picked.name}'";
@@ -1483,26 +1453,10 @@ public partial class UnitSpawnerUI : MonoBehaviour
 #endif
     }
 
-    /// <summary>Variante STRICTE de <see cref="IsPointerOverOnGUI"/> — vrai UNIQUEMENT sur un VRAI
-    /// contrôle interactif (Button/ScrollView/TextField, ou les classes de bouton explicites),
-    /// jamais sur un simple conteneur d'ABSORPTION en <c>picking-mode: Position</c> (le fond du
-    /// ContextMenu, un dock...) ni sur le rectangle réservé au radar (lecture seule, aucun bouton).
-    ///
-        /// en avant, quand je clique dessus je clique sur la carte". Root cause : TacticalPathManager_
-    /// Input.HandlePointerInput laisse un raycast 3D DIRECT sur une unité toujours gagner, y compris
-    /// par-dessus <see cref="IsPointerOverOnGUI"/> (ajouté le même jour pour la sélection d'unité à
-    /// travers un menu de trajectoire) — mais FIN DE TOUR est un bandeau FIXE, toujours au même
-    /// endroit de l'écran ; si une unité alliée se trouve, en 3D, juste derrière ce bouton au moment
-    /// du tap (fréquent : les unités du joueur sont souvent regroupées près de son propre coin de
-    /// déploiement, qui peut projeter dans cette même zone d'écran selon l'angle de caméra), le MÊME
-    /// tap physique à la fois déclenche le bouton (son propre événement `clicked` UI Toolkit, non
-    /// affecté) ET resélectionne cette unité (le raycast 3D, lui, ignore totalement l'UI par-dessus)
-    /// — vécu par le joueur comme "cliquer sur FIN DE TOUR agit aussi sur la carte". Un VRAI bouton
-    /// ne doit donc JAMAIS pouvoir être "traversé" par ce raycast — seul un panneau d'ABSORPTION pur
-    /// (sans action propre) le peut, ce qui est exactement la distinction que fait cette méthode par
-    /// rapport à IsPointerOverOnGUI (qui, lui, reste inchangé pour son propre usage : bloquer la
-    /// boucle tolérante et le routage sol/bâtiment, où cette distinction n'a pas besoin d'être aussi
-    /// fine).</summary>
+    /// <summary>Variante STRICTE de <see cref="IsPointerOverOnGUI"/> : vrai uniquement sur un vrai contrôle
+    /// (Button/ScrollView/TextField ou classe de bouton), jamais sur un panneau d'absorption ni sur le
+    /// radar. Un tap sur un bouton ne doit jamais aussi sélectionner l'unité qui se trouve derrière dans
+    /// la scène (TacticalPathManager_Input).</summary>
     public bool IsPointerOverInteractiveControl(Vector2 screenPos)
     {
 #if UNITY_SERVER

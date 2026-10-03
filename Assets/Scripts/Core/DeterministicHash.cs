@@ -1,30 +1,10 @@
 namespace Novgov.Core
 {
     /// <summary>
-    /// Hash déterministe d'une position 2D vers un flottant dans [0, 1) — ENTIÈREMENT en
-    /// arithmétique ENTIÈRE (aucune fonction transcendante : pas de sin/cos/tan/log/exp).
-    ///
-    /// POURQUOI CE FICHIER EXISTE (2026-09-05). CityGenerator.DeterministicLotHeight/
-    /// JitterBuildingColor utilisaient `Mathf.Sin(x * a + y * b) * grandFacteur` puis `Mathf.Floor` —
-    /// un "hash trigonométrique" volontairement introduit pour remplacer un ancien
-    /// `UnityEngine.Random.Range` non seedé (qui faisait flotter une unité perchée jusqu'à ~3m
-    /// au-dessus du toit d'un appareil à l'autre). Ce remplacement élimine la dépendance à un flux
-    /// aléatoire global, MAIS `sin()`/`cos()`/`tan()`/`log()`/`exp()` ne sont PAS spécifiées
-    /// bit-à-bit par IEEE754 : leur implémentation dépend de la bibliothèque C native du runtime —
-    /// Bionic sur Android/ARM, glibc sur le serveur Linux dédié, CRT sur l'Editor Windows. Un écart
-    /// d'un seul bit de précision (ULP) sur `Sin(x)`, une fois multiplié par le grand facteur
-    /// (24634.6345) du code d'origine, peut faire basculer `Floor()` d'une unité entière si la
-    /// vraie valeur tombe près d'une frontière — un cas rare mais pas exclu, qui ferait diverger la
-    /// hauteur d'un toit (donc la position Y d'un tireur perché) entre le client et le serveur pour
-    /// le MÊME bâtiment. Voir aussi Novgov.TacticalCore : ce projet a déjà choisi, pour le moteur de
-    /// résolution de combat, de n'utiliser QUE +,-,*,/,sqrt — jamais de trigonométrie — pour cette
-    /// même raison (voir TacticalCore.GeometryMath, cône de vue par produit scalaire plutôt que par
-    /// angle). Ce fichier applique le même principe à la génération de ville.
-    ///
-    /// L'algorithme est un hash entier classique (mélange type MurmurHash/FNV, opérations XOR/shift/
-    /// multiplication sur des `int`/`uint` de 32 bits) : toutes ces opérations SONT garanties
-    /// bit-identiques sur toute plateforme .NET/Mono/IL2CPP respectant IEEE754/l'arithmétique entière
-    /// standard — contrairement aux fonctions transcendantes.
+    /// Hash déterministe d'une position 2D vers un flottant dans [0, 1), entièrement en arithmétique
+    /// entière (XOR, décalages, multiplications sur 32 bits) : bit-identique sur Android, sur le serveur
+    /// Linux et dans l'Éditeur. Sin/Cos/Log ne le sont pas (bibliothèque C native différente) : un écart
+    /// d'un bit pouvait changer la hauteur d'un toit entre le client et le serveur.
     /// </summary>
     public static class DeterministicHash
     {

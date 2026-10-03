@@ -111,22 +111,8 @@ public partial class TacticalPathManager
             if (u != null && !u.isDead) livingUnits.Add(u);
         }
 
-        // Lancer les ordres pour toutes les unités (IA et Joueur).
-        //
-        // PAS DE PLAFOND DE DÉPLACEMENT POUR LE JOUEUR EN SOLO (rétabli le 2026-09-04). Un
-        // raccourcissement du chemin au budget du tour (50 m) avait été inséré ici le 2026-09-03
-        // pour aligner le solo sur les règles en ligne. Il était à la fois cassé et non désiré :
-        //   - CASSÉ : il abandonnait tous les nœuds au-delà du budget. Quand c'était le PREMIER
-        //     nœud qui dépassait — le cas courant, la caméra de commandement montre ~190 m de
-        //     terrain, le joueur désigne donc naturellement des points à 60-100 m — le chemin
-        //     entier était vidé, UnitAI.ExecuterOrdres ne trouvait plus rien à exécuter et l'unité
-        //     ne bougeait PAS DU TOUT. Le serveur, lui, ne jette rien : il coupe le tronçon pile à
-        //     la limite (TacticalResolver.TruncateToMovementBudget), donc l'unité avance toujours.
-        //     Le commentaire retiré prétendait précisément s'aligner sur ce serveur.
-        //   - NON DÉSIRÉ : c'était une modification d'équilibrage jamais demandée ; le solo n'a
-        //     jamais plafonné le déplacement du joueur.
-        // Les ordres du joueur sont donc exécutés en entier, comme avant. Le budget reste appliqué
-        // par le SERVEUR pour les parties en ligne, où il départage deux camps.
+        // Lancer les ordres de toutes les unités (IA et joueur). Pas de plafond de déplacement en Solo : un
+        // découpage au budget du tour (essayé le 2026-09-03) vidait des chemins entiers.
         foreach (var unit in livingUnits)
         {
             if (!unit.isPlayerControlled) unit.PlanifierTourIA();

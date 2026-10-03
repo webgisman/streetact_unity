@@ -13,25 +13,12 @@ using UnityEngine.Networking;
 namespace Novgov.Network
 {
     /// <summary>
-    /// Orchestration complète du jeu en ligne côté client : connexion au compte, écran Conquête
-    /// (en-tête + onglet GESTION ; l'onglet CARTE est Novgov.UI.ZoneMapController), capture de
-    /// quartiers, bataille de siège au tour par tour (envoi des ordres, rejeu des snapshots renvoyés
-    /// par le serveur). Voir Assets/_ServerDocs/multiplayer/00-architecture.md.
-    /// Le mode solo (TacticalAIPlanner local) n'est jamais impacté : voir le garde
-    /// "MultiplayerMatchController.IsActive" ajouté dans TacticalPathManager.LancerExecutionTour().
-    ///
-    /// UI en UI Toolkit (voir Assets/Scripts/UI/UIScreenManager.cs) — chaque état a un écran UXML
-    /// sous Resources/UI/, câblé une fois dans BindUI() plutôt que redessiné en OnGUI chaque frame.
-    ///
-    /// Tout ce fichier, hormis les membres statiques et SubmitLocalTurn() ci-dessous, est englobé
-    /// dans #if !UNITY_SERVER : cette classe représente exclusivement le flux CLIENT réagissant aux
-    /// messages d'un serveur distant (le serveur autoritaire, lui, a sa propre logique dans
-    /// Assets/Scripts/Server/MatchSessionManager.cs) — rien ici n'a de raison de tourner sur un
-    /// build Dedicated Server. Avant ce garde, un build où UNITY_SERVER se retrouvait défini (ex:
-    /// sous-cible Server restée active par erreur dans les réglages de l'Éditeur, voir
-    /// ServerBuildScript.cs) faisait échouer TOUTE la compilation : Update()/BeginLoginFlow/
-    /// HandleSignIn/etc. appelaient SetUiState/RefreshHudDynamicFields (déclarées plus bas, dans un
-    /// bloc #if !UNITY_SERVER déjà existant) sans être elles-mêmes gardées.
+    /// Orchestration complète du jeu en ligne côté client : connexion au compte, écran Conquête (en-tête +
+    /// onglet GESTION ; l'onglet CARTE est Novgov.UI.ZoneMapController), capture de quartiers, bataille
+    /// de siège au tour par tour (envoi des ordres, rejeu des snapshots renvoyés par le serveur). Voir
+    /// Assets/_ServerDocs/multiplayer/00-architecture.md. UI Toolkit : un écran UXML par état
+    /// (Resources/UI/), câblé une fois dans BindUI(). Tout ce fichier, hormis les membres statiques et
+    /// SubmitLocalTurn(), est sous #if !UNITY_SERVER : c'est exclusivement le flux client.
     /// </summary>
     public partial class MultiplayerMatchController : MonoBehaviour
     {
@@ -1062,14 +1049,6 @@ namespace Novgov.Network
                 TacticalPathManager.Instance.phaseActuelle = TacticalPathManager.GamePhase.Planification;
             MusicManager.SetGameplayVolume();
 
-            // Préchauffe le cache de géométrie de TacticalGridBuilder (voir
-            // TacticalPathManager_PathDrawing.AppendGridPathSegment) MAINTENANT plutôt que d'attendre
-            // le premier tracé de trajectoire du joueur : le tout premier appel construit ~1500
-            // segments de mur + la grille de marche depuis zéro (~2s mesurées côté serveur pour cette
-            // même carte) — sans ce préchauffage, la toute première ligne bleue dessinée par le
-            // joueur aurait figé l'interface pendant ce laps de temps.
-            Novgov.TacticalCore.TacticalGridBuilder.BuildFromScene();
-
             if (msg.reason == "roster_trimmed")
             {
                 statusMessage = $"Certaines unités n'ont pas été placées : {Novgov.Server.MatchSessionManager.MaxDeployedCombatUnits} unités et {Novgov.Server.MatchSessionManager.MaxMortarsPerTeam} mortiers au maximum.";
@@ -1322,7 +1301,7 @@ namespace Novgov.Network
 
                 // Effets cosmétiques du tir (voir UnitAI.PlayNetworkShotEffects/PlayNetworkHitReaction) :
                 // exécuté ICI, transforms encore à leur position d'AVANT ce tick — c'est précisément
-                // l'instant où le coup part côté serveur (voir TacticalResolver, Kind.Shot).
+                // l'instant où le coup part côté serveur.
                 foreach (var (shooter, targetId) in shotsThisTick)
                 {
                     if (shooter == null) continue;
@@ -1352,19 +1331,9 @@ namespace Novgov.Network
                     }
                 }
 
-                // Toute unité ENNEMIE déjà apparue mais absente de CE tick n'est plus repérée à cet
-                // instant précis — masquée, jamais détruite (elle peut réapparaître dès qu'elle
-                // redevient visible). Mes propres unités sont toujours incluses dans snap.units (voir
-                // ComputeVisibleUnitIds, "sa propre équipe est toujours visible pour elle-même"),
-                // donc jamais concernées par cette boucle. Exception : un ennemi déjà MORT n'est
-                // jamais masqué même s'il disparaît des ticks suivants — voir RunExecutionPhase,
-                // "allUnits" y exclut les unités mortes dès le tour SUIVANT leur mort (elles ne
-                // participent plus au calcul), donc un cadavre ennemi repéré au tour où il meurt
-                // n'apparaît plus jamais dans aucun snapshot après coup ; sans ce garde, il
-                // redisparaissait silencieusement du champ de bataille un tour après sa mort, comme
-                // si le corps avait été retiré (trouvé en simulant une partie grandeur nature,
-                // 2026-08-30) — un cadavre est statique et inerte, il n'y a aucune raison de le
-                // "re-cacher" une fois déjà vu mort.
+                // Un ennemi déjà apparu mais absent de ce tick n'est plus repéré : masqué, jamais détruit (il
+                // réapparaît dès qu'il redevient visible). Mes unités sont toujours dans snap.units. Un cadavre
+                // ennemi déjà vu n'est jamais re-masqué (les morts disparaissent des snapshots suivants).
                 foreach (var kv in unitLookup)
                 {
                     if (kv.Value != null && kv.Value.teamID != localTeamId && !visibleThisTick.Contains(kv.Key) && !kv.Value.isDead)
@@ -2010,7 +1979,7 @@ namespace Novgov.Network
 
 #if UNITY_EDITOR
             // Connexion rapide aux 2 comptes de test (créés le 2026-08-29 sur novgov.com, voir
-            // l'historique git (ancien journal 08) §10) — évite de ressaisir email/mot de passe à chaque essai
+            // l'historique git §10) — évite de ressaisir email/mot de passe à chaque essai
             // en Éditeur. Rangée entière cachée par défaut dans le UXML (display:none) : rendue
             // visible UNIQUEMENT ici, jamais sur un vrai build Android/iOS.
             // 2026-10-03 ("le mode test multijoueur est incompréhensible") : boutons "JOUEUR 1 / JOUEUR 2"

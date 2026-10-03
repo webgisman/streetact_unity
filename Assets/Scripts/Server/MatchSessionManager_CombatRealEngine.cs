@@ -8,17 +8,9 @@ using UnityEngine;
 namespace Novgov.Server
 {
     /// <summary>
-    /// Résolution de tour par le VRAI moteur Unity (NavMeshAgent + Physics.RaycastAll temps réel via
-    /// UnitAI.ExecuterOrdres()/UnitAI_Combat), demandée explicitement par l'utilisateur le 2026-09-13
-    /// pour remplacer TacticalResolver.Resolve() (voir
-    /// l'historique git et l'historique git pour
-    /// tout le contexte et les risques déjà discutés — non-déterminisme PhysX/NavMesh inter-appareils,
-    /// désormais accepté en connaissance de cause).
-    ///
-    /// Reprend EXACTEMENT le même déroulé que TacticalPathManager.LancerExecutionTour/
-    /// ExecuterTourCoroutine (Solo, jamais touché) — c'est littéralement le même code de simulation,
-    /// simplement piloté ici par le serveur au lieu d'un bouton "FIN DE TOUR" côté client, et
-    /// échantillonné en Snapshots réseau au lieu d'être rendu directement à l'écran.
+    /// Résolution d'un tour par le VRAI moteur Unity (NavMeshAgent, physique, UnitAI.ExecuterOrdres /
+    /// UnitAI_Combat) depuis le 2026-09-13 — le même code de simulation que le Solo
+    /// (TacticalPathManager_Execution), piloté par le serveur et échantillonné en snapshots pour le rejeu.
     /// </summary>
     public partial class MatchSessionManager
     {
@@ -164,25 +156,9 @@ namespace Novgov.Server
                 p2.Send(new NetMessage { type = "turn_result", turn_number = turnNumber, snapshot_interval_ms = TickDurationMs, snapshots = snapshotsForTeam2 });
             }
 
-            // BARRIÈRE DE DÉPART SYNCHRONE (2026-09-16, rapport utilisateur : "pas de mouvement
-            // simultané et synchro entre les unités alliées, ni entre alliées et ennemies"). Avant
-            // ceci, chaque client démarrait PlaySnapshotsCoroutine dès la réception de SON PROPRE
-            // "turn_result" — or les deux payloads n'ont ni la même taille (snapshotsForTeam1/2 sont
-            // filtrés différemment par le brouillard de guerre, voir FilterRealEngineSnapshotsForTeam)
-            // ni le même ordre d'envoi (p1.Send() puis p2.Send() ci-dessus), donc les deux clients ne
-            // recevaient JAMAIS leur payload au même instant — chacun rejouait bien ses propres
-            // unités ET celles de l'adversaire en parfait synchronisme LOCAL (une seule boucle
-            // d'interpolation partagée, voir PlaySnapshotsBody côté client), mais les DEUX ÉCRANS
-            // étaient décalés l'un par rapport à l'autre, ce qui se lit comme "rien n'est synchro"
-            // pour deux joueurs qui comparent leurs appareils côte à côte.
-            //
-            // Correctif : chaque client, en recevant "turn_result", le met en cache et renvoie
-            // immédiatement "turn_result_ack" SANS démarrer sa lecture (voir
-            // MultiplayerMatchController.OnTurnResultReceived) ; le serveur attend ici les deux accusés
-            // de réception (borné, pour ne jamais bloquer indéfiniment un joueur dont l'adversaire a
-            // décroché) puis envoie "turn_playback_start" aux deux dans la foulée — c'est CE signal,
-            // minuscule et découplé du gros payload de simulation, qui déclenche réellement
-            // PlaySnapshotsCoroutine des deux côtés.
+            // Départ synchronisé du rejeu : chaque client met "turn_result" en cache et accuse réception sans
+            // démarrer ; le serveur attend les deux accusés (au plus 3 s) puis envoie "turn_playback_start" aux
+            // deux en même temps — sinon les deux écrans rejouaient le tour avec un décalage.
             const float MaxPlaybackAckWaitSeconds = 3.0f;
             float ackWait = 0f;
             while (ackWait < MaxPlaybackAckWaitSeconds)
@@ -202,7 +178,7 @@ namespace Novgov.Server
             if (p2 != null && !p2.IsDisconnected) p2.Send(new NetMessage { type = "turn_playback_start", turn_number = turnNumber });
 
             double totalMs = (DateTime.UtcNow - executionStartUtc).TotalMilliseconds;
-            Debug.Log($"[Timing] Tour {turnNumber} (VRAI MOTEUR) : {snapshots.Count} tick(s) réels, exécution+envoi en {totalMs:F1}ms de temps SERVEUR (le temps RÉEL de résolution était ~{elapsed + combatGrace:F1}s, contre quelques ms pour TacticalResolver.Resolve() — voir l'historique git).");
+            Debug.Log($"[Timing] Tour {turnNumber} : {snapshots.Count} tick(s) réels, exécution+envoi en {totalMs:F1}ms de temps SERVEUR (simulation : ~{elapsed + combatGrace:F1} s).");
         }
 
         /// <summary>Un seul tick d'échantillonnage — lit l'état RÉEL de chaque UnitAI à cet instant.

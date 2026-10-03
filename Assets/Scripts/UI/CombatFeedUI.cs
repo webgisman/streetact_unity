@@ -2,16 +2,8 @@ using UnityEngine;
 using UnityEngine.UIElements;
 
 /// <summary>
-/// Fil de combat du HUD en match (InMatchHudScreen "combat-feed", 2026-09-16) — une ligne par unité
-/// détruite, en Solo comme en ligne : voir UnitAI.Die(),
-/// seul point d'appel, commun au chemin temps réel (TakeDamage) et au rejeu réseau (ApplyNetworkDeath).
-/// Avant ça, une unité pouvait mourir hors du champ de vision du joueur sans le moindre indice
-/// (rapport utilisateur : "les joueurs ne comprennent rien, il y a des morts sans savoir pourquoi").
-///
-/// Purement informatif, jamais interactif (picking-mode: Ignore dans l'UXML). No-op silencieux côté
-/// serveur dédié : UIScreenManager.Instance y reste toujours null (UIBootstrap ne tourne jamais côté
-/// UNITY_SERVER, voir GameManagerUI.BindStartupUI pour le même garde), donc ReportDeath ne fait rien
-/// sur le serveur alors même que Die() s'y exécute aussi pendant la résolution du tour.
+/// Fil de combat du HUD : une ligne par unité détruite, en Solo comme en ligne (appelé par
+/// UnitAI.Die). Sans effet sur le serveur (pas d'UIScreenManager).
 /// </summary>
 public static class CombatFeedUI
 {

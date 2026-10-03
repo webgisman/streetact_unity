@@ -20,10 +20,7 @@ public partial class UnitAI : MonoBehaviour
     [System.NonSerialized] public bool teamAssignedBySpawner = false;
     public bool isVisible = true; // Visibilité par rapport au brouillard de guerre
     public bool isSelected = false; // Permet de savoir si le joueur planifie pour cette unité
-    /// <summary>Budget de déplacement par tour, en mètres. Il n'était consulté que par
-    /// TacticalAIPlanner : seule l'IA se l'imposait, un joueur pouvait traverser toute la carte en un
-    /// tour. Désormais appliqué côté serveur pour TOUT LE MONDE (voir
-    /// TacticalResolver.TruncateToMovementBudget) et affiché dans l'aperçu de trajectoire.</summary>
+    /// <summary>Budget de déplacement d'un tour de l'IA Solo, en mètres (voir UnitTypeStats.MovementBudget).</summary>
     public const float DefaultMaxMovementPerTurn = 50f;
     public float maxMovementPerTurn = DefaultMaxMovementPerTurn;
 
@@ -52,12 +49,8 @@ public partial class UnitAI : MonoBehaviour
     [Header("Escalade & Toits")]
     public bool isClimbing = false;
 
-    /// <summary>Seuil unique "cette unité est en hauteur". Était dupliqué en 1.8f
-    /// (TacticalPathManager_ContextMenu, deux endroits), 2.0f (idem) et 2.2f (ici et dans
-    /// TacticalCore) : trois valeurs différentes pour une même question, si bien qu'une unité pouvait
-    /// être "sur un toit" pour le menu contextuel et "au sol" pour le combat. Miroir exact de
-    /// Novgov.TacticalCore.TacticalResolver.RoofStrataThresholdY — les deux doivent rester égaux,
-    /// TacticalCore n'ayant volontairement aucune dépendance vers les composants de scène.</summary>
+    /// <summary>Seuil unique « cette unité est en hauteur » (toit, fenêtre d'étage), partagé par les
+    /// menus, les déplacements et le combat.</summary>
     public const float RoofStrataThresholdY = 2.2f;
 
     /// <summary>Masque des raycasts qui doivent voir le DÉCOR et rien d'autre (surface de toit,
@@ -235,22 +228,8 @@ public partial class UnitAI : MonoBehaviour
             marker.RefreshMarker();
         }
 
-        // MASQUAGE EN VUE 2D DÉSACTIVÉ (correctif 2026-09-06, demande explicite : « l'utilisation de
-        // la vraie image au lieu d'une icône est très bien »). Ce bloc replaçait les renderers 3D sur
-        // le layer "Units_3D", exclu du masque de culling de la vue Commandement (voir
-        // CameraStateManager.commandViewMask) — le modèle réel disparaissait alors en 2D, remplacé par
-        // le badge procédural de UnitTacticalMarker. VehiculeCanon/Mortier échappaient déjà à ce
-        // masquage par accident (un bug séparé — voir UnitSpawnerUI.SpawnUnitAt — les empêchait
-        // d'avoir un UnitAI du tout, donc ce Start() ne s'exécutait jamais pour eux), ce qui montrait
-        // leur vrai modèle en 2D et a fait remarquer la préférence pour ce rendu. Une fois ce bug
-        // corrigé, TOUS les types auraient basculé vers l'icône sans ce retrait explicite du masquage
-        // — désormais tous cohérents sur le vrai modèle 3D. Le marqueur (UnitTacticalMarker) reste
-        // créé, réduit à un simple anneau de couleur d'équipe au sol (voir markerSize) pour ne pas
-        // perdre la distinction ami/ennemi au premier coup d'œil en vue large.
-        //
-        // (int units3DLayer = LayerMask.NameToLayer("Units_3D"); ... — logique retirée, pas seulement
-        // commentée : réactiver nécessiterait de re-designer le marqueur en plus, pas un simple
-        // dé-commentage.)
+        // Vue 2D : le vrai modèle 3D reste affiché (demande du 2026-09-06) plutôt qu'une icône ; le marqueur
+        // d'équipe (UnitTacticalMarker) n'est plus qu'un anneau de couleur au sol.
 
         // Optimisation CPU : Ne pas calculer l'animation des os quand le modèle 3D est masqué
         Animator anim = GetComponentInChildren<Animator>();
@@ -323,18 +302,8 @@ public partial class UnitAI : MonoBehaviour
         }
         else
         {
-            // DIMENSIONS DÉRIVÉES DU VRAI MAILLAGE (correctif 2026-09-06), même principe que la
-            // branche isTank juste au-dessus ("Fini les valeurs magiques") — jusqu'ici seule
-            // l'infanterie gardait un CapsuleCollider à valeurs FIGÉES (rayon 0.4, hauteur 2),
-            // indépendantes du modèle réellement chargé. Tant que le masquage 2D remplaçait le
-            // modèle par un badge plat, l'écart entre ce cylindre et le maillage réel n'avait aucune
-            // conséquence : rien de visible ne dépassait jamais du collider. Depuis son retrait
-            // (voir plus haut dans cette méthode), le vrai modèle (silhouette humaine, arme tenue en
-            // avant, sac à dos) déborde largement de ce cylindre trop étroit — un tap visé sur une
-            // partie visible mais hors-collider retombait sur le Physics.Raycast, qui continuait
-            // alors jusqu'au premier AUTRE collider rencontré sur le même rayon (souvent un allié
-            // voisin, dans un groupe resserré) : le joueur sélectionnait la mauvaise unité sans le
-            // moindre indice. Trouvé et vérifié par audit adversarial (2026-09-06).
+            // Collider de l'infanterie dérivé du vrai maillage (comme pour les blindés ci-dessus) : le modèle
+            // déborde d'un cylindre fixe, et un tap sur sa partie visible doit le toucher, pas un allié derrière.
             Bounds bounds = new Bounds(transform.position, Vector3.zero);
             Renderer[] renderers = GetComponentsInChildren<Renderer>();
             bool hasBounds = false;
@@ -696,18 +665,9 @@ public partial class UnitAI : MonoBehaviour
             selectionRing.SetActive(isSelected);
         }
         
-        // Mode Obstacle explicite : si le char est sélectionné, on le repasse en Agent pour pouvoir dessiner sa trajectoire
-        //
-        // 2026-09-06 : jamais en multijoueur — SetObstacleMode(false) réactive agent.enabled, et
-        // Unity RECALE AUTOMATIQUEMENT tout NavMeshAgent qu'on réactive sur le point de NavMesh le
-        // plus proche de sa position actuelle. Or en multijoueur, la position d'un char vient
-        // uniquement des ticks du serveur (grille A* de TacticalCore.Pathfinding, jamais du
-        // NavMesh) — les NavMeshAgent y sont d'ailleurs délibérément désactivés pour tout le monde
-        // (voir MultiplayerMatchController, "le client ne simule jamais de mouvement localement").
-        // Sélectionner un char rallumait quand même SON agent, qui recalait aussitôt sa position sur
-        // le NavMesh le plus proche — un petit saut visible pile au moment de la sélection, sans
-        // aucun rapport avec un ordre ou un déplacement (rapporté par le joueur : "des fois quand je
-        // sélectionne une unité elle bouge un peu").
+        // Char sélectionné : repasser en Agent pour tracer sa trajectoire — jamais en ligne, où réactiver un
+        // NavMeshAgent recale l'unité sur le NavMesh le plus proche (petit saut visible) alors que sa
+        // position vient du serveur.
         if (isTank && !isExecuting && !Novgov.Network.MultiplayerMatchController.IsActive)
         {
             SetObstacleMode(!isSelected);

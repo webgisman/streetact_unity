@@ -1,20 +1,10 @@
 namespace Novgov.Core
 {
     /// <summary>
-    /// PlayerPrefs, sur Windows, vit dans le Registre — une seule case par nom de clé, PARTAGÉE entre
-    /// l'Éditeur principal et TOUS ses clones Multiplayer Play Mode. Deux bugs distincts en sont
-    /// venus (2026-09-06) : ZoneManager (tuile domicile toujours identique pour tout le monde) et
-    /// SupabaseAuthClient (l'Éditeur principal héritait du compte de test que le Joueur Virtuel venait
-    /// d'utiliser — pas juste une lecture ratée, une VRAIE pollution en écriture). Un reset ponctuel
-    /// pour le Joueur Virtuel réglait la lecture, jamais l'écriture.
-    ///
-    /// Solution complète : donner à chaque IDENTITÉ (Éditeur principal vs Joueur Virtuel) sa PROPRE
-    /// clé de Registre, en ajoutant ce suffixe au nom de clé partout où PlayerPrefs sert à mémoriser
-    /// quelque chose de propre à CETTE instance (session de connexion, tuile domicile). Vide pour
-    /// l'Éditeur principal et pour un vrai appareil (comportement historique inchangé, aucune
-    /// migration de données existantes nécessaire) ; dérivé du dossier du clone pour un Joueur
-    /// Virtuel, pour qu'en plus chaque clone garde sa PROPRE case (utile dès qu'on active plusieurs
-    /// Joueurs Virtuels à la fois, pas seulement Player 2).
+    /// Suffixe de clé PlayerPrefs propre à chaque instance de l'Éditeur : sur Windows, PlayerPrefs est une
+    /// case du Registre partagée entre l'Éditeur principal et ses Joueurs Virtuels (Multiplayer Play
+    /// Mode), qui s'écrasaient leur session et leur quartier. Vide pour l'Éditeur principal et sur un vrai
+    /// appareil ; dérivé du dossier du clone pour un Joueur Virtuel.
     /// </summary>
     public static class EditorPlayerPrefsScope
     {

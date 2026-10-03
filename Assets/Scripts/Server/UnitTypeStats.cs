@@ -2,14 +2,8 @@ namespace Novgov.Server
 {
     /// <summary>Statistiques par type d'unité — extraites AU MOT PRÈS de UnitAI.cs (Start() :
     /// santé/portée par type) et du moteur de combat serveur (dégâts/cadence de tir, déjà en dur là-bas,
-    /// jamais lus depuis un prefab). Un seul et même barème pour le déploiement serveur ET le calcul de
-    /// budget de déplacement côté client (TacticalAIPlanner/TacticalPathManager_PathDrawing), jamais
-    /// dupliqué ailleurs.
-    ///
-    /// 2026-09-13 : ce fichier s'appelait MatchState.cs et portait aussi les classes MatchState/
-    /// MatchZoneState/MatchGeometry — toutes supprimées avec le reste de la famille "Pure" (voir
-    /// l'historique git). Renommé pour refléter qu'il ne reste que ceci, seule
-    /// partie encore utilisée par du code client (Solo) en plus du serveur.</summary>
+    /// jamais lus depuis un prefab). Un seul barème pour le déploiement (serveur et Solo) et le budget
+    /// de déplacement de l'IA Solo (TacticalAIPlanner).</summary>
     public static class UnitTypeStats
     {
         public static void Get(UnitSpawnerUI.UnitType type, out int health, out float porteeDetection, out int weaponDamage, out float weaponCooldownSeconds, out bool isMortar, out bool isTank)
@@ -63,8 +57,5 @@ namespace Novgov.Server
             if (u.isTank) return UnitSpawnerUI.UnitType.CharLeopard;
             return UnitSpawnerUI.UnitType.Fantassin;
         }
-
-        /// <summary>Budget de déplacement d'une UnitAI — raccourci de MovementBudget(InferType(u)).</summary>
-        public static float MovementBudgetFor(UnitAI u) => MovementBudget(InferType(u));
     }
 }

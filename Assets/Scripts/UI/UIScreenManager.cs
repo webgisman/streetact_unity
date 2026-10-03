@@ -113,18 +113,10 @@ public class UIScreenManager : MonoBehaviour
         BuildDebugOverlay(root);
     }
 
-    /// <summary>Force <see cref="PickingMode.Ignore"/> en C# sur chacun des éléments nommés
-    /// <paramref name="elementNames"/>, trouvé n'importe où dans l'arborescence de
-    /// <paramref name="instance"/> — la propriété USS "picking-mode" n'est PAS accessible via
-    /// VisualElement.style (IStyle ne l'expose pas, contrairement aux propriétés CSS classiques :
-    /// erreur de compilation constatée en tentant de la relire pour "deviner" automatiquement quels
-    /// éléments corriger). Impossible donc de détecter par le code QUELS éléments d'un UXML
-    /// déclarent "picking-mode: Ignore" sans le réappliquer soi-même : on liste ici, par nom, ceux
-    /// pour lesquels ça a été vérifié empiriquement nécessaire (le "root" de chaque écran, de
-    /// longue date ; "top-bar" de InMatchHudScreen.uxml, rapport joueur du 2026-09-19) — un nom
-    /// introuvable dans un écran donné (ex: "top-bar" absent de DeploymentDock) est silencieusement
-    /// ignoré. Si le diagnostic à l'écran révèle un jour un NOUVEL élément touché par ce même bug
-    /// Unity, l'ajouter ici à la liste plutôt que de créer un nouveau correctif ad hoc.</summary>
+    /// <summary>Force PickingMode.Ignore sur les éléments nommés de <paramref name="instance"/> : la
+    /// valeur "picking-mode" déclarée en UXML n'est pas toujours respectée (constaté pour le "root" de
+    /// chaque écran et le "top-bar" du HUD) et n'est pas lisible depuis le code. Ajouter ici tout
+    /// nouvel élément touché par ce défaut.</summary>
     private static void ForcePickingModeIgnore(VisualElement instance, params string[] elementNames)
     {
         foreach (string elementName in elementNames)
@@ -192,18 +184,9 @@ public class UIScreenManager : MonoBehaviour
     /// Theme.tss, hauteurs de boutons...) ont été réglées : un téléphone 1080p.</summary>
     private const float DesignShortSidePx = 1080f;
 
-    /// <summary>
-    /// Échelle de l'UI proportionnelle au PETIT côté de l'écran (2026-10-03, question joueur : "sur
-    /// le PC les icônes et l'écriture paraissent grosses — est-ce parce que le Build Profile est sur
-    /// Android ?" — non : c'était le mode "Constant Pixel Size" du PanelSettings, où 34px de texte
-    /// restent 34px quelle que soit la taille de l'écran ; dans une fenêtre Game de 600px de haut,
-    /// ils prenaient presque deux fois plus de place relative que sur un téléphone 1080p). Ici :
-    /// facteur = petit côté / 1080 — strictement identique à avant sur un téléphone 1080p (x1),
-    /// réduit en proportion dans une petite fenêtre ou sur un téléphone 720p, agrandi sur une
-    /// tablette. Le match largeur/hauteur suit l'orientation pour toujours viser le petit côté. Le
-    /// code qui convertit écran <-> UI (RuntimePanelUtils.ScreenToPanel, TacticalRadarUI.uiScale)
-    /// gère déjà une échelle différente de 1.
-    /// </summary>
+    /// <summary>Échelle de l'UI proportionnelle au PETIT côté de l'écran (référence 1080 px) : identique sur
+    /// un téléphone 1080p, réduite dans une petite fenêtre PC (le texte y paraissait énorme en « Constant
+    /// Pixel Size »), agrandie sur tablette.</summary>
     private void ApplyUiScale()
     {
         PanelSettings settings = GetComponent<UIDocument>()?.panelSettings;
@@ -214,18 +197,9 @@ public class UIScreenManager : MonoBehaviour
         settings.match = Screen.width >= Screen.height ? 1f : 0f; // 1 = hauteur (paysage), 0 = largeur (portrait)
     }
 
-    /// <summary>
-    /// Sur beaucoup d'appareils Android/iOS, une zone de l'écran n'est pas "sûre" (encoche caméra,
-    /// coins arrondis, barre de navigation gestuelle en bas) et peut recouvrir purement et
-    /// simplement des éléments ancrés en bord d'écran (ex: le bouton "Fin de tour" à 16px du bord
-    /// bas-droit) — invisible dans l'Éditeur, où cette zone n'existe pas, donc jamais repéré en dev.
-    /// On calcule l'inset ici en POURCENTAGE de l'écran (jamais en pixels/points) : ça évite toute
-    /// conversion écran→panel dépendante du mode de scaling du PanelSettings, puisque
-    /// Screen.safeArea et Screen.width/height utilisent déjà le même repère. Rappelé depuis Update()
-    /// (voir lastSafeAreaScreenW/H) à chaque fois que Screen.width/height changent réellement — pas
-    /// seulement une fois dans Awake(), qui peut tourner avant que la fenêtre Android n'ait fini de
-    /// se dimensionner et fige alors un pourcentage calculé sur une résolution provisoire.
-    /// </summary>
+    /// <summary>Écarte l'interface des zones non sûres de l'écran (encoche, coins arrondis, barre de
+    /// navigation), en POURCENTAGE de l'écran ; recalculé quand la taille de l'écran change réellement
+    /// (au lancement, la fenêtre Android n'a pas toujours sa taille finale).</summary>
     private void ApplySafeAreaPadding(VisualElement root)
     {
         lastSafeAreaScreenW = Screen.width;

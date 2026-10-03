@@ -26,18 +26,9 @@ public partial class UnitAI
             // --- COMBAT LOGIC (TEMPS REEL) ---
             if (shootCooldown > 0) shootCooldown -= Time.deltaTime;
 
-            // MULTIJOUEUR : ce bloc entier (scan de cible, rotation de visée, tir, contrôle direct de
-            // l'Animator) ne doit JAMAIS tourner côté client pendant un match réseau — le combat est
-            // entièrement calculé côté serveur et rejoué via les snapshots reçus (voir
-            // MultiplayerMatchController.PlaySnapshotsCoroutine / UnitAI.SetNetworkAnimState). Sans ce
-            // garde, chaque client faisait tourner sa PROPRE simulation de combat locale (basée sur ses
-            // propres positions/raycasts, légèrement désynchronisées de l'autre appareil à cause du
-          // rejeu par intervalles de 100ms) dès que TacticalPathManager.phaseActuelle passait à
-            // "Execution" sur CE client (LancerExecutionTour() le fait AVANT même de vérifier le mode
-            // multijoueur) — d'où un tir/de la fumée visible sur un seul des deux téléphones, sans
-            // aucun rapport avec le résultat réellement décidé par le serveur. `MultiplayerMatchController.IsActive`
-            // vaut toujours `false` côté serveur headless (cette classe n'y est jamais active), donc la
-            // simulation réelle continue de tourner normalement là où elle doit avoir lieu.
+            // En ligne, le client ne simule jamais le combat : il rejoue les snapshots du serveur
+            // (MultiplayerMatchController.PlaySnapshotsCoroutine). IsActive est toujours faux sur le serveur,
+            // où tourne la simulation réelle.
             if (!Novgov.Network.MultiplayerMatchController.IsActive)
             {
                 // Le mortier du joueur obéit strictement aux coordonnées ciblées et n'engage pas de cibles aléatoires
@@ -152,7 +143,7 @@ public partial class UnitAI
         // Orientation de la barre de vie vers la caméra (Billboard propre) — caméra mise en cache
         // (2026-09-20, retour utilisateur : surchauffe téléphone) : Camera.main fait une recherche
         // par tag à chaque appel ; sans ce cache, CHAQUE unité vivante refaisait cette recherche à
-        // CHAQUE frame (voir l'historique git (ancien journal 08) §7 "Camera.main non mis en cache").
+        // CHAQUE frame (voir l'historique git §7 "Camera.main non mis en cache").
         if (healthBarBg != null)
         {
             if (cachedMainCam == null) cachedMainCam = Camera.main ?? TacticalCamera.Instance?.GetComponent<Camera>();

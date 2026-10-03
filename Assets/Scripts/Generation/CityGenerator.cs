@@ -347,18 +347,10 @@ public class CityGenerator : MonoBehaviour
         onComplete?.Invoke();
     }
 
-    /// <summary>Un bâtiment DÉJÀ résolu (empreinte/hauteur/portes/fenêtres exactes reçues du serveur)
-    /// — contrairement à CreateBuildingObject (chemin normal), aucune fusion de trous/subdivision en
-    /// lots ni génération procédurale de portes/fenêtres : tout est déjà connu, on instancie
-    /// directement. edgeIndex/edgeDistance de chaque porte (nécessaires à TacticalGridBuilder.
-    /// AddWallSegmentsForBuilding pour marquer le bon segment de mur "franchissable", voir ce
-    /// fichier) ne sont volontairement PAS transmis sur le réseau (NetMessage.DoorGeometryDto) : ils
-    /// se déduisent sans aucune ambiguïté de la position de la porte + de l'empreinte (voir
-    /// ResolveEdgeIndexAndDistance), pas la peine de faire transiter une donnée redondante. Même
-    /// remarque pour la hauteur Y d'une fenêtre (voir NetMessage.WindowGeometryDto) : recalculée ici
-    /// avec EXACTEMENT la même formule que GenerateDoorsAndWindows ("floorY = 1.4f + f * 3.0f").
-    /// Matériaux/mobilier urbain non reproduits à l'identique (dépendent du flux UnityEngine.Random
-    /// partagé, jamais transmis) — cosmétique uniquement, sans effet sur la résolution tactique.</summary>
+    /// <summary>Instancie un bâtiment DÉJÀ résolu par le serveur (empreinte, hauteur, portes, fenêtres) :
+    /// ni fusion, ni subdivision, ni génération de portes. L'arête de chaque porte et la hauteur des
+    /// fenêtres se recalculent ici (ResolveEdgeIndexAndDistance, « 1.4 + étage × 3 »). Matériaux et
+    /// mobilier urbain ne sont pas reproduits à l'identique (cosmétique).</summary>
     private bool CreateBuildingObjectFromAuthoritative(Novgov.TacticalCore.TacticalBuilding template, Transform parent)
     {
         List<Vector2> footprint = template.footprint;
@@ -528,23 +520,10 @@ public class CityGenerator : MonoBehaviour
         }
     }
 
-        /// partir du JSON Overpass exact que le SERVEUR AUTORITAIRE a lui-même utilisé pour cette
-    /// tuile, plutôt que de laisser ce client refaire sa propre requête Overpass indépendante.
-    ///
-    /// AVANT ce correctif : client ET serveur appelaient chacun GenerateCity() -> FetchCityData(),
-    /// deux requêtes HTTP totalement indépendantes vers Overpass (parfois deux miroirs différents
-    /// parmi les 3 de repli) pour la MÊME tuile. Rien ne garantissait que les deux réponses
-    /// contiennent exactement les mêmes bâtiments : une édition OSM survenue entre les deux appels
-    /// (même de quelques secondes), ou un simple retard de réplication entre miroirs Overpass,
-    /// pouvait faire diverger silencieusement la géométrie vue par le joueur de celle utilisée par
-    /// le serveur pour arbitrer le combat — jamais détecté, jamais signalé.
-    ///
-    /// Ce chemin élimine la cause : plus aucune requête Overpass n'est faite ici, le JSON est du
-    /// texte déjà entièrement déterminé par le serveur (voir MultiplayerMatchController, message
-    /// "zone_geometry_ready"), rejoué tel quel dans EXACTEMENT le même pipeline
-    /// (FinishZoneLoadFromJson) que si ce client l'avait obtenu par sa propre requête. Le résultat
-    /// est également sauvegardé en cache local (comme FetchCityData), pour une reprise hors-ligne
-    /// future de cette même Zone.</summary>
+        /// <summary>Charge une Zone à partir du JSON Overpass exact utilisé par le serveur (reçu dans
+        /// "match_found"), au lieu d'une requête Overpass indépendante qui pouvait renvoyer d'autres
+        /// bâtiments (édition OSM entre-temps, miroirs décalés). Même pipeline que FetchCityData
+        /// (FinishZoneLoadFromJson), avec sauvegarde dans le cache local.</summary>
     public void LoadZoneFromServerData(int tileX, int tileY, string json)
     {
         CancelActiveGenerationAndClearCity();
@@ -1059,20 +1038,9 @@ public class CityGenerator : MonoBehaviour
         return shared2DOutlineMaterial;
     }
 
-    /// <summary>Hauteur d'un lot, variée de ±1.5m autour de la hauteur nominale mais entièrement
-    /// DÉTERMINÉE par la position du lot. Indispensable : client et serveur génèrent chacun leur
-    /// propre ville à partir des seules coordonnées de tuile, donc toute valeur tirée d'un flux
-    /// aléatoire les fait diverger sur la hauteur des toits, c'est-à-dire sur la position Y d'une
-    /// unité perchée. Dériver la valeur de la géométrie évite en plus toute dépendance à l'ORDRE des
-    /// appels, contrairement à un simple Random.InitState.
-    ///
-        /// La version précédente (`Mathf.Sin(x*a+y*b) * grand_facteur` puis `Mathf.Floor`) restait
-    /// techniquement déterministe SUR UNE PLATEFORME DONNÉE, mais `sin()` n'est pas garantie
-    /// bit-identique par IEEE754 entre la libm Android (Bionic/ARM) du client et la glibc Linux du
-    /// serveur dédié — un écart d'un seul bit sur `Sin(x)`, amplifié par le grand facteur, pouvait en
-    /// théorie faire basculer `Floor()` d'une unité entière et changer la hauteur du toit de ~3m
-    /// entre les deux, pour le MÊME bâtiment. Un hash entier (XOR/shift/multiplication sur des
-    /// entiers 32 bits) est lui garanti bit-identique sur toute plateforme .NET/Mono/IL2CPP.</summary>
+    /// <summary>Hauteur d'un lot, ±1,5 m autour de la hauteur nominale, entièrement DÉTERMINÉE par sa
+    /// position (hash entier, voir Novgov.Core.DeterministicHash) : client et serveur génèrent chacun leur
+    /// ville, et la hauteur d'un toit fixe la position d'une unité perchée.</summary>
     private static float DeterministicLotHeight(float nominalHeight, Vector2 seedPoint)
     {
         float unit = Novgov.Core.DeterministicHash.Unit01(seedPoint.x, seedPoint.y); // [0, 1)
@@ -1180,18 +1148,9 @@ public class CityGenerator : MonoBehaviour
         return sharedRoofMaterialPalette[UnityEngine.Random.Range(0, BUILDING_MATERIAL_PALETTE_SIZE)];
     }
 
-    // Toit à pans générique (hip roof) avec une bande plate périphérique ("coursive") avant la
-    // pente : TacticalPathManager.ConfirmerBuildingAction ("MONTER SUR LE TOIT") pose toujours
-    // l'unité à Y = selectedBuilding.height (le niveau du larmier, sans lien avec la géométrie du
-    // toit), et UnitAI_Movement.ExecuteClimbCoroutine la fait grimper le long de la façade pour
-    // atterrir à quelques centimètres à peine du mur. Une PREMIÈRE version de ce toit faisait
-    // démarrer la pente dès le bord (repli inset de 1.3m) : à cette distance du mur, le toit était
-    // déjà remonté d'environ 25-30cm au-dessus du larmier, donnant l'impression que l'unité
-    // apparaissait à moitié enfoncée dans le toit. La coursive plate (ROOF_WALKWAY_MARGIN) garantit
-    // que toute la zone où une unité peut réellement se tenir reste exactement à la hauteur des
-    // murs ; seule la pente au-delà (vers le centre) est remontée. Repli sur l'ancien toit plat si
-    // l'inset dégénère (lot étroit type maison mitoyenne) : mieux vaut un toit plat correct qu'une
-    // pente auto-intersectante.
+    // Toit à pans avec une bande plate périphérique (« coursive ») avant la pente : une unité qui escalade
+    // la façade se pose à la hauteur des murs sans paraître enfoncée dans la pente. Repli sur un toit
+    // plat si l'inset dégénère (lot étroit).
     private const float ROOF_WALKWAY_MARGIN = 2.5f;
     private const float ROOF_PITCH_HEIGHT = 1.0f;
     private const float ROOF_HIP_INSET = 1.3f;

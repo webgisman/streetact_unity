@@ -19,19 +19,8 @@ public static class NovgovTheme
     public static readonly Color TeamPlayer = new Color32(72, 128, 168, 255);
     public static readonly Color TeamEnemy = new Color32(188, 62, 48, 255);
 
-    /// <summary>Couleur d'identité d'équipe ABSOLUE — équipe 1 = bleu, équipe 2 = rouge, TOUJOURS,
-    /// quel que soit le joueur qui regarde (jamais "mon camp"/"l'ennemi", voir isPlayerControlled
-    /// ailleurs dans le code pour CETTE notion différente, relative au client local).
-    ///
-    /// Ajoutée le 2026-09-19, retour joueur (équipe rouge) : "il faut donner la barre rouge au
-    /// joueur rouge" — la barre de vie au-dessus de chaque unité (UnitAI.SetupHealthBar/
-    /// UpdateHealthBar) et son icône 2D (UnitTacticalMarker) coloraient jusqu'ici selon
-    /// isPlayerControlled ("mes unités en bleu, peu importe mon équipe") alors que TOUT LE RESTE de
-    /// l'identité visuelle du jeu (bannière d'équipe "ÉQUIPE ROUGE/BLEUE", barre de Zone de
-    /// Contrôle, anneau de déploiement, radar) utilise déjà cette même convention ABSOLUE. Un
-    /// joueur de l'équipe 2 voyait donc ses PROPRES unités en bleu alors que sa propre bannière
-    /// affichait "ÉQUIPE ROUGE" — un vrai décalage d'identité visuelle, pas juste esthétique :
-    /// c'est un contributeur plausible à la confusion "je crois qu'il y a un changement de couleur,
-    /// je peux jouer les unités de l'autre joueur" rapportée par ailleurs la même session.</summary>
+    /// <summary>Couleur d'équipe ABSOLUE : équipe 1 = bleu, équipe 2 = rouge, quel que soit le joueur qui
+    /// regarde (barres de vie, marqueurs, bandeau, radar) — un joueur de l'équipe 2 voit donc ses unités
+    /// en rouge, comme son bandeau.</summary>
     public static Color ColorForTeam(int teamID) => teamID == 2 ? TeamEnemy : TeamPlayer;
 }

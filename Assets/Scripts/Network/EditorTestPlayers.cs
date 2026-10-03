@@ -2,17 +2,10 @@
 namespace Novgov.Network
 {
     /// <summary>
-    /// Les 2 comptes de test (créés le 2026-08-29 sur novgov.com) et le quartier de chacun — Éditeur
-    /// uniquement, jamais compilé dans un build appareil.
-    ///
-    /// 2026-10-03, retour joueur : "le mode test multijoueur est incompréhensible ; rapproche les deux
-    /// joueurs des comptes test pour que je puisse les pousser tous les deux dans la même zone pour
-    /// faire le combat". Avant, le QG de chaque fenêtre dépendait de la FENÊTRE (ville simulée tirée du
-    /// dossier du clone Multiplayer Play Mode, figée au premier lancement) et non du COMPTE : les deux
-    /// joueurs ne se voyaient pas forcément sur la carte. Désormais, se connecter avec un compte de test
-    /// place la carte sur le quartier que CE compte possède réellement sur le serveur (vérifié le
-    /// 2026-10-03 : Joueur 1 possède (66648,44111) — Lille Sud — et Joueur 2 le quartier juste au NORD,
-    /// (66648,44110)) : chacun voit l'autre comme son voisin direct et peut l'assiéger tout de suite.
+    /// Les 2 comptes de test (novgov.com) et le quartier de chacun — Éditeur uniquement. Se connecter avec
+    /// l'un d'eux place la carte sur le quartier que ce compte possède réellement : Joueur 1
+    /// (66648,44111, Lille Sud) et Joueur 2 juste au nord (66648,44110), voisins directs pour tester un
+    /// siège tout de suite.
     /// </summary>
     public static class EditorTestPlayers
     {

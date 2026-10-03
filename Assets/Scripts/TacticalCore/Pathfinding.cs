@@ -29,20 +29,9 @@ namespace Novgov.TacticalCore
             public int heapIndex = -1;
         }
 
-        /// <summary>
-        /// Tas binaire indexé, avec remontée de priorité (decrease-key) — remplace le scan LINÉAIRE
-        /// de la liste ouverte et le <c>open.Contains</c> lui aussi linéaire.
-        ///
-        /// Pourquoi ça compte : sur une grille de 240x240 (BuildFromScene, rayon 120 m, cellules de
-        /// 1 m), une destination inatteignable faisait explorer les 57 600 cellules, chacune au prix
-        /// d'un balayage de toute la frontière — de l'ordre de 10^8 comparaisons, soit une à
-        /// plusieurs SECONDES de gel du thread principal, en plein tap du joueur. Le tas ramène
-        /// chaque opération à O(log n) et l'appartenance à O(1).
-        ///
-        /// Ordre STRICTEMENT TOTAL (FCost, puis hCost, puis rang d'insertion) : deux appareils
-        /// exécutant le même code obtiennent le même chemin, ce qui est la condition même de
-        /// l'architecture (le serveur fait autorité, le client doit prévisualiser à l'identique).
-        /// </summary>
+        /// <summary>Tas binaire indexé (decrease-key) pour la liste ouverte de l'A* : O(log n) au lieu d'un
+        /// balayage linéaire qui figeait le jeu sur une destination inatteignable. Ordre strictement total
+        /// (FCost, hCost, rang d'insertion) : même chemin sur tous les appareils.</summary>
         private class NodeHeap
         {
             private readonly List<Node> items = new List<Node>();
@@ -123,38 +112,15 @@ namespace Novgov.TacticalCore
             return FindPath(grid, startWorld, endWorld, null);
         }
 
-        /// <summary>
-        /// Même A*, mais CONFINÉ à une empreinte de bâtiment quand <paramref name="roofFootprint"/>
-        /// est non nul : une unité sur un toit se déplace SUR ce toit, donc exactement là où la
-        /// grille au sol est marquée non-franchissable (TacticalGrid.CarveBuildingInteriors creuse
-        /// l'intérieur des bâtiments). Sans ce mode, FindPath ne trouvait JAMAIS de chemin pour une
-        /// unité perchée — ni depuis, ni vers un toit — et TacticalResolver.ExpandOrder se repliait
-        /// silencieusement sur une ligne droite : le fantassin traversait le vide au-dessus de la rue
-        /// et les bâtiments voisins (bug de déplacement sur les toits, 2026-09-03).
-        ///
-        /// La marchabilité du sol (walkable) est alors IGNORÉE au profit du seul test
-        /// "point dans l'empreinte" : sur un toit, ni les murs ni les barricades de la rue ne
-        /// comptent, seul le bord du toit arrête l'unité.
-        /// </summary>
+        /// <summary>Même A*, CONFINÉ à une empreinte de bâtiment quand <paramref name="roofFootprint"/> est
+        /// fourni (déplacement sur un toit) : seule l'empreinte compte, pas la marchabilité au sol.</summary>
         public static List<Vector2> FindPath(TacticalGrid grid, Vector2 startWorld, Vector2 endWorld, List<Vector2> roofFootprint)
         {
             if (!grid.TryWorldToCell(startWorld, out int startX, out int startZ)) return new List<Vector2>();
             if (!grid.TryWorldToCell(endWorld, out int endX, out int endZ)) return new List<Vector2>();
 
-            // ARRIVÉE IMPRATICABLE : on abandonne TOUT DE SUITE (correctif 2026-09-04).
-            //
-            // Une cellule impraticable n'est jamais empilée (voir IsPassable), donc la condition
-            // d'arrêt "j'ai dépilé la cellule d'arrivée" ne pouvait JAMAIS être atteinte : A*
-            // explorait alors la carte ENTIÈRE avant de renvoyer "aucun chemin". Sur la grille de
-            // BuildFromScene (rayon 120 m, cellules de 1 m) cela fait 240x240 = 57 600 cellules
-            // explorées, sur le thread principal, pour un résultat vide connu d'avance.
-            //
-            // Et ce cas n'est pas théorique : TacticalGrid.CarveBuildingInteriors rend TOUT
-            // l'intérieur des bâtiments impraticable, or l'aperçu de trajectoire et les ordres
-            // "ENTRER DANS LE BÂTIMENT" visent précisément un point à l'intérieur d'une empreinte.
-            // Chaque tap sur un bâtiment payait donc ce balayage complet — d'où le jeu qui se
-            // figeait et les taps suivants perdus. Le résultat renvoyé est identique à avant
-            // (liste vide, l'appelant se replie comme il le faisait déjà) : seul le coût change.
+            // Arrivée impraticable (ex. intérieur d'un bâtiment) : abandon immédiat — sinon l'A* explorait toute
+            // la carte (57 600 cellules) avant de conclure qu'il n'y a pas de chemin.
             if (!IsPassable(grid, roofFootprint, endX, endZ, startX, startZ)) return new List<Vector2>();
 
             // La cellule de départ est toujours praticable : l'unité s'y tient déjà. Sans cette

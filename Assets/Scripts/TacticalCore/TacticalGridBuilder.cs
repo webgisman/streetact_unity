@@ -14,16 +14,9 @@ namespace Novgov.TacticalCore
     /// </summary>
     public static class TacticalGridBuilder
     {
-        // Cache de géométrie STATIQUE (2026-08-30, test grandeur nature — mesuré ~2050ms réels par
-        // tour, sur TOUS les tours, pour reconstruire 1538 segments de mur + la grille de marche à
-        // partir de 236 bâtiments, alors que TacticalResolver.Resolve() lui-même ne prend que
-        // 10-70ms). Les murs et bâtiments ne BOUGENT jamais après génération de la ville — seul leur
-        // état "détruit" change, ce qui est déjà lu EN DIRECT par WallSegment.BlocksSight(state) (voir
-        // TacticalTypes.cs, jamais une valeur baked dans le segment) : les segments de mur et la
-        // grille de marche peuvent donc être calculés UNE FOIS par ville chargée et réutilisés à
-        // chaque tour tant qu'aucun bâtiment n'a réellement basculé "détruit" depuis le dernier
-        // calcul — seule la grille (qui décide si l'intérieur d'un bâtiment est praticable) a besoin
-        // d'être reconstruite quand ça arrive, les segments de mur restent valables indéfiniment.
+        // Cache de géométrie STATIQUE : reconstruire murs et grille depuis la scène coûte ~2 s ; ils ne
+        // bougent jamais après la génération de la ville (seul leur état « détruit » change, relu en direct),
+        // donc calculés une fois par ville et réutilisés tant qu'aucun bâtiment n'a été détruit.
         private static List<WallSegment> cachedWallSegments;
         private static List<TacticalBuilding> cachedBuildingTemplates; // footprint/id seulement, health/destroyed rafraîchis à chaque appel
         private static TacticalGrid cachedGrid;
@@ -48,24 +41,14 @@ namespace Novgov.TacticalCore
             cachedCacheKey = null;
         }
 
-        /// <summary>Construit un TacticalWorldState complet (bâtiments + murs + barricades +
-        /// grille) à partir de l'état ACTUEL de la scène — à appeler une fois au début de la phase
-        /// d'exécution d'un tour, après tout placement/déploiement. Réutilise le cache de géométrie
-        /// statique EN MÉMOIRE (L1, voir ci-dessus) tant qu'aucun bâtiment supplémentaire n'est passé
-        /// à l'état détruit depuis le dernier appel ; à défaut, tente le cache SUR DISQUE (L2, voir
-        /// TryLoadFromDisk) — partagé entre processus et survit à un redémarrage, contrairement à L1
-        /// qui est un champ statique propre à CE process. Seule la reconstruction complète depuis la
-        /// scène Unity (ni L1 ni L2 disponibles) coûte ~2000ms ; les PV/état "détruit" de chaque
-        /// bâtiment et les barricades sont TOUJOURS relus frais depuis la scène, jamais mis en cache.
-        /// <paramref name="cacheKey"/> identifie la carte/tuile actuelle ("Z17_{tileX}_{tileY}" ou
-        /// "Default", voir CityGenerator.CurrentGridCacheKey) — si omis, déduit automatiquement du
-        /// CityGenerator de la scène courante (fonctionne aussi bien côté serveur que côté client,
-        /// chacun ayant sa propre instance).</summary>
-        // Rayon (mètres, autour de l'origine) du monde jouable généré par CityGenerator — seule
-        // définition, réutilisée partout où une borne de carte est nécessaire (ex. clamp de
-        // déploiement côté serveur) pour éviter qu'une copie locale diverge de la valeur réelle.
+        // Rayon (m) du monde jouable généré par CityGenerator — seule définition, réutilisée partout où une
+        // borne de carte est nécessaire.
         public const float DefaultWorldRadius = 120f;
 
+        /// <summary>Construit la géométrie tactique (bâtiments, murs, barricades, grille) depuis la scène
+        /// actuelle, avec un cache en mémoire puis sur disque (une reconstruction complète coûte ~2 s).
+        /// Les PV des bâtiments et les barricades sont toujours relus frais. <paramref name="cacheKey"/> :
+        /// "Z17_{tileX}_{tileY}" ou "Default" (déduit de CityGenerator.CurrentGridCacheKey si omis).</summary>
         public static TacticalWorldState BuildFromScene(float radius = DefaultWorldRadius, string cacheKey = null)
         {
             if (string.IsNullOrEmpty(cacheKey))
@@ -280,21 +263,10 @@ namespace Novgov.TacticalCore
             return result;
         }
 
-        /// <summary>Hash déterministe et portable d'une liste de bâtiments (empreinte + portes +
-        /// fenêtres + hauteur) — voir "city_verify"/"city_verify_result" dans MatchState.
-        /// AuthoritativeCityHash et MatchSessionManager_Deployment.HandleCityVerify pour l'usage :
-        /// permet à un client de comparer SA géométrie générée à celle du serveur sans transmettre
-        /// toute la structure à chaque fois, seulement quand elles diffèrent réellement.
-        ///
-        /// Trié par id d'abord (insensible à un réordonnancement accidentel de la liste). Chaque
-        /// float est quantifié au millimètre avant d'entrer dans le hash — même raison que
-        /// Novgov.Core.DeterministicHash (voir TacticalCoreSelfTest_DeterministicHash.cs) : une
-        /// projection GPS calculée légèrement différemment selon la plateforme (Android/ARM vs Linux
-        /// serveur) peut différer d'un dernier bit flottant sur une géométrie par ailleurs identique
-        /// — sans cette quantification, ce bruit sous le millimètre ferait rapporter une divergence
-        /// qui n'en est pas une. Combinaison FNV-1a (XOR puis multiplication par le nombre premier
-        /// FNV, entièrement en arithmétique entière 32 bits) : bit-identique sur toute plateforme
-        /// .NET/Mono/IL2CPP, contrairement à un hash basé sur GetHashCode() d'un type flottant.</summary>
+        /// <summary>Hash déterministe d'une liste de bâtiments (empreinte, portes, fenêtres, hauteur) pour
+        /// "city_verify" (MatchSessionManager.AnswerCityVerify) : un client compare sa géométrie à celle du
+        /// serveur sans tout transmettre. Trié par id, flottants quantifiés au millimètre (bruit de projection
+        /// entre plateformes), combinaison FNV-1a en entiers 32 bits : identique partout.</summary>
         public static int ComputeBuildingListHash(List<TacticalBuilding> buildings)
         {
             uint hash = 2166136261u; // FNV-1a offset basis
@@ -400,24 +372,9 @@ namespace Novgov.TacticalCore
         [Serializable] private class GeometryCacheFile { public List<WallSegmentDto> wallSegments; public List<BuildingTemplateDto> buildingTemplates; public GridDto grid; }
 
         private static string CacheDirectory => Path.Combine(Application.persistentDataPath, "TacticalGridCache");
-        // Version du FORMAT/CONTENU du cache disque. À incrémenter dès qu'un changement de génération
-        // rend les fichiers déjà écrits incorrects — un ancien fichier n'est alors simplement plus
-        // trouvé, donc régénéré, au lieu d'être relu avec des valeurs périmées.
-        //   v2 (2026-09-03) : les hauteurs de lot proviennent désormais d'un hachage déterministe de
-        //   la géométrie (CityGenerator.DeterministicLotHeight) et non d'un tirage aléatoire non
-        //   initialisé. Tout cache antérieur contient des hauteurs de toit que ni le client ni le
-        //   serveur ne reproduiraient aujourd'hui.
-        //   v3 (2026-09-05) : ce hachage déterministe est passé d'un hash TRIGONOMÉTRIQUE
-        //   (Mathf.Sin(x*a+y*b) * grand_facteur puis Mathf.Floor — non garanti bit-identique entre la
-        //   libm Android/ARM et la glibc Linux du serveur dédié) à un hash ENTIER pur
-        //   (Novgov.Core.DeterministicHash, uniquement XOR/shift/multiplication sur des uint 32 bits).
-        //   Exactement la même règle que pour v2 : tout fichier écrit AVANT ce bump contient des
-        //   hauteurs calculées avec l'ANCIENNE formule, que le nouveau pipeline client
-        //   (CityGenerator.LoadZoneFromServerData, qui rejoue le JSON serveur avec le NOUVEAU hash)
-        //   ne reproduirait plus — laisser DiskCacheVersion à 2 aurait fait resservir indéfiniment ces
-        //   hauteurs périmées par TacticalGridBuilder pendant que les clients calculent la nouvelle
-        //   valeur, recréant exactement le bug "unité perchée qui flotte au-dessus du toit" que le
-        //   changement de hash visait à éliminer — mais par la staleness du cache, pas par sin().
+        // Version du format du cache disque : à incrémenter dès qu'un changement de génération rend les
+        // fichiers existants faux (ils ne sont alors plus trouvés, donc régénérés).
+        //   v2 : hauteurs de lot déterministes ; v3 : hash entier au lieu de trigonométrique.
         private const int DiskCacheVersion = 3;
 
         private static string DiskCachePath(string cacheKey) => Path.Combine(CacheDirectory, $"GridCache_v{DiskCacheVersion}_{cacheKey}.json");

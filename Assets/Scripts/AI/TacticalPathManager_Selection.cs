@@ -13,19 +13,8 @@ public partial class TacticalPathManager
         {
             UnitAI unitAI = unite.GetComponent<UnitAI>();
 
-            // On ne peut sélectionner que les unités du joueur. Tous les appelants actuels
-            // (ResolveClosestPlayerUnit, RefreshSquadBar/CycleSelectGroup, le bouton BLESSÉS)
-            // filtrent déjà isPlayerControlled avant d'arriver ici, mais ce garde reste la SEULE
-            // protection si l'un d'eux rate ce filtre un jour — et jusqu'ici, en cas d'échec,
-            // `uniteSelectionnee = unite` était affecté INCONDITIONNELLEMENT plus haut (avant ce
-            // test), qu'il soit valide ou pas : la cible rejetée devenait quand même "la sélection
-            // courante" en interne (aucun cercle, aucun son, mais isGivingOrderToSelectedUnit
-            // passait quand même à vrai dans HandlePointerInput, rétrécissant le rayon de tap
-            // tolérant à 60px). Vu du joueur : ce clic ne faisait RIEN, et tant qu'aucune sélection
-            // VALIDE n'avait eu lieu depuis, TOUTE autre unité tolérait moins l'imprécision du tap
-            // suivant — donnant l'impression qu'il fallait d'abord réussir à sélectionner UNE unité
-            // pour que "la sélection des autres" se débloque. On ne touche donc plus du tout à
-            // uniteSelectionnee ni à l'ancienne sélection tant que la cible n'est pas validée.
+            // Seules les unités du joueur sont sélectionnables. Garde de dernier recours (les appelants filtrent
+            // déjà) : la sélection courante n'est pas modifiée tant que la cible n'est pas validée.
             if (unitAI == null || !unitAI.isPlayerControlled)
             {
                 Debug.LogWarning($"[TacticalPathManager] Sélection rejetée sur '{unite.name}' " +

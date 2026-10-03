@@ -233,18 +233,10 @@ public partial class UnitAI
     }
 
     // ==========================================
-    // REJEU RÉSEAU (2026-09-11) : mêmes effets que ShootAt/TakeDamage, mais COSMÉTIQUE UNIQUEMENT.
+    // REJEU EN LIGNE : mêmes effets que ShootAt/TakeDamage (flash, traceur, son, impact), mais
+    // COSMÉTIQUES — les dégâts sont déjà appliqués par le serveur (SetNetworkHealth) et les rejouer les
+    // doublerait. Le mortier n'est pas rejoué ici.
     // ==========================================
-    // Avant ce correctif, le rejeu multijoueur (MultiplayerMatchController.PlaySnapshotsBody)
-    // n'appelait ni ShootAt ni TakeDamage — seulement SetNetworkHealth/SetNetworkAnimState, qui ne
-    // pilotent que la barre de vie et le booléen "IsShooting" de l'Animator. Un combat entier se
-    // déroulait donc sans le moindre flash, traceur, son de tir, impact ou animation de hit : les
-    // unités mouraient en silence. Ces deux méthodes REPRODUISENT les effets de ShootAt/TakeDamage
-    // à l'identique, sans jamais recalculer ni réappliquer de dégâts (déjà appliqués côté serveur
-    // autoritaire, voir TacticalResolver puis SetNetworkHealth) — rejouer ShootAt/TakeDamage tels
-    // quels aurait doublé les dégâts. Le mortier est délibérément exclu (voir MatchSessionManager_
-    // CombatPure.ApplyAreaDamage : l'événement Shot associé porte un faux unitId "mortar" et un tick
-    // toujours à 0, aucune unité tireuse réelle ni instant réel à rejouer fidèlement pour l'instant).
 
     /// <summary>Rejoue les effets cosmétiques d'un tir direct (infanterie/char/véhicule-canon)
     /// pendant la lecture d'un snapshot réseau. Ne touche jamais aux PV ni n'appelle TakeDamage.</summary>

@@ -301,14 +301,7 @@ public static class TacticalAIPlanner
     /// <summary>Budget de déplacement RÉELLEMENT appliqué à cette unité par la résolution du tour,
     /// par type (<c>Novgov.Server.UnitTypeStats.MovementBudget</c> — 42m char, 46m véhicule-canon,
     /// 34m mortier, 50m fantassin/défaut), jamais le champ générique <c>UnitAI.maxMovementPerTurn</c>
-    /// (toujours 50f, quel que soit le type — jamais surchargé nulle part dans le projet).
-    ///
-    /// Correctif 2026-09-05 : cette IA planifiait ses déplacements de blindés/mortiers avec un budget
-    /// de 50m alors que TacticalResolver.TruncateToMovementBudget (qui fait foi, côté serveur) les
-    /// limite en réalité à 42/46/34m. Le plan de l'IA visait donc systématiquement plus loin que ce
-    /// qu'elle pouvait réellement atteindre, et toute posture (Guetter/Garnison/Embuscade) placée en
-    /// bout de chemin au-delà du budget réel était silencieusement supprimée par la troncature — sans
-    /// qu'aucun message ne le signale, l'IA "oubliait" son ordre de fin de trajet.</summary>
+    /// (toujours 50f, quel que soit le type — jamais surchargé nulle part dans le projet).</summary>
     private static float RealMovementBudget(UnitAI unit)
     {
         UnitSpawnerUI.UnitType inferred = UnitSpawnerUI.UnitType.Fantassin;

@@ -67,7 +67,7 @@ public class GameManagerUI : MonoBehaviour
         // que c'est un simple jeu tour par tour" sur 2 vrais appareils Android) — 30 FPS abaissé
         // depuis 60 : un rythme tour par tour, sans besoin de fluidité 60 FPS, n'a aucune raison de
         // faire tourner le rendu (et tout le travail par-frame non mis en cache, voir
-        // l'historique git (ancien journal 08) §7 "Performance client") au double de la vitesse nécessaire.
+        // l'historique git §7 "Performance client") au double de la vitesse nécessaire.
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 30;
 

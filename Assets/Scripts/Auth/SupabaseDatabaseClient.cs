@@ -121,18 +121,8 @@ namespace Novgov.Auth
         // jamais un PATCH/POST direct.
         public static PlayerRosterItem[] CurrentRoster { get; private set; }
 
-        // Source UNIQUE des types d'unité connus de la caserne (correctif 2026-09-06) : ce tableau
-        // était dupliqué ICI et dans MultiplayerMatchController.RefreshRosterScreen, avec des noms
-        // ("Canon", "Char") qui ne correspondent à AUCUNE valeur réelle de UnitSpawnerUI.UnitType
-        // (les vraies valeurs sont "VehiculeCanon"/"CharLeopard", voir l'énum). La comparaison
-        // `item.unit_type.Equals(type.ToString())` faite au déploiement (UnitSpawnerUI.StartPlacingUnit)
-        // ne matchait donc JAMAIS pour un Canon ou un Char : `owned` restait à 0 pour ces deux types
-        // pour toujours, même une fois la caserne correctement chargée et même après un achat "Recruter"
-        // — ces deux unités devenaient indéfiniment indéployables en multijoueur ("Vous ne possédez pas
-        // d'unité ... supplémentaire dans votre caserne !"), ce qui pouvait se lire comme "la sélection
-        // des unités est cassée". "Drone" n'a PAS d'équivalent dans UnitType : conservé tel quel, c'est
-        // un type prévu mais pas encore implémenté comme unité déployable — inoffensif (n'entre jamais
-        // en conflit avec `sourceUnitType`, juste un slot de la boutique actuellement sans usage).
+        // Types d'unité de la caserne : exactement les noms de UnitSpawnerUI.UnitType (comparés à
+        // UnitType.ToString()). "Drone" est prévu, pas encore déployable.
         public static readonly string[] KnownUnitTypes = { "Fantassin", "VehiculeCanon", "CharLeopard", "Mortier", "Drone" };
         public static readonly int[] KnownUnitCosts = { 50, 150, 300, 400, 200 }; // même ordre que KnownUnitTypes
 

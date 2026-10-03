@@ -88,13 +88,10 @@ namespace Novgov.Network
         public int city_building_hash;
         public int city_building_count;
 
-        // city_verify_result (serveur -> client) : `success` (champ partagé, voir plus haut) vrai si
-        // city_building_hash concordait avec MatchState.AuthoritativeCityHash — dans ce cas
-        // city_buildings reste vide, rien à faire. Sinon, la structure de bâtiments AUTORITAIRE du
-        // serveur (celle qui a réellement servi à figer ms.World, voir EnsureTileLoadedAndSnapshot)
-        // est jointe intégralement (jamais un différentiel partiel — voir CityGenerator.
-        // ApplyAuthoritativeBuildings : recréer une ville à partir d'un sous-ensemble laisserait des
-        // bâtiments du côté divergent, l'objectif est une ville identique à 100%, pas rapiécée).
+        // city_verify_result (serveur -> client) : `success` vrai si city_building_hash concorde avec la
+        // géométrie de référence du serveur (city_buildings reste alors vide) ; sinon city_buildings
+        // porte la structure complète des bâtiments du serveur, pour que le client se resynchronise
+        // (CityGenerator.ApplyAuthoritativeBuildings).
         public BuildingGeometryDto[] city_buildings;
     }
 
@@ -168,10 +165,7 @@ namespace Novgov.Network
         // Bâtiments détruits PENDANT CE TICK précis (2026-09-12) : index dans BuildingStructure.
         // AllBuildings, voir TacticalGridBuilder ("template.id") — jamais retiré de cette liste côté
         // client pendant un rejeu réseau (voir DestructibleEnvironment.ApplyNetworkDestruction),
-        // pour que cet index reste valide pour tout le reste de la partie. Avant ce champ,
-        // TacticalEvent.Kind.WallDestroyed n'avait AUCUN consommateur réseau — le bâtiment restait
-        // visuellement intact chez les deux joueurs alors que le serveur le savait détruit (voir
-        // §19.9.3 de l'historique git (ancien journal 08)). Null/vide la plupart des ticks.
+        // pour que cet index reste valide pour tout le reste de la partie. Null/vide la plupart des ticks.
         public int[] destroyed_building_ids;
         
         // Barricades routières détruites PENDANT CE TICK précis (noms des GameObjects)
@@ -190,9 +184,7 @@ namespace Novgov.Network
         // Retour visuel de combat (2026-09-11) : identifiant de la cible visée CE tick, présent
         // seulement quand "shooting" est vrai — permet au client de rejouer un vrai traceur/flash
         // vers la bonne unité (et un effet d'impact SUR elle) au lieu de piloter uniquement
-        // l'Animator sans le moindre effet visible. Absent (chaîne vide) pour un tir de mortier — la
-        // résolution y associe un faux tireur "mortar" sans unité réelle, voir MatchSessionManager_
-        // CombatPure.ApplyAreaDamage.
+        // l'Animator sans le moindre effet visible. Absent (chaîne vide) pour un tir de mortier.
         public string shoot_target_id;
 
         // Brouillard de guerre réseau (2026-08-30) : une unité ADVERSE n'apparaît plus jamais dans

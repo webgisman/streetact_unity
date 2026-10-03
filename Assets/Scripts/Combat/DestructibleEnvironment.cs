@@ -134,22 +134,10 @@ public class DestructibleEnvironment : MonoBehaviour
         }
     }
 
-    /// <summary>Rejoue la destruction VISUELLE d'un bâtiment pendant le rejeu d'un snapshot réseau
-    /// (2026-09-12 — voir MultiplayerMatchController.PlaySnapshotsBody et TacticalEvent.Kind.
-    /// WallDestroyed, jusqu'ici sans le moindre consommateur, voir §19.9.3 de 08-known-issues-and-
-    /// todo.md). JAMAIS TakeDamage/DestroyEnvironment tels quels : ceux-ci infligent 9999 dégâts à
-    /// toute unité dans l'empreinte (ligne ~266) — le serveur autoritaire a DÉJÀ décidé qui meurt
-    /// (les événements Death du même snapshot, appliqués séparément via UnitAI.ApplyNetworkDeath) ;
-    /// rejouer ce dégât ici tuerait une SECONDE fois des unités déjà mortes, ou une unité que le
-    /// calcul-empreinte LOCAL (potentiellement différent, ex: bâtiment tourné) désignerait à tort.
-    ///
-    /// Ne retire PAS non plus ce bâtiment de BuildingStructure.AllBuildings (contrairement à
-    /// DestroyEnvironment, ligne ~290) : TacticalGridBuilder identifie chaque bâtiment par son INDEX
-    /// dans cette liste (voir son commentaire, "template.id"), figé une seule fois au début de la
-    /// partie. Si CE client retirait un bâtiment de la liste au premier détruit,
-    /// tous les buildingId suivants envoyés par le serveur (des index dans SA PROPRE liste, jamais
-    /// raccourcie puisqu'il n'appelle jamais TakeDamage sur le vrai composant) désigneraient le
-    /// mauvais bâtiment pour le reste de la partie — un décalage d'un cran par bâtiment déjà détruit.</summary>
+    /// <summary>Rejoue la destruction VISUELLE d'un bâtiment pendant le rejeu d'un tour en ligne. Jamais
+    /// TakeDamage/DestroyEnvironment : le serveur a déjà décidé qui meurt, rejouer l'écrasement tuerait
+    /// une seconde fois. Ne retire pas non plus le bâtiment de BuildingStructure.AllBuildings : le
+    /// serveur désigne les bâtiments par leur INDEX dans cette liste, qui doit rester identique.</summary>
     public void ApplyNetworkDestruction()
     {
         if (isDestroyed) return;

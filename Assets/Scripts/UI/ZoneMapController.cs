@@ -15,23 +15,13 @@ namespace Novgov.UI
 {
 #if !UNITY_SERVER
     /// <summary>
-    /// Écran CONQUÊTE (Assets/Resources/UI/ConquestScreen.uxml) — refonte du 2026-09-30, demande
-    /// joueur : "après multijoueur je veux juste Conquête, avec la gestion et le mode carte, qui doit
-    /// être beau pour choisir la carte à côté, avec du son ; 'neutre', un joueur lambda ne va rien
-    /// comprendre". Ce contrôleur gère les ONGLETS et l'onglet CARTE ; l'en-tête et l'onglet GESTION
-    /// (profil, sièges, caserne...) sont câblés par MultiplayerMatchController.BindUI, qui affiche
-    /// l'écran (état Hub) puis appelle <see cref="OnHubShown"/>.
-    ///
-    /// CARTE : 3x3 cases = les VRAIES tuiles OpenStreetMap zoom 17 du quartier courant et de ses 8
-    /// voisins — une Zone de Conquête EST une tuile Slippy Map zoom 17 (CityGenerator.ZONE_ZOOM), donc
-    /// l'image correspond exactement au terrain qui sera chargé. Chaque case est colorée par son
-    /// statut (libre / à vous / tenu par un autre joueur / protégé / hors de portée) ; la toucher
-    /// ouvre une fiche qui dit en clair ce qu'elle est et ce que le bouton va faire (prendre, s'y
-    /// rendre, lancer un siège). Remplace les 4 boutons de boussole "ATTAQUER NORD (Neutre)" d'avant.
-    ///
-    /// Portée : reprend EXACTEMENT la règle serveur (MatchSessionManager_Conquest.RunConquestRequest) —
-    /// sans aucun quartier, n'importe quel quartier libre peut être pris (y compris celui du QG) ;
-    /// ensuite, seulement ceux qui touchent (4 directions) un quartier déjà possédé.
+    /// Écran CONQUÊTE (ConquestScreen.uxml) : onglets et onglet CARTE ; l'en-tête et l'onglet GESTION sont
+    /// câblés par MultiplayerMatchController.BindUI (état Hub), qui appelle <see cref="OnHubShown"/>.
+    /// CARTE : 3×3 cases = les vraies tuiles OpenStreetMap zoom 17 du quartier courant et de ses 8 voisins
+    /// (un quartier EST une tuile zoom 17, CityGenerator.ZONE_ZOOM), colorées par statut ; toucher une
+    /// case ouvre une fiche qui dit ce qu'elle est et ce que le bouton va faire.
+    /// Portée : même règle que le serveur (MatchSessionManager_Conquest.RunConquestRequest) — sans
+    /// quartier, n'importe quel quartier libre ; ensuite, seulement ceux qui touchent un des vôtres.
     /// </summary>
     public class ZoneMapController : MonoBehaviour
     {

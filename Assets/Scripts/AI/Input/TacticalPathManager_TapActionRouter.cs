@@ -319,27 +319,10 @@ public partial class TacticalPathManager
                 pointingAtBuilding = IsBuildingShellCollider(hit.collider, structure);
             }
 
-            // FAÇADE RASÉE PAR LA VUE OBLIQUE : le bâtiment n'a été trouvé que par le collider
-            // touché, ET ce collider n'appartient pas à la coque du bâtiment — c'est donc du
-            // mobilier urbain (lampadaire, arbre, banc) que StreetPropsGenerator crée comme
-            // ENFANT du bâtiment mais pose HORS de son empreinte. Le joueur montrait la rue et le
-            // rayon a effleuré un décor au passage (la caméra de commandement est bridée à 75°
-            // d'inclinaison, un immeuble masque donc une bande de rue derrière lui). Ce repli
-            // existait déjà mais n'était appliqué qu'aux blindés : l'infanterie recevait le menu
-            // BÂTIMENT, qui ne propose aucun "aller là".
-            //
-            // IsBuildingShellCollider est indispensable (correctif 2026-09-04). Sans lui, le
-            // repli se déclenchait aussi sur la FAÇADE elle-même, une fois sur deux : les murs
-            // sont des quads d'épaisseur nulle posés exactement sur les arêtes de l'empreinte
-            // (CityGenerator.AddWallSegment), le point d'impact tombe donc pile SUR l'arête, et
-            // le test de parité de ContainsPoint2D (comparaison stricte) basculait d'un côté ou
-            // de l'autre selon l'erreur flottante du raycast. Deux taps sur le même pixel
-            // donnaient des menus différents : ENTRER / MONTER SUR LE TOIT devenait un tirage au
-            // sort, et une unité déjà à l'intérieur était renvoyée dehors.
-            //
-            // Vaut aussi pour une unité perchée (2026-10-03) : elle en était exclue, et ce tap de rue
-            // devenait un déplacement sur son propre toit (voir tapOnOwnRooftop) — le menu SOL
-            // propose au contraire de DESCENDRE dans la rue.
+            // Décor touché par la vue oblique : le bâtiment n'a été trouvé que par un collider qui n'est PAS sa
+            // coque (lampadaire, arbre, banc posés dans la rue) — le joueur montrait la rue : repli sur le SOL
+            // (déplacement, ou descente pour une unité perchée). IsBuildingShellCollider évite que la façade
+            // elle-même (mur posé pile sur l'arête de l'empreinte) déclenche ce repli.
             if (structure != null && !pointingAtBuilding && unitAI != null
                 && TryFallbackAuSolPourBlinde(hitPoint))
             {

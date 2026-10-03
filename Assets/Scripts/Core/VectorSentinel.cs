@@ -3,24 +3,10 @@ using UnityEngine;
 namespace Novgov.Core
 {
     /// <summary>
-    /// Lecture correcte d'une position "sentinelle" (Vector3.positiveInfinity = « aucune valeur »).
-    ///
-    /// POURQUOI CE FICHIER EXISTE. L'opérateur == de Unity sur Vector2/Vector3 ne compare PAS les
-    /// composantes : il calcule (a-b).sqrMagnitude et le compare à un epsilon (~1e-10). Or
-    /// inf - inf = NaN, et toute comparaison impliquant NaN est fausse. Donc :
-    ///
-    ///     Vector3.positiveInfinity == Vector3.positiveInfinity   ->  FALSE
-    ///     Vector3.positiveInfinity != Vector3.positiveInfinity   ->  TRUE
-    ///
-    /// Tout code écrit « if (maPosition != Vector3.positiveInfinity) » croit donc tester « une
-    /// valeur a été renseignée » alors qu'il teste une expression TOUJOURS VRAIE. C'est exactement
-    /// ce qui s'est produit dans TacticalPathManager : le tracé se croyait en permanence en attente
-    /// d'un aperçu vers un point à l'infini, redessinait tous les chemins de toutes les unités à
-    /// chaque frame (A*/NavMesh en continu sur mobile) et poussait un point infini dans le
-    /// LineRenderer de l'unité sélectionnée.
-    ///
-    /// Classe volontairement PURE (aucun MonoBehaviour, aucun accès de scène) : elle est compilée
-    /// telle quelle par le harnais de test hors-éditeur, et couverte par des tests automatiques.
+    /// Lecture correcte d'une position « sentinelle » (Vector3.positiveInfinity = aucune valeur).
+    /// L'opérateur == de Unity compare (a-b).sqrMagnitude à un epsilon ; or inf - inf = NaN, donc
+    /// `Vector3.positiveInfinity == Vector3.positiveInfinity` est FAUX et `!=` toujours VRAI.
+    /// Classe pure, couverte par les tests automatiques.
     /// </summary>
     public static class VectorSentinel
     {
