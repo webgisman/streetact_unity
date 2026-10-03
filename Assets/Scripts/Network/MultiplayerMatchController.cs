@@ -106,6 +106,9 @@ namespace Novgov.Network
         private int lastServerSecondsRemaining = -1;
         public static int PhaseSecondsRemaining => Instance != null ? Instance.lastServerSecondsRemaining : 0;
         private bool isPlayingSnapshots = false;
+        // "match_over" reçu : le serveur ferme la connexion juste après, pendant que ce client rejoue
+        // encore le dernier tour — cette fermeture est normale (voir HandleServerDisconnected).
+        private bool matchOverReceived = false;
         // "turn_result" reçu mais pas encore rejoué — mis en cache le temps d'accuser réception au
         // serveur et d'attendre son signal "turn_playback_start" (voir OnTurnResultReceived/
         // OnTurnPlaybackStart), pour que la LECTURE démarre au même instant chez les deux clients au
@@ -395,6 +398,7 @@ namespace Novgov.Network
             // unités/la ville de la scène détruite. Jamais appelé depuis une de ses coroutines.
             StopAllCoroutines();
             isPlayingSnapshots = false;
+            matchOverReceived = false;
             pendingTurnResult = null;
             awaitingCityVerifyResult = false;
             sceneDirtyFromMatch = false;
@@ -549,6 +553,7 @@ namespace Novgov.Network
             client.OnDisconnected -= HandleServerDisconnected;
             client.OnMessage += HandleServerMessage;
             client.OnDisconnected += HandleServerDisconnected;
+            matchOverReceived = false; // nouvelle connexion : une coupure ne sera plus une fin de partie
             client.Connect(SupabaseAuthClient.CurrentSession.access_token);
 
             client.Send(new NetMessage
@@ -634,6 +639,12 @@ namespace Novgov.Network
                 return;
             }
 
+            // Fermeture ATTENDUE en fin de partie : le serveur clôt la connexion dès "match_over",
+            // alors que ce client rejoue encore le dernier tour (DeferredMatchOver attend la fin du
+            // rejeu pour afficher le résultat). Jusqu'au 2026-10-03, cette fermeture affichait
+            // "Connexion perdue" et renvoyait au QG à la place de l'écran de victoire.
+            if (matchOverReceived) return;
+
             if (uiState == UiState.InMatch || uiState == UiState.Matchmaking || uiState == UiState.Deployment)
             {
                 IsActive = false;
@@ -679,7 +690,7 @@ namespace Novgov.Network
                 case "opponent_ghosted": OnOpponentGhosted(msg); break;
                 case "turn_result": if (!isPlayingSnapshots) OnTurnResultReceived(msg); break;
                 case "turn_playback_start": OnTurnPlaybackStart(msg); break;
-                case "match_over": StartCoroutine(DeferredMatchOver(msg)); break;
+                case "match_over": matchOverReceived = true; StartCoroutine(DeferredMatchOver(msg)); break;
                 case "city_verify_result": OnCityVerifyResult(msg); break;
                 case "zone_captured": OnZoneCaptured(msg); break;
                 case "zone_attack_result": OnZoneAttackResult(msg); break;
@@ -1174,15 +1185,16 @@ namespace Novgov.Network
         /// n'est déclenchée que par le signal "turn_playback_start" du serveur (voir
         /// OnTurnPlaybackStart ci-dessous), une fois que les DEUX joueurs ont accusé réception. Sans
         /// cette étape, chaque client démarrait sa lecture dès que SON PROPRE payload (taille
-        /// variable selon le brouillard de guerre) lui arrivait, désynchronisant les deux écrans d'un
-                private void OnTurnResultReceived(NetMessage msg)
+        /// variable selon le brouillard de guerre) lui arrivait, désynchronisant les deux écrans.</summary>
+        private void OnTurnResultReceived(NetMessage msg)
         {
             pendingTurnResult = msg;
             GameServerClient.Instance?.Send(new NetMessage { type = "turn_result_ack", turn_number = msg.turn_number });
             StartCoroutine(FallbackStartPlaybackIfServerNeverSignals(msg.turn_number));
         }
 
-                /// un serveur pas encore reconstruit/redéployé avec ce correctif ne l'enverra JAMAIS, ce qui
+        /// <summary>Filet de sécurité si "turn_playback_start" n'arrive jamais : lance quand même le
+        /// rejeu au bout de 5 s. Un serveur pas encore reconstruit/redéployé avec ce correctif ne l'enverrait JAMAIS, ce qui
         /// laissait le client bloqué sur "ACTION EN COURS..." pour toujours (rapport utilisateur :
         /// "j'ai action en cours mais rien ne se passe", juste après le déploiement de ce correctif
         /// alors que le serveur du VPS n'avait pas encore été reconstruit). Volontairement plus long

@@ -23,8 +23,15 @@ fait une vraie build serveur) n'est pas couverte — un outil Éditeur qui utili
 4. Les deux : placer les troupes → CONFIRMER, puis à chaque tour tracer → FIN DE TOUR → regarder le
    rejeu, jusqu'à la victoire.
 
-Un panneau « MODE TEST » (coin de l'écran, Éditeur uniquement, `EditorDebugOverlay`) rappelle ces
-étapes. Après un siège, le quartier visé est protégé 6 h : pour un 2e essai, attaquer dans l'autre sens.
+Un panneau « MODE TEST » (bas de l'écran dans les menus, jamais pendant une partie, Éditeur
+uniquement, `EditorDebugOverlay`) rappelle ces étapes. Après un siège, le quartier visé est protégé
+6 h et peut avoir changé de mains : pour rejouer tout de suite, remettre les deux comptes à leur état
+de départ avec `Tools/db/reset_test_accounts.sql` (supprime leurs parties, sièges et rapports, rend
+à chacun son quartier sans protection, classement à 1000 ; commande dans l'en-tête du fichier).
+
+Ce que le jeu a décidé pour chaque tap (unité sélectionnée, menu ouvert, point refusé et pourquoi)
+est écrit dans la console : lignes `[Tap]` de `Logs/Editor.log` (fenêtre principale) et de
+`Library/VP/<id>/Logs/Editor.log` (joueur virtuel). Plus de panneau à l'écran : il couvrait des boutons.
 
 ## 3. Test de bout en bout contre la production (script)
 
@@ -47,7 +54,21 @@ Lance la scène en Play Mode, affiche l'écran Conquête avec des propriétaires
 OpenStreetMap sont réelles) et écrit des PNG en paysage 2400×1080, portrait 1080×2400 et fenêtre PC
 1280×720 (dont l'écran de connexion avec le bloc MODE TEST), puis quitte l'Éditeur. Pas en `-batchmode`.
 
-## 5. Sur téléphone
+## 5. Déplacements d'infanterie sur les toits (vrai moteur, sans serveur)
+
+```
+Unity.exe -batchmode -projectPath "<projet>" -executeMethod RoofMovementPlaytest.Run -logFile roof.log
+```
+
+Charge le vrai quartier de test (66648,44110) en Play Mode, fait apparaître un fantassin et vérifie
+avec le même code que le serveur de jeu : escalade d'un toit ; un tap de rue accroché à un décor reste
+un point de sol ; toit → rue à 25 m (descente par un bord sur rue, arrivée au point, aucune
+téléportation, plus inscrit sur le toit) ; toit → rue avec GUETTER ; toit → toit d'un autre immeuble
+séparé par une rue. Code de sortie 0 = vert ; détail dans les lignes `[RoofPlaytest]` du journal.
+Contre-épreuve faite le 2026-10-03 : l'ancien code échoue à 6 vérifications sur 8 (descente posée sur
+le toit voisin, à 28,7 m de la cible).
+
+## 6. Sur téléphone
 
 APK de test : `AndroidTestBuildScript.BuildDebugApk` (voir `01-deployment-vps.md` §10 pour la commande),
 sortie `build/Android/Novgov-Test.apk`, installation `adb install -r build/Android/Novgov-Test.apk`.

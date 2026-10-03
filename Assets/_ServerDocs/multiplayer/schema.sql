@@ -469,7 +469,9 @@ begin
     return query select v_def_ap, v_att_ap + v_def_ap;
 end;
 $$;
--- Non exposé à authenticated car uniquement appelé par le serveur de jeu (service_role)
+-- Réservé au serveur de jeu (service_role) : PostgreSQL accorde EXECUTE à PUBLIC par défaut.
+revoke execute on function public.pillage_action_points(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.pillage_action_points(uuid, uuid) to service_role;
 
 -- =========================================================================
 -- 11. Sièges de Zone — PvP asynchrone (2026-09-13, demande explicite : "les joueurs vont vouloir

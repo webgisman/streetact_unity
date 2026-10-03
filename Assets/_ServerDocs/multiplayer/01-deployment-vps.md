@@ -203,3 +203,5 @@ for i in 1 2 3; do sudo docker compose up -d --no-deps game-server-$i; done
 
 **Migrations de base** : `schema.sql` ne s'exécute qu'au tout premier démarrage de Postgres ; toute
 évolution doit aussi être appliquée à la main sur la base en place (`docker compose exec -T db psql …`).
+Les scripts à appliquer sont dans `Tools/db/` (ex. `2026-10-03_pillage_action_points.sql` : fonction
+de pillage présente dans `schema.sql` mais jamais créée en production).

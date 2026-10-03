@@ -169,41 +169,70 @@ public partial class UnitAI
             
             if (agent == null) break;
 
-            // 1. ESCALADE OU DESCENTE DU TOIT (Priorité absolue avant tout calcul de chemin classique)
+            // 1. INFANTERIE EN HAUTEUR (toit, ou fenêtre d'étage) : rester sur les toits, passer sur
+            // un toit voisin, ou redescendre dans la rue — priorité absolue avant tout chemin au sol.
             //
-            // La DESCENTE est évaluée AVANT la montée, et une montée exige désormais une vraie
-            // différence de hauteur en plus de l'action : "DESCENDRE DU TOIT" émettait Escalade avec
-            // une position de rue, donc l'ancien test (action == Escalade) déclenchait ExecuteClimb
-            // "à l'envers" et ExecuteClimbDown n'était jamais atteint — l'unité restait perchée avec
-            // son NavMeshAgent éteint pour le reste de la partie (voir NodeAction.Descendre).
-            float heightDelta = targetPos.y - transform.position.y;
-            bool isClimbDown = !isTank && (nodeAction == TacticalPathManager.NodeAction.Descendre || heightDelta < -1.8f);
-            // GarnisonFenetre exclu explicitement (correctif 2026-09-05), symétriquement à Descendre :
-            // la position d'un ordre "Garnison Fenêtre" est la hauteur RÉELLE de la fenêtre visée
-            // (WindowInteraction.GetInteriorStancePosition -> windowData.position), qui vaut
-            // 1.4 + étage*3.0m (CityGenerator) — au-delà de 1.8m dès le 1er étage. Sans cette
-            // exclusion, un ordre de garnison à l'étage déclenchait ExecuteClimb au lieu
-            // d'ExecuteEnterGarrison (branche bien plus bas, jamais atteinte à cause du `continue`
-            // ci-dessous) : le soldat escaladait la façade jusqu'à la hauteur de la fenêtre, puis sa
-            // phase finale de sondage vers le haut trouvait le toit et l'y installait — un ordre
-            // "Guetter (Couvert -75%)" faisait donc grimper le tireur en sniper exposé sur le toit,
-            // sans jamais entrer dans le bâtiment ni obtenir la couverture, sans aucun message.
-            bool isClimbUp = !isTank && !isClimbDown
-                             && heightDelta > 1.8f
-                             && nodeAction != TacticalPathManager.NodeAction.Descendre
-                             && nodeAction != TacticalPathManager.NodeAction.GarnisonFenetre;
-
-            if (isClimbDown)
+            // 2026-10-03, retour joueur : « sur le toit, je lui demande d'aller plus loin dans la rue,
+            // il marche un peu sur le toit et s'arrête — il ne sait pas descendre et passer les
+            // embûches ». Une cible hors du toit était jusqu'ici soit ramenée au bord du toit (et
+            // l'unité s'y arrêtait), soit atteinte par une descente « droit devant » qui pouvait
+            // atterrir sur le toit mitoyen. Désormais : même toit ou toits mitoyens -> marche sur
+            // les toits ; autre immeuble séparé par une rue -> descente, traversée, escalade ; cible
+            // au sol -> descente par le bord qui donne sur la rue la mieux placée (voir
+            // ExecuteClimbDown), puis l'action du nœud (entrer, guetter, attendre...) au sol.
+            bool isHigh = !isTank && (isRooftopSniper || transform.position.y > RoofStrataThresholdY);
+            if (isHigh && nodeAction != TacticalPathManager.NodeAction.TirMortier)
             {
-                // Cible ramenée au sol : un ordre de descente désigne un point de rue, dont le Y
-                // capté au clic peut être resté à la hauteur du toit selon le collider touché.
+                // GarnisonFenetre : sa position est la hauteur RÉELLE de la fenêtre visée (1.4 +
+                // étage*3m), pas un toit — on y va en redescendant puis en entrant par la porte.
+                bool targetOnRoof = targetPos.y > RoofStrataThresholdY
+                                    && nodeAction != TacticalPathManager.NodeAction.Descendre
+                                    && nodeAction != TacticalPathManager.NodeAction.GarnisonFenetre;
+                if (targetOnRoof)
+                {
+                    if (agent != null && agent.enabled)
+                    {
+                        agent.isStopped = true;
+                        agent.ResetPath();
+                        agent.enabled = false; // Évite que le NavMesh au sol n'aspire le soldat vers le bas
+                    }
+
+                    BuildingStructure standingRoof = BuildingStructure.FindBuildingAt(transform.position);
+                    BuildingStructure targetRoof = BuildingStructure.FindBuildingAt(targetPos);
+                    bool sameRoof = targetRoof == null || standingRoof == null || targetRoof == standingRoof;
+                    if (sameRoof || IsRoofWalkContinuous(transform.position, targetPos))
+                    {
+                        yield return StartCoroutine(WalkAcrossRooftop(targetPos, stayOnStandingRoof: sameRoof));
+                    }
+                    else
+                    {
+                        Vector3 foot = FindClimbFoot(targetRoof, transform.position, targetPos)
+                                       ?? new Vector3(targetPos.x, 0.05f, targetPos.z);
+                        yield return StartCoroutine(ExecuteClimbDown(foot));
+                        if (isDead) yield break;
+                        yield return StartCoroutine(ExecuteClimb(targetPos));
+                    }
+                    yield return StartCoroutine(ExecuteCheckpointAction(nodeAction));
+                    continue;
+                }
+
                 Vector3 groundTarget = new Vector3(targetPos.x, Mathf.Min(targetPos.y, 0.05f), targetPos.z);
                 yield return StartCoroutine(ExecuteClimbDown(groundTarget));
-                continue;
+                if (isDead) yield break;
+                if (nodeAction == TacticalPathManager.NodeAction.Descendre) continue;
+                if (nodeAction != TacticalPathManager.NodeAction.GarnisonFenetre) targetPos = groundTarget;
+                // Pas de `continue` : la suite de la boucle exécute l'action du nœud depuis le sol.
             }
-            else if (isClimbUp)
+            // GarnisonFenetre exclu explicitement (correctif 2026-09-05) : la position d'un ordre
+            // "Garnison Fenêtre" est la hauteur RÉELLE de la fenêtre visée, au-delà de 1.8m dès le 1er
+            // étage — sans cette exclusion, le soldat escaladait la façade au lieu d'entrer dans le
+            // bâtiment (ExecuteEnterGarrison, plus bas).
+            else if (!isTank && targetPos.y - transform.position.y > 1.8f
+                     && nodeAction != TacticalPathManager.NodeAction.Descendre
+                     && nodeAction != TacticalPathManager.NodeAction.GarnisonFenetre)
             {
                 yield return StartCoroutine(ExecuteClimb(targetPos));
+                yield return StartCoroutine(ExecuteCheckpointAction(nodeAction));
                 continue;
             }
 
@@ -228,27 +257,7 @@ public partial class UnitAI
                 continue;
             }
 
-            // 5. DÉPLACEMENT SUR LA SURFACE DU TOIT (Infanterie en poste haut)
-            //
-            // `nodeAction != GarnisonFenetre` exclu explicitement (correctif 2026-09-05), même raison
-            // que pour isClimbUp ci-dessus : la position cible d'une garnison de fenêtre à l'étage a
-            // un Y au-delà du seuil de toit (hauteur RÉELLE de la fenêtre, pas une hauteur de toit),
-            // ce qui faisait déclencher CETTE branche (WalkAcrossRooftop) même après avoir exclu
-            // GarnisonFenetre de isClimbUp — la même unité aurait fini sur le toit par un second
-            // chemin si celui-ci n'était pas fermé aussi.
-            if (!isTank && nodeAction != TacticalPathManager.NodeAction.GarnisonFenetre
-                && (isRooftopSniper || transform.position.y > RoofStrataThresholdY || targetPos.y > RoofStrataThresholdY))
-            {
-                if (agent != null && agent.enabled)
-                {
-                    agent.isStopped = true;
-                    agent.ResetPath();
-                    agent.enabled = false; // Évite que le NavMesh au sol n'aspire le soldat vers le bas
-                }
-
-                yield return StartCoroutine(WalkAcrossRooftop(targetPos));
-                continue;
-            }
+            // (Déplacements sur les toits : voir la branche 1 en tête de boucle.)
 
             // 6. DÉPLACEMENT À L'INTÉRIEUR DU BÂTIMENT
             if (currentBuilding != null && !isRooftopSniper && (agent == null || !agent.isActiveAndEnabled || !agent.isOnNavMesh))
@@ -491,88 +500,92 @@ public partial class UnitAI
                 continue;
             }
 
-            if (nodeAction == TacticalPathManager.NodeAction.Attendre30s)
-            {
-                isPerformingCheckpointAction = true;
-                const float waitDuration = 30.0f;
-                Debug.Log($"<color=cyan>[{gameObject.name}] ⏳ Halte tactique au checkpoint : pause de {waitDuration}s.</color>");
-                if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
-                if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
-
-                float waitTimer = 0f;
-                while (waitTimer < waitDuration && !isDead)
-                {
-                    waitTimer += Time.deltaTime;
-                    yield return null;
-                }
-                isPerformingCheckpointAction = false;
-            }
-            else if (nodeAction == TacticalPathManager.NodeAction.Guetter)
-            {
-                isPerformingCheckpointAction = true;
-                isGuarding = true;
-                Debug.Log($"<color=cyan>[{gameObject.name}] 🛡️ Posture de Guet / Overwatch active (+50% défense).</color>");
-                if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
-                if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
-
-                float lookTimer = 0f;
-                while (lookTimer < 3.0f && !isDead)
-                {
-                    lookTimer += Time.deltaTime;
-                    yield return null;
-                }
-                isPerformingCheckpointAction = false;
-            }
-            else if (nodeAction == TacticalPathManager.NodeAction.SeCacher)
-            {
-                isPerformingCheckpointAction = true;
-                isCamouflaged = true;
-                Debug.Log($"<color=green><b>[{gameObject.name}] 🥷 Furtivité activée : Plaquage contre le mur (Invisible pour l'ennemi) !</b></color>");
-                if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
-                if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
-
-                // S'orienter face à la rue le long du mur
-                RaycastHit wallHit;
-                if (Physics.Raycast(transform.position + Vector3.up * 1f, transform.forward, out wallHit, 2.5f))
-                {
-                    transform.rotation = Quaternion.LookRotation(-wallHit.normal);
-                }
-
-                float hideTimer = 0f;
-                while (hideTimer < 2.0f && !isDead)
-                {
-                    hideTimer += Time.deltaTime;
-                    yield return null;
-                }
-                isPerformingCheckpointAction = false;
-            }
-            else if (nodeAction == TacticalPathManager.NodeAction.Embuscade)
-            {
-                isPerformingCheckpointAction = true;
-                isGuarding = true;
-                Debug.Log($"<color=cyan>[{gameObject.name}] Posture d'embuscade et tir d'opportunité pendant 2.0s.</color>");
-                if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
-                if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
-
-                float ambushTimer = 0f;
-                while (ambushTimer < 2.0f && !isDead)
-                {
-                    ambushTimer += Time.deltaTime;
-                    yield return null;
-                }
-                isPerformingCheckpointAction = false;
-            }
-            else if (nodeAction == TacticalPathManager.NodeAction.TirMortier)
-            {
-                yield return StartCoroutine(ExecuteMortarStrike(targetPos));
-                continue;
-            }
+            yield return StartCoroutine(ExecuteCheckpointAction(nodeAction));
         }
 
         TerminerOrdres();
     }
 
-    /// <summary>
+    /// <summary>Action posturale exécutée une fois le point atteint (au sol comme sur un toit) :
+    /// attendre, guetter, se cacher contre un mur, embuscade. Sans effet pour les autres actions
+    /// (déplacement simple, ou action déjà accomplie par sa propre coroutine).
+    /// Extrait le 2026-10-03 : la marche sur les toits sautait cette étape, donc « GUETTER SUR LE
+    /// TOIT » et « ATTENDRE » n'avaient jamais d'effet en hauteur.</summary>
+    private IEnumerator ExecuteCheckpointAction(TacticalPathManager.NodeAction nodeAction)
+    {
+        if (nodeAction == TacticalPathManager.NodeAction.Attendre30s)
+        {
+            isPerformingCheckpointAction = true;
+            const float waitDuration = 30.0f;
+            Debug.Log($"<color=cyan>[{gameObject.name}] ⏳ Halte tactique au checkpoint : pause de {waitDuration}s.</color>");
+            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
+            if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
+
+            float waitTimer = 0f;
+            while (waitTimer < waitDuration && !isDead)
+            {
+                waitTimer += Time.deltaTime;
+                yield return null;
+            }
+            isPerformingCheckpointAction = false;
+        }
+        else if (nodeAction == TacticalPathManager.NodeAction.Guetter)
+        {
+            isPerformingCheckpointAction = true;
+            isGuarding = true;
+            Debug.Log($"<color=cyan>[{gameObject.name}] 🛡️ Posture de Guet / Overwatch active (+50% défense).</color>");
+            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
+            if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
+
+            float lookTimer = 0f;
+            while (lookTimer < 3.0f && !isDead)
+            {
+                lookTimer += Time.deltaTime;
+                yield return null;
+            }
+            isPerformingCheckpointAction = false;
+        }
+        else if (nodeAction == TacticalPathManager.NodeAction.SeCacher)
+        {
+            isPerformingCheckpointAction = true;
+            isCamouflaged = true;
+            Debug.Log($"<color=green><b>[{gameObject.name}] 🥷 Furtivité activée : Plaquage contre le mur (Invisible pour l'ennemi) !</b></color>");
+            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
+            if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
+
+            // S'orienter face à la rue le long du mur
+            RaycastHit wallHit;
+            if (Physics.Raycast(transform.position + Vector3.up * 1f, transform.forward, out wallHit, 2.5f))
+            {
+                transform.rotation = Quaternion.LookRotation(-wallHit.normal);
+            }
+
+            float hideTimer = 0f;
+            while (hideTimer < 2.0f && !isDead)
+            {
+                hideTimer += Time.deltaTime;
+                yield return null;
+            }
+            isPerformingCheckpointAction = false;
+        }
+        else if (nodeAction == TacticalPathManager.NodeAction.Embuscade)
+        {
+            isPerformingCheckpointAction = true;
+            isGuarding = true;
+            Debug.Log($"<color=cyan>[{gameObject.name}] Posture d'embuscade et tir d'opportunité pendant 2.0s.</color>");
+            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh) agent.isStopped = true;
+            if (animator != null && !isTank) animator.SetFloat("Speed", 0f);
+
+            float ambushTimer = 0f;
+            while (ambushTimer < 2.0f && !isDead)
+            {
+                ambushTimer += Time.deltaTime;
+                yield return null;
+            }
+            isPerformingCheckpointAction = false;
+        }
+    }
+
     /// <summary>
     /// Coroutine gérant la séquence d'artillerie lourde (visée, rotation et tirs en cloche multiples de 3 obus).
     /// </summary>
@@ -676,17 +689,18 @@ public partial class UnitAI
     ///       puis pente jusqu'à +1m) au lieu de marcher dessus ;
     ///   (c) le bord du toit n'était jamais testé, d'où la traversée du vide d'un immeuble à l'autre ;
     ///   (d) aucun garde-fou de durée.
+    ///
+    /// <paramref name="stayOnStandingRoof"/> = false : l'appelant a vérifié que les toits sont
+    /// mitoyens jusqu'à la cible (IsRoofWalkContinuous) — l'unité passe alors d'un toit à l'autre.
     /// </summary>
-    private IEnumerator WalkAcrossRooftop(Vector3 requestedTarget)
+    private IEnumerator WalkAcrossRooftop(Vector3 requestedTarget, bool stayOnStandingRoof = true)
     {
         BuildingStructure roofBuilding = BuildingStructure.FindBuildingAt(transform.position);
 
-        // Destination ramenée SUR le toit : un toit n'a pas de passerelle vers le suivant. Si le
-        // joueur a désigné un point hors de cette empreinte, l'unité va aussi loin qu'elle peut sur
-        // son propre toit — c'est un ordre de descente ("DESCENDRE DU TOIT") qui la fait redescendre,
-        // jamais un pas dans le vide.
+        // Destination ramenée SUR le toit quand il n'y a pas de toit mitoyen jusqu'à la cible : jamais
+        // un pas dans le vide (la descente est le travail d'ExecuteClimbDown).
         Vector3 destination = requestedTarget;
-        if (roofBuilding != null && !roofBuilding.ContainsPoint2D(requestedTarget))
+        if (stayOnStandingRoof && roofBuilding != null && !roofBuilding.ContainsPoint2D(requestedTarget))
         {
             destination = ClampToRooftopEdge(roofBuilding, transform.position, requestedTarget);
         }
@@ -743,7 +757,7 @@ public partial class UnitAI
         }
 
         if (animator != null) animator.SetFloat("Speed", 0f);
-        SettleOnRoofSurface(roofBuilding);
+        SettleOnRoofSurface(BuildingStructure.FindBuildingAt(transform.position) ?? roofBuilding);
     }
 
     /// <summary>Point le plus avancé VERS la cible qui reste sur l'empreinte du toit — recherche
@@ -792,10 +806,142 @@ public partial class UnitAI
             }
         }
 
-        if (roofBuilding != null && actuallyOnRoof && !roofBuilding.unitsOnRoof.Contains(this))
+        LeaveRoofRegistry();
+        if (roofBuilding != null && actuallyOnRoof)
         {
             roofBuilding.unitsOnRoof.Add(this);
         }
+    }
+
+    /// <summary>Retire l'unité des occupants de toit de tout bâtiment. Sans ça, un soldat redescendu
+    /// (ou passé sur un toit voisin) restait inscrit sur son ancien toit et mourait avec lui si ce
+    /// bâtiment était détruit plus tard (DestructibleEnvironment).</summary>
+    private void LeaveRoofRegistry()
+    {
+        foreach (BuildingStructure b in BuildingStructure.AllBuildings)
+        {
+            if (b != null) b.unitsOnRoof.Remove(this);
+        }
+    }
+
+    private static float FlatDistance(Vector3 a, Vector3 b) => new Vector2(a.x - b.x, a.z - b.z).magnitude;
+
+    /// <summary>Peut-on aller de <paramref name="from"/> à <paramref name="to"/> en restant sur les
+    /// toits ? Vrai si une surface de toit existe sous chaque pas (tous les 0,5 m) et qu'aucune
+    /// marche ne dépasse 1,2 m — cas des immeubles mitoyens d'un même îlot.</summary>
+    private static bool IsRoofWalkContinuous(Vector3 from, Vector3 to)
+    {
+        Vector3 flat = new Vector3(to.x - from.x, 0f, to.z - from.z);
+        int steps = Mathf.Max(1, Mathf.CeilToInt(flat.magnitude / 0.5f));
+        float probeTop = Mathf.Max(from.y, to.y) + 3f;
+        float previousY = from.y;
+        for (int i = 1; i <= steps; i++)
+        {
+            Vector3 p = from + flat * (i / (float)steps);
+            if (!Physics.Raycast(new Vector3(p.x, probeTop, p.z), Vector3.down, out RaycastHit surface, probeTop + 1f, WorldGeometryMask, QueryTriggerInteraction.Ignore))
+                return false;
+            if (surface.point.y <= RoofStrataThresholdY || Mathf.Abs(surface.point.y - previousY) > 1.2f)
+                return false;
+            previousY = surface.point.y;
+        }
+        return true;
+    }
+
+    /// <summary>Un endroit d'où descendre d'un toit : <c>edge</c> sur le toit, 0,6 m en retrait du
+    /// bord ; <c>street</c> le point de rue juste en dessous, sur le NavMesh.</summary>
+    private struct RoofStreetExit { public Vector3 edge; public Vector3 street; }
+
+    /// <summary>Points du périmètre de <paramref name="building"/> (un tous les ~1,5 m) qui donnent
+    /// réellement sur la rue. Un bord mitoyen (immeubles collés d'un îlot, cas courant en ville) n'en
+    /// fait pas partie : derrière lui il y a le bâtiment voisin, pas le sol — c'est là que l'ancienne
+    /// descente « droit devant » atterrissait sur le toit d'à côté.</summary>
+    private static List<RoofStreetExit> FindStreetExits(BuildingStructure building)
+    {
+        var exits = new List<RoofStreetExit>();
+        List<Vector2> poly = building != null ? building.polygonFootprint : null;
+        if (poly == null || poly.Count < 3) return exits;
+
+        for (int i = 0; i < poly.Count; i++)
+        {
+            Vector2 a = poly[i];
+            Vector2 b = poly[(i + 1) % poly.Count];
+            float length = (b - a).magnitude;
+            if (length < 0.5f) continue;
+            Vector2 along = (b - a) / length;
+            Vector2 normal = new Vector2(along.y, -along.x);
+            int samples = Mathf.Max(1, Mathf.FloorToInt(length / 1.5f));
+            for (int s = 0; s < samples; s++)
+            {
+                Vector2 p = a + along * ((s + 0.5f) * length / samples);
+                // Sens de parcours du polygone OSM inconnu : l'extérieur est le côté hors empreinte.
+                Vector2 outward = building.ContainsPoint2D(p + normal * 0.3f) ? -normal : normal;
+                Vector2 onRoof = p - outward * 0.6f;
+                Vector2 outside = p + outward * 1.2f;
+                if (!building.ContainsPoint2D(onRoof)) continue;
+                if (BuildingStructure.FindBuildingAt(new Vector3(outside.x, 0f, outside.y)) != null) continue;
+                if (!NavMesh.SamplePosition(new Vector3(outside.x, 0.05f, outside.y), out NavMeshHit street, 1.5f, NavMesh.AllAreas)) continue;
+                if (street.position.y > RoofStrataThresholdY) continue;
+                exits.Add(new RoofStreetExit { edge = new Vector3(onRoof.x, 0f, onRoof.y), street = street.position });
+            }
+        }
+        return exits;
+    }
+
+    /// <summary>Longueur du chemin à pied de <paramref name="from"/> à <paramref name="to"/>, ou -1 si
+    /// la cible n'est pas atteignable (une cour intérieure fermée, par exemple).</summary>
+    private static float WalkingDistance(Vector3 from, Vector3 to, NavMeshPath path)
+    {
+        if (!NavMesh.CalculatePath(from, to, NavMesh.AllAreas, path) || path.status != NavMeshPathStatus.PathComplete) return -1f;
+        float total = 0f;
+        for (int i = 1; i < path.corners.Length; i++) total += Vector3.Distance(path.corners[i - 1], path.corners[i]);
+        return total;
+    }
+
+    /// <summary>Choisit par où descendre du toit <paramref name="roof"/> pour rejoindre
+    /// <paramref name="groundTarget"/> : le plus court trajet « sur le toit + à pied dans la rue »,
+    /// en n'acceptant qu'un point de rue d'où la cible est réellement atteignable à pied.</summary>
+    private static bool TryPickRoofExit(BuildingStructure roof, Vector3 from, Vector3 groundTarget, out RoofStreetExit best)
+    {
+        best = default;
+        List<RoofStreetExit> exits = FindStreetExits(roof);
+        if (exits.Count == 0) return false;
+
+        exits.Sort((p, q) => (FlatDistance(p.edge, from) + FlatDistance(groundTarget, p.street))
+                   .CompareTo(FlatDistance(q.edge, from) + FlatDistance(groundTarget, q.street)));
+        best = exits[0];
+
+        if (!NavMesh.SamplePosition(new Vector3(groundTarget.x, 0.05f, groundTarget.z), out NavMeshHit targetNav, 4f, NavMesh.AllAreas))
+            return true; // cible hors NavMesh : on garde le meilleur à vol d'oiseau
+
+        // Les meilleurs candidats à vol d'oiseau sont départagés par le VRAI trajet à pied.
+        var path = new NavMeshPath();
+        float bestCost = float.MaxValue;
+        bool foundReachable = false;
+        for (int i = 0; i < exits.Count && i < 12; i++)
+        {
+            float walk = WalkingDistance(exits[i].street, targetNav.position, path);
+            if (walk < 0f) continue;
+            float cost = FlatDistance(exits[i].edge, from) + walk;
+            if (cost < bestCost) { bestCost = cost; best = exits[i]; foundReachable = true; }
+        }
+        if (!foundReachable) best = exits[0];
+        return true;
+    }
+
+    /// <summary>Point de rue au pied de <paramref name="building"/>, du côté le plus direct entre
+    /// <paramref name="from"/> et <paramref name="roofTarget"/> — d'où escalader sa façade.</summary>
+    private static Vector3? FindClimbFoot(BuildingStructure building, Vector3 from, Vector3 roofTarget)
+    {
+        List<RoofStreetExit> exits = FindStreetExits(building);
+        if (exits.Count == 0) return null;
+        RoofStreetExit best = exits[0];
+        float bestCost = float.MaxValue;
+        foreach (RoofStreetExit e in exits)
+        {
+            float cost = FlatDistance(e.street, from) + FlatDistance(roofTarget, e.edge);
+            if (cost < bestCost) { bestCost = cost; best = e; }
+        }
+        return best.street;
     }
 
     private IEnumerator ExecuteClimb(Vector3 destinationRoof)
@@ -990,54 +1136,48 @@ public partial class UnitAI
         isClimbing = true;
         isPerformingCheckpointAction = true;
         isRooftopSniper = false;
-
-        Vector3 startRoofPos = transform.position;
-        Vector3 horizontalDir = (destinationGround - startRoofPos);
-        horizontalDir.y = 0;
-        Vector3 forwardNorm = (horizontalDir.sqrMagnitude > 0.01f) ? horizontalDir.normalized : transform.forward;
+        LeaveRoofRegistry();
 
         if (agent != null) agent.enabled = false;
 
-        // Rejoindre d'abord le VRAI bord du toit du côté de la cible, puis se laisser descendre juste
-        // au-delà. L'ancien code descendait à 1.2m devant lui sans se demander où était le bord : sur
-        // un immeuble un peu large, ce point est encore au-dessus du toit, et le soldat descendait
-        // donc À TRAVERS le bâtiment jusqu'à la rue.
+        Vector3 startRoofPos = transform.position;
         BuildingStructure roofBuilding = BuildingStructure.FindBuildingAt(startRoofPos);
-        if (roofBuilding != null)
+        Vector3 groundLandPos;
+
+        // 1. Par où descendre : le bord qui donne sur la rue la mieux placée pour la suite du trajet
+        // (TryPickRoofExit). Jusqu'au 2026-10-03, l'unité descendait « droit devant » vers la cible :
+        // dans un îlot d'immeubles mitoyens, ce bord donnait sur le toit voisin, la sonde de sol
+        // trouvait ce toit (descente de 0,6 m relevée sur le serveur) et l'unité était ensuite
+        // téléportée dans la rue par le NavMesh.
+        if (roofBuilding != null && TryPickRoofExit(roofBuilding, startRoofPos, destinationGround, out RoofStreetExit exit))
         {
-            Vector3 farOutside = startRoofPos + forwardNorm * 200f;
-            Vector3 edgeOnRoof = ClampToRooftopEdge(roofBuilding, startRoofPos, farOutside);
-            if ((new Vector2(edgeOnRoof.x - startRoofPos.x, edgeOnRoof.z - startRoofPos.z)).sqrMagnitude > 0.25f)
+            Vector3 edgeOnRoof = new Vector3(exit.edge.x, startRoofPos.y, exit.edge.z);
+            if (FlatDistance(edgeOnRoof, startRoofPos) > 0.5f)
             {
                 yield return StartCoroutine(WalkAcrossRooftop(edgeOnRoof));
-                startRoofPos = transform.position;
                 isRooftopSniper = false; // WalkAcrossRooftop le rétablit d'après la hauteur : on redescend juste après
+                LeaveRoofRegistry();
             }
+            groundLandPos = exit.street;
         }
-
-        // Point d'atterrissage : au-delà du bord, hors de l'empreinte, sur le sol réel.
-        Vector3 landingXZ = startRoofPos + forwardNorm * 1.8f;
-        if (roofBuilding != null)
+        else
         {
+            // Repli (empreinte inconnue, aucun bord sur rue) : droit vers la cible, juste au-delà de
+            // l'empreinte, sur le sol du NavMesh — jamais une sonde qui accroche un toit.
+            Vector3 towardTarget = destinationGround - startRoofPos;
+            towardTarget.y = 0f;
+            Vector3 dir = towardTarget.sqrMagnitude > 0.01f ? towardTarget.normalized : transform.forward;
+            Vector3 landingXZ = startRoofPos + dir * 1.8f;
             int guard = 0;
-            while (roofBuilding.ContainsPoint2D(landingXZ) && guard++ < 20)
-            {
-                landingXZ += forwardNorm * 0.8f;
-            }
+            while (roofBuilding != null && roofBuilding.ContainsPoint2D(landingXZ) && guard++ < 40) landingXZ += dir * 0.8f;
+            groundLandPos = new Vector3(landingXZ.x, 0.05f, landingXZ.z);
+            if (NavMesh.SamplePosition(groundLandPos, out NavMeshHit landNav, 6f, NavMesh.AllAreas) && landNav.position.y <= RoofStrataThresholdY)
+                groundLandPos = landNav.position;
         }
 
-        float landingY = 0.05f;
-        if (Physics.Raycast(new Vector3(landingXZ.x, startRoofPos.y + 1f, landingXZ.z), Vector3.down, out RaycastHit groundProbe, startRoofPos.y + 12f, WorldGeometryMask, QueryTriggerInteraction.Ignore))
-        {
-            landingY = groundProbe.point.y + 0.05f;
-        }
-        else if (NavMesh.SamplePosition(new Vector3(landingXZ.x, 0.05f, landingXZ.z), out NavMeshHit landNav, 6f, NavMesh.AllAreas))
-        {
-            landingY = landNav.position.y;
-        }
-
-        Vector3 groundLandPos = new Vector3(landingXZ.x, landingY, landingXZ.z);
-
+        startRoofPos = transform.position;
+        Vector3 forwardNorm = new Vector3(groundLandPos.x - startRoofPos.x, 0f, groundLandPos.z - startRoofPos.z);
+        forwardNorm = forwardNorm.sqrMagnitude > 0.0001f ? forwardNorm.normalized : transform.forward;
         transform.rotation = Quaternion.LookRotation(forwardNorm);
 
         if (animator != null)

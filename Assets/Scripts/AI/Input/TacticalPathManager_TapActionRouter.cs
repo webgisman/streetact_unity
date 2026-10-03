@@ -84,7 +84,13 @@ public partial class TacticalPathManager
     private static Vector3 ProjectOnRoofSurface(Vector3 hitPoint, BuildingStructure structureUnderTap)
     {
         BuildingStructure roofOwner = structureUnderTap != null ? structureUnderTap : BuildingStructure.FindBuildingAt(hitPoint);
-        if (roofOwner == null) return hitPoint;
+
+        // Point hors de l'empreinte : c'est la RUE, donc un point de sol (2026-10-03). Avant, un tap
+        // de rue qui touchait un décor (arbre, lampadaire, rattaché au bâtiment le plus proche)
+        // devenait un point « à hauteur de toit » suspendu au-dessus de la rue (repli ci-dessous) ;
+        // l'unité perchée marchait alors jusqu'au bord de son toit et s'y arrêtait, au lieu de
+        // descendre — exactement le retour du joueur : « il marche un peu sur le toit et s'arrête ».
+        if (roofOwner == null || !IsOnOrJustInsideFootprint(roofOwner, hitPoint)) return GroundPointUnder(hitPoint);
 
         float probeTop = Mathf.Max(roofOwner.height, hitPoint.y) + 4f;
         if (Physics.Raycast(new Vector3(hitPoint.x, probeTop, hitPoint.z), Vector3.down,
@@ -97,6 +103,29 @@ public partial class TacticalPathManager
 
         float fallbackHeight = (roofOwner.height > 0f) ? roofOwner.height : 6.0f;
         return new Vector3(hitPoint.x, fallbackHeight + 0.05f, hitPoint.z);
+    }
+
+    /// <summary>Dans l'empreinte, ou pile sur son bord : un tap sur la façade proche frappe le mur
+    /// exactement sur l'arête de l'empreinte (voir ProjectOnRoofSurface), où le test de parité
+    /// bascule d'un côté ou de l'autre — 0,5 m vers le centre, le point est franchement dedans.</summary>
+    private static bool IsOnOrJustInsideFootprint(BuildingStructure building, Vector3 point)
+    {
+        if (building.ContainsPoint2D(point)) return true;
+        Vector3 towardCenter = building.centroid - point;
+        towardCenter.y = 0f;
+        return towardCenter.sqrMagnitude > 0.0001f && building.ContainsPoint2D(point + towardCenter.normalized * 0.5f);
+    }
+
+    /// <summary>Point de sol (NavMesh de la rue) sous un point tapé.</summary>
+    private static Vector3 GroundPointUnder(Vector3 point)
+    {
+        Vector3 ground = new Vector3(point.x, 0.05f, point.z);
+        if (UnityEngine.AI.NavMesh.SamplePosition(ground, out UnityEngine.AI.NavMeshHit nav, 4.5f, UnityEngine.AI.NavMesh.AllAreas)
+            && nav.position.y <= UnitAI.RoofStrataThresholdY)
+        {
+            return nav.position;
+        }
+        return ground;
     }
 
     /// <summary>L'unité est-elle (ou sera-t-elle, une fois son tour exécuté) postée sur un toit ?
@@ -307,7 +336,11 @@ public partial class TacticalPathManager
             // de l'autre selon l'erreur flottante du raycast. Deux taps sur le même pixel
             // donnaient des menus différents : ENTRER / MONTER SUR LE TOIT devenait un tirage au
             // sort, et une unité déjà à l'intérieur était renvoyée dehors.
-            if (structure != null && !pointingAtBuilding && unitAI != null && !unitAI.isRooftopSniper
+            //
+            // Vaut aussi pour une unité perchée (2026-10-03) : elle en était exclue, et ce tap de rue
+            // devenait un déplacement sur son propre toit (voir tapOnOwnRooftop) — le menu SOL
+            // propose au contraire de DESCENDRE dans la rue.
+            if (structure != null && !pointingAtBuilding && unitAI != null
                 && TryFallbackAuSolPourBlinde(hitPoint))
             {
                 TapDiagnosticOverlay.Report($"{unitAI.gameObject.name} : façade rasée par la vue oblique près de {structure.gameObject.name}, repli SOL accepté.");
@@ -323,7 +356,7 @@ public partial class TacticalPathManager
             // premier intérêt d'un poste haut — était purement et simplement inatteignable : le
             // seul ordre proposé restait "MONTER SUR LE TOIT", là où l'unité se tenait déjà.
             bool tapOnOwnRooftop = false;
-            if (structure != null && !isRubblePoint && unitAI != null && !unitAI.isTank && IsUnitAlreadyOnOrHeadedToRoof(unitAI))
+            if (structure != null && pointingAtBuilding && !isRubblePoint && unitAI != null && !unitAI.isTank && IsUnitAlreadyOnOrHeadedToRoof(unitAI))
             {
                 // Le bâtiment "tenu" est celui du dernier nœud planifié s'il y en a un (l'unité
                 // n'y est pas encore physiquement), sinon sa position réelle actuelle.

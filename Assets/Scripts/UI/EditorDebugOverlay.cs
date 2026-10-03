@@ -22,7 +22,7 @@ public class EditorDebugOverlay : MonoBehaviour
 
     private GUIStyle boxStyle;
     private GUIStyle labelStyle;
-    private bool collapsed = false;
+    private bool hidden = false;
 
     private string BuildText()
     {
@@ -64,35 +64,35 @@ public class EditorDebugOverlay : MonoBehaviour
 
     private void OnGUI()
     {
+        // Jamais pendant une partie (2026-10-03, retour joueur : « les logs empêchent d'appuyer sur
+        // les boutons ») : le guide ne sert qu'à lancer le test depuis les menus, et ce panneau
+        // dessiné par-dessus l'interface couvrait des boutons du combat. Il interceptait aussi tout
+        // clic dans sa zone pour se replier, ce qui avalait le clic destiné au bouton situé dessous.
+        if (hidden) return;
+        bool onTitleScreen = GameManagerUI.Instance != null && GameManagerUI.Instance.IsStartupSelectionActive;
+        bool inOnlineMenus = Novgov.Network.MultiplayerMatchController.IsFlowActive
+            && !Novgov.Network.MultiplayerMatchController.IsInMatch
+            && !Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive;
+        if (!onTitleScreen && !inOnlineMenus) return; // partie en cours (Solo ou en ligne)
+
         if (boxStyle == null)
         {
             boxStyle = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.UpperLeft };
             labelStyle = new GUIStyle(GUI.skin.label) { fontSize = 14, wordWrap = false, richText = true };
         }
 
-        string text = collapsed ? "<b>MODE TEST</b> (cliquer pour afficher)" : BuildText();
-
-        // En partie : ancré à DROITE, SOUS le radar tactique (TacticalRadarUI dessine aussi en haut-
-        // droite, par-dessus tout le reste en OnGUI) — voir l'historique de ce panneau (2026-09-19).
-        // Dans les menus : en BAS à droite, pour ne pas couvrir l'en-tête (bouton RAPPORTS) de
-        // l'écran Conquête.
+        // En BAS à droite, pour ne pas couvrir l'en-tête (bouton RAPPORTS) de l'écran Conquête.
+        string text = BuildText();
         Vector2 size = labelStyle.CalcSize(new GUIContent(text));
         float x = Screen.width - size.x - 32;
-        bool inGame = Novgov.Network.MultiplayerMatchController.IsInMatch
-            || Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive
-            || !Novgov.Network.MultiplayerMatchController.IsFlowActive;
-        float y = inGame ? TacticalRadarUI.BottomEdgeScreenY + 8f : Screen.height - size.y - 32f;
+        float y = Screen.height - size.y - 32f;
         Rect box = new Rect(x, y, size.x + 24, size.y + 16);
         GUI.Box(box, GUIContent.none, boxStyle);
         GUI.Box(box, GUIContent.none, boxStyle); // double passe : fond plus opaque, lisible sur la carte
         GUI.Label(new Rect(x + 10, y + 8, size.x + 12, size.y), text, labelStyle);
 
-        // Un clic sur le panneau le replie/déplie (il peut masquer une partie de la carte).
-        if (Event.current.type == EventType.MouseDown && box.Contains(Event.current.mousePosition))
-        {
-            collapsed = !collapsed;
-            Event.current.Use();
-        }
+        // Seul ce petit bouton capte un clic (le reste du panneau laisse passer les clics).
+        if (GUI.Button(new Rect(box.xMax - 26, box.y + 4, 22, 22), "×")) hidden = true;
     }
 }
 #endif

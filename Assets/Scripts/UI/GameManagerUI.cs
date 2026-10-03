@@ -70,6 +70,12 @@ public class GameManagerUI : MonoBehaviour
         // l'historique git (ancien journal 08) §7 "Performance client") au double de la vitesse nécessaire.
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 30;
+
+        // 2. Pas de console de développement à l'écran (APK de test = Development Build) : dès la
+        // première erreur, Unity l'affiche en bas de l'écran par-dessus l'interface et elle masque
+        // des boutons (2026-10-03, « les logs empêchent d'appuyer sur les boutons »). Les journaux
+        // restent lisibles via logcat.
+        Debug.developerConsoleEnabled = false;
     }
 
     private void Awake()

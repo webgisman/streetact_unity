@@ -409,10 +409,13 @@ public partial class TacticalPathManager
 
         if (unitIsAlreadyOnRoof)
         {
-            ShowContextMenu("INFANTERIE : DESCENTE VERS RUE", onCancel,
-                ("1. DESCENDRE DU TOIT", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Descendre)),
-                ("2. GUETTER (+50% Défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
-                ("3. ATTENDRE 30 SECONDES", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
+            // L'unité descend par le bord du toit qui donne sur la rue la mieux placée, puis marche
+            // jusqu'au point en contournant les obstacles (UnitAI.ExecuteClimbDown) — les libellés le
+            // disent, plutôt qu'un « GUETTER » qui laissait croire que l'unité resterait sur le toit.
+            ShowContextMenu("INFANTERIE : DESCENDRE DANS LA RUE", onCancel,
+                ("1. DESCENDRE ET Y ALLER", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Descendre)),
+                ("2. DESCENDRE ET GUETTER (+50% Défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("3. DESCENDRE ET ATTENDRE 30 S", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
             );
             return;
         }
