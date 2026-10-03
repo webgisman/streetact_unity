@@ -154,27 +154,5 @@ namespace Novgov.Generation
             CurrentTileX = tileX;
             CurrentTileY = tileY;
         }
-
-        // Exploration locale (pas de demande serveur) — Slippy Map : tileY augmente vers le Sud.
-        public void ExpandNorth() => LoadZone(CurrentTileX, CurrentTileY - 1);
-        public void ExpandSouth() => LoadZone(CurrentTileX, CurrentTileY + 1);
-        public void ExpandEast() => LoadZone(CurrentTileX + 1, CurrentTileY);
-        public void ExpandWest() => LoadZone(CurrentTileX - 1, CurrentTileY);
-
-        // AttackZone() n'existe que sous #if !UNITY_SERVER dans MultiplayerMatchController (tout le
-        // reste de cette classe, hors membres statiques, réagit à un serveur distant — aucune raison
-        // de tourner sur le serveur lui-même). Un build Dedicated Server compile quand même TOUT
-        // Assembly-CSharp, donc un appel non gardé ici casserait la compilation côté serveur — voir
-        // le même piège déjà documenté pour GameManagerUI/UnitSpawnerUI dans
-        // 08-known-issues-and-todo.md.
-#if !UNITY_SERVER
-        /// <summary>Demande au serveur l'attaque/capture de la Zone adjacente indiquée — ne change
-        /// PAS la Zone affichée localement : c'est la réponse du serveur ("zone_captured" ou
-        /// "match_found") qui déclenche le vrai chargement, voir MultiplayerMatchController.</summary>
-        public void AttackNorth() => Novgov.Network.MultiplayerMatchController.EnsureInstance().AttackZone(CurrentTileX, CurrentTileY - 1);
-        public void AttackSouth() => Novgov.Network.MultiplayerMatchController.EnsureInstance().AttackZone(CurrentTileX, CurrentTileY + 1);
-        public void AttackEast() => Novgov.Network.MultiplayerMatchController.EnsureInstance().AttackZone(CurrentTileX + 1, CurrentTileY);
-        public void AttackWest() => Novgov.Network.MultiplayerMatchController.EnsureInstance().AttackZone(CurrentTileX - 1, CurrentTileY);
-#endif
     }
 }

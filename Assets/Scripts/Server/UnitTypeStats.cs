@@ -8,7 +8,7 @@ namespace Novgov.Server
     ///
     /// 2026-09-13 : ce fichier s'appelait MatchState.cs et portait aussi les classes MatchState/
     /// MatchZoneState/MatchGeometry — toutes supprimées avec le reste de la famille "Pure" (voir
-    /// 13-dead-code-removal-2026-09-13.md). Renommé pour refléter qu'il ne reste que ceci, seule
+    /// l'historique git). Renommé pour refléter qu'il ne reste que ceci, seule
     /// partie encore utilisée par du code client (Solo) en plus du serveur.</summary>
     public static class UnitTypeStats
     {

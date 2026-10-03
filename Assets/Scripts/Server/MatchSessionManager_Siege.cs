@@ -9,33 +9,15 @@ using UnityEngine.Networking;
 namespace Novgov.Server
 {
     /// <summary>
-    /// Sièges de Zone PvP asynchrones (2026-09-13, demande explicite : "les joueurs vont vouloir
-    /// attaquer une map déjà conquise... le joueur doit être notifié et organiser tout cela").
-    /// Voir schema.sql §11 pour le schéma complet (zones.building_level/shield_until, table
-    /// public.zone_sieges, fonctions start_siege()/upgrade_building()).
-    ///
-    /// Déroulé en 2 temps, jamais un combat instantané comme l'ancienne Conquête contre un joueur
-    /// (RunConquestSkirmish, toujours vs garnison IA, INCHANGÉE — reste utilisée pour une Zone
-    /// NEUTRE) :
-    ///   1. Le client appelle start_siege() (RPC, schema.sql §11) — hors de ce fichier, avant même
-    ///      d'ouvrir une connexion ici — puis se connecte avec mode="siege_attack_deploy" pour
-    ///      DÉPLOYER (comme un déploiement de Conquête classique). Ce déploiement est capturé
-    ///      (type + nombre de chaque unité, voir SerializeDeployedUnits) et stocké dans
-    ///      zone_sieges.attacker_deployment_json — AUCUN combat ne tourne encore à ce stade.
-    ///   2. Si le défenseur se connecte avant l'échéance (mode="siege_defend_deploy"), il déploie à
-    ///      son tour sa propre garnison — dès que les deux déploiements sont présents, le combat est
-    ///      résolu IMMÉDIATEMENT (ResolveSiegeNow). Sinon, SiegeResolutionLoop détecte l'échéance
-    ///      dépassée et génère automatiquement une défense à partir du roster ACTUEL du défenseur.
-    ///
-    /// Résolution (ResolveSiegeNow) : les deux forces ne sont PAS spawnées à leurs zones de
-    /// déploiement PvP habituelles (à ~70m l'une de l'autre, hors de portée d'engagement) — aucun des
-    /// deux camps n'a d'ordre de mouvement à ce stade (ni attaquant ni défenseur n'est un joueur
-    /// vivant pendant la résolution), donc rien ne les ferait jamais se rapprocher. Elles sont
-    /// spawnées en formation de choc SERRÉE (SpawnClashForce, ~10-15m d'écart) pour que le combat
-    /// auto-engage naturellement (UnitAI_Combat.Update()/GetVisibleEnemy(), qui ne dépend d'AUCUN
-    /// ordre — seulement de la portée/ligne de vue) sans avoir besoin de réintroduire un planificateur
-    /// tactique headless. Un seul appel à RunExecutionPhaseRealEngine suffit alors à trancher (vrai
-    /// moteur Unity, comme partout ailleurs cette session).
+    /// Sièges de quartier — données et RÉSOLUTION AUTOMATIQUE. Un siège se joue normalement comme une
+    /// bataille au tour par tour entre l'attaquant et le défenseur (MatchSessionManager_SiegeBattle.cs).
+    /// Ce fichier gère le cas où ils ne se sont pas retrouvés avant l'échéance (6 h) :
+    /// SiegeResolutionLoop détecte le siège échu et ResolveSiegeNow joue le combat SANS joueur, avec
+    /// les troupes des casernes des deux camps (garnison du défenseur renforcée par le niveau de son
+    /// bâtiment), spawnées en formation de choc serrée (SpawnClashForce) pour que le combat
+    /// auto-engage (portée/ligne de vue, aucun ordre nécessaire). ApplySiegeOutcome applique les
+    /// conséquences (prise, pillage, bouclier, rapports) dans les deux cas. Schéma : schema.sql §11
+    /// (zones.building_level/shield_until, public.zone_sieges, start_siege()/upgrade_building()).
     /// </summary>
     public partial class MatchSessionManager
     {
@@ -85,229 +67,8 @@ namespace Novgov.Server
             }
         }
 
-        private static string SerializeDeployedUnits(List<DeployedUnit> units)
-        {
-            // {"units":[...]} directement — jamais un tableau JSON nu au premier niveau (limitation
-            // de JsonUtility), même choix déjà fait pour matches.paused_roster_json, voir
-            // MatchSessionManager_AsyncPause.cs.
-            return JsonUtility.ToJson(new DeployedUnitList { units = units.ToArray() });
-        }
-
         // =====================================================================
-        // 1. Déploiement de l'ATTAQUANT — mode="siege_attack_deploy"
-        // =====================================================================
-
-        private void HandleSiegeAttackDeployMessage(PlayerConnection conn, NetMessage msg)
-        {
-            if (matchInProgress)
-            {
-                conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "server_busy" });
-                conn.Close();
-                return;
-            }
-            matchInProgress = true;
-            StartCoroutine(ReportInstanceStatus());
-            StartCoroutine(RunSiegeAttackDeployGuarded(conn, msg.siege_id, msg.zone_tile_x, msg.zone_tile_y));
-        }
-
-        /// <summary>Même principe que RunConquestRequestGuarded : une exception non prévue ne doit
-        /// jamais laisser matchInProgress bloqué à "true" pour toujours.</summary>
-        private IEnumerator RunSiegeAttackDeployGuarded(PlayerConnection conn, long siegeId, int tileX, int tileY)
-        {
-            return SafeCoroutineRunner.Run(
-                RunSiegeAttackDeploy(conn, siegeId, tileX, tileY),
-                onComplete: () =>
-                {
-                    matchInProgress = false;
-                    StartCoroutine(ReportInstanceStatus());
-                },
-                onException: (Exception e) =>
-                {
-                    Debug.LogError($"[Siège] Exception pendant le déploiement de l'attaquant (#{siegeId}) : {e}");
-                    try { if (!conn.IsDisconnected) conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "server_error" }); } catch { }
-                    try { conn.Close(); } catch { }
-                    matchInProgress = false;
-                    StartCoroutine(ReportInstanceStatus());
-                }
-            );
-        }
-
-        private IEnumerator RunSiegeAttackDeploy(PlayerConnection conn, long siegeId, int tileX, int tileY)
-        {
-            SiegeRowDto siege = null;
-            yield return FetchSiegeRow(siegeId, s => siege = s);
-            if (siege == null || siege.status != "pending" || siege.attacker_user_id != conn.UserId)
-            {
-                conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "siege_invalid" });
-                conn.Close();
-                yield break;
-            }
-
-            UnitSpawnerUI.Instance.ClearAllUnits();
-            yield return null;
-            yield return LoadZoneOnServer(tileX, tileY);
-
-            CityGenerator.TryReadZoneCacheFromDisk(tileX, tileY, out string cityDataJson);
-            conn.Send(new NetMessage
-            {
-                type = "match_found",
-                match_id = Guid.NewGuid().ToString(),
-                team_id = 1,
-                opponent_username = "Siège",
-                mode = "siege_attack_deploy",
-                zone_tile_x = tileX,
-                zone_tile_y = tileY,
-                city_data_json = cityDataJson
-            });
-
-            yield return RunSiegeDeploymentPhase(conn);
-
-            var attackerUnits = ResolveDeployment(conn, 1, out bool trimmed);
-            string unitsJson = SerializeDeployedUnits(attackerUnits);
-            yield return PostgrestPatch($"/zone_sieges?id=eq.{siegeId}", "{\"attacker_deployment_json\":" + unitsJson + "}");
-
-            UnitSpawnerUI.Instance.ClearAllUnits();
-
-            if (!conn.IsDisconnected)
-                conn.Send(new NetMessage { type = "siege_deploy_ack", success = true, reason = trimmed ? "roster_trimmed" : null });
-            conn.Close();
-
-            // Le défenseur avait peut-être déjà répondu avant nous (rare, mais possible si les deux
-            // joueurs sont en ligne au même moment) — dans ce cas, résout tout de suite plutôt que
-            // d'attendre le prochain passage de SiegeResolutionLoop (jusqu'à 60s).
-            SiegeRowDto refreshed = null;
-            yield return FetchSiegeRow(siegeId, s => refreshed = s);
-            if (refreshed != null && refreshed.status == "pending"
-                && refreshed.defender_deployment_json?.units != null && refreshed.defender_deployment_json.units.Length > 0)
-            {
-                yield return ResolveSiegeNow(siegeId);
-            }
-        }
-
-        // =====================================================================
-        // 2. Déploiement du DÉFENSEUR — mode="siege_defend_deploy"
-        // =====================================================================
-
-        private void HandleSiegeDefendDeployMessage(PlayerConnection conn, NetMessage msg)
-        {
-            if (matchInProgress)
-            {
-                conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "server_busy" });
-                conn.Close();
-                return;
-            }
-            matchInProgress = true;
-            StartCoroutine(ReportInstanceStatus());
-            StartCoroutine(RunSiegeDefendDeployGuarded(conn, msg.siege_id, msg.zone_tile_x, msg.zone_tile_y));
-        }
-
-        private IEnumerator RunSiegeDefendDeployGuarded(PlayerConnection conn, long siegeId, int tileX, int tileY)
-        {
-            return SafeCoroutineRunner.Run(
-                RunSiegeDefendDeploy(conn, siegeId, tileX, tileY),
-                onComplete: () =>
-                {
-                    matchInProgress = false;
-                    StartCoroutine(ReportInstanceStatus());
-                },
-                onException: (Exception e) =>
-                {
-                    Debug.LogError($"[Siège] Exception pendant le déploiement du défenseur (#{siegeId}) : {e}");
-                    try { if (!conn.IsDisconnected) conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "server_error" }); } catch { }
-                    try { conn.Close(); } catch { }
-                    matchInProgress = false;
-                    StartCoroutine(ReportInstanceStatus());
-                }
-            );
-        }
-
-        private IEnumerator RunSiegeDefendDeploy(PlayerConnection conn, long siegeId, int tileX, int tileY)
-        {
-            SiegeRowDto siege = null;
-            yield return FetchSiegeRow(siegeId, s => siege = s);
-            if (siege == null || siege.status != "pending" || siege.defender_user_id != conn.UserId)
-            {
-                conn.Send(new NetMessage { type = "siege_deploy_ack", success = false, reason = "siege_invalid" });
-                conn.Close();
-                yield break;
-            }
-
-            UnitSpawnerUI.Instance.ClearAllUnits();
-            yield return null;
-            yield return LoadZoneOnServer(tileX, tileY);
-
-            CityGenerator.TryReadZoneCacheFromDisk(tileX, tileY, out string cityDataJson);
-            conn.Send(new NetMessage
-            {
-                type = "match_found",
-                match_id = Guid.NewGuid().ToString(),
-                team_id = 2,
-                opponent_username = "Siège",
-                mode = "siege_defend_deploy",
-                zone_tile_x = tileX,
-                zone_tile_y = tileY,
-                city_data_json = cityDataJson
-            });
-
-            yield return RunSiegeDeploymentPhase(conn);
-
-            var defenderUnits = ResolveDeployment(conn, 2, out bool trimmed);
-            string unitsJson = SerializeDeployedUnits(defenderUnits);
-            yield return PostgrestPatch($"/zone_sieges?id=eq.{siegeId}", "{\"defender_deployment_json\":" + unitsJson + "}");
-
-            UnitSpawnerUI.Instance.ClearAllUnits();
-
-            if (!conn.IsDisconnected)
-                conn.Send(new NetMessage { type = "siege_deploy_ack", success = true, reason = trimmed ? "roster_trimmed" : null });
-            conn.Close();
-
-            SiegeRowDto refreshed = null;
-            yield return FetchSiegeRow(siegeId, s => refreshed = s);
-            if (refreshed != null && refreshed.status == "pending"
-                && refreshed.attacker_deployment_json?.units != null && refreshed.attacker_deployment_json.units.Length > 0)
-            {
-                yield return ResolveSiegeNow(siegeId);
-            }
-        }
-
-        /// <summary>Comme RunConquestDeploymentPhase, mais pour UN SEUL camp (l'autre n'existe pas
-        /// encore à ce stade — ni combat, ni auto-déploiement adverse ici, voir tête de fichier) :
-        /// attend jusqu'à DeploymentSeconds que ce joueur soumette "submit_deployment".</summary>
-        private IEnumerator RunSiegeDeploymentPhase(PlayerConnection conn)
-        {
-            conn.HasSubmittedDeployment = false;
-            conn.PendingDeployment = null;
-            conn.MapReady = false;
-
-            float mapWait = MapReadyMaxWaitSeconds;
-            while (mapWait > 0f && !conn.MapReady)
-            {
-                DrainMessages(conn, 0);
-                if (conn.IsDisconnected) yield break;
-                mapWait -= Time.deltaTime;
-                yield return null;
-            }
-
-            float remaining = DeploymentSeconds;
-            int lastTick = -1;
-            while (remaining > 0f && !conn.HasSubmittedDeployment)
-            {
-                DrainMessages(conn, 0);
-                if (conn.IsDisconnected) yield break;
-
-                int secondsLeft = Mathf.CeilToInt(remaining);
-                if (secondsLeft != lastTick)
-                {
-                    lastTick = secondsLeft;
-                    conn.Send(new NetMessage { type = "turn_timer", seconds_remaining = secondsLeft });
-                }
-                remaining -= Time.deltaTime;
-                yield return null;
-            }
-        }
-
-        // =====================================================================
-        // 3. Résolution automatique (échéance dépassée) — boucle de fond
+        // Résolution automatique (échéance dépassée) — boucle de fond
         // =====================================================================
 
         private const float SiegeResolutionPollSeconds = 60f;
@@ -377,7 +138,7 @@ namespace Novgov.Server
         }
 
         // =====================================================================
-        // 4. Résolution du combat — HEADLESS, aucune connexion live des deux côtés
+        // Résolution automatique du combat — HEADLESS (aucun des deux joueurs connecté)
         // =====================================================================
 
         // Formation de choc : les deux forces sont volontairement spawnées à ~12m l'une de l'autre
@@ -482,6 +243,8 @@ namespace Novgov.Server
             }
             onResult(username);
         }
+
+        private static string EscapeJsonString(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
         private IEnumerator WriteSiegeNotification(string userId, string type, string message)
         {

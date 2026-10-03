@@ -4,8 +4,8 @@ using UnityEngine;
 
 /// <summary>
 /// Build Android rapide pour un test personnel à 2 téléphones (signature debug auto-générée par
-/// Unity, pas de keystore custom) — voir Assets/_ServerDocs/multiplayer/08-known-issues-and-todo.md
-/// §8 "Build Android : stripEngineCode..." pour le contexte : avec Custom Keystore actif, Unity ne
+/// Unity, pas de keystore custom) — contexte (ancien journal 08, §8 "Build Android : stripEngineCode...",
+/// dans l'historique git) : avec Custom Keystore actif, Unity ne
 /// copie le fichier .keystore dans le projet Gradle exporté QUE pour un build Release, jamais pour
 /// un Development Build — même si sa config de signature Debug pointe vers ce même keystore. D'où
 /// la désactivation explicite ci-dessous plutôt que de laisser le réglage du projet tel quel.

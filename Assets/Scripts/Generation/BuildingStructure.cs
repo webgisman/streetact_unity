@@ -132,31 +132,6 @@ public class BuildingStructure : MonoBehaviour
         return null;
     }
 
-    /// <summary>Comme <see cref="FindBuildingAt"/>, mais rattache aussi un point situé JUSTE À CÔTÉ
-    /// d'un bâtiment (au plus <paramref name="maxDistance"/> mètres de son contour), au plus proche
-    /// en cas d'ambiguïté. Jumeau exact, côté scène vivante, de
-    /// <c>Novgov.Server.MatchGeometry.FindBuildingAtOrNear</c> — voir cette méthode pour le pourquoi
-    /// détaillé : un point de PORTE est toujours hors de l'empreinte (une porte est générée 5 cm en
-    /// dehors de sa façade), donc un test d'appartenance strict échouait à 100% pour les actions
-    /// ENTRER DANS LE BÂTIMENT et GUETTER PAR LA PORTE.</summary>
-    public static BuildingStructure FindBuildingAtOrNear(Vector3 worldPos, float maxDistance)
-    {
-        BuildingStructure exact = FindBuildingAt(worldPos);
-        if (exact != null) return exact;
-
-        Vector2 pt2D = new Vector2(worldPos.x, worldPos.z);
-        float bestSqr = maxDistance * maxDistance;
-        BuildingStructure best = null;
-        for (int i = 0; i < AllBuildings.Count; i++)
-        {
-            BuildingStructure b = AllBuildings[i];
-            if (b == null || b.polygonFootprint == null || b.polygonFootprint.Count < 3) continue;
-            float d = Novgov.TacticalCore.GeometryMath.SqrDistanceToPolygonEdge(b.polygonFootprint, pt2D);
-            if (d < bestSqr) { bestSqr = d; best = b; }
-        }
-        return best;
-    }
-
     void OnEnable()
     {
         if (!isRegistered)
@@ -221,51 +196,6 @@ public class BuildingStructure : MonoBehaviour
         return unitsInside.Count > 0;
     }
 
-    public void RegisterUnitOnRoof(UnitAI unit)
-    {
-        if (unit != null && !unitsOnRoof.Contains(unit))
-        {
-            unitsOnRoof.Add(unit);
-            if (tacticalVisibility != null) tacticalVisibility.OnUnitsChanged();
-        }
-    }
-
-    public void UnregisterUnitOnRoof(UnitAI unit)
-    {
-        if (unit != null && unitsOnRoof.Contains(unit))
-        {
-            unitsOnRoof.Remove(unit);
-            if (tacticalVisibility != null) tacticalVisibility.OnUnitsChanged();
-        }
-    }
-
-    public bool IsAnyUnitOnRoof()
-    {
-        unitsOnRoof.RemoveAll(u => u == null || u.isDead);
-        return unitsOnRoof.Count > 0;
-    }
-
-    /// <summary>
-    /// Trouve le composant d'interaction de porte le plus proche.
-    /// </summary>
-    public Novgov.Interaction.DoorInteraction GetClosestDoorInteraction(Vector3 fromPos, float maxDist = 3.5f)
-    {
-        if (doorInteractions == null || doorInteractions.Count == 0) return null;
-        Novgov.Interaction.DoorInteraction best = null;
-        float minDist = maxDist;
-        foreach (var di in doorInteractions)
-        {
-            if (di == null || di.doorData == null) continue;
-            float d = Vector3.Distance(fromPos, di.doorData.position);
-            if (d < minDist)
-            {
-                minDist = d;
-                best = di;
-            }
-        }
-        return best;
-    }
-
     /// <summary>
     /// Trouve la porte d'entrée la plus proche d'une position donnée.
     /// </summary>
@@ -313,34 +243,6 @@ public class BuildingStructure : MonoBehaviour
     }
 
     /// <summary>
-    /// Variante de GetClosestWindow qui NE LIT JAMAIS win.isOccupied (champ partagé sur ce
-    /// GameObject, valide pour une seule partie à la fois) — l'appelant fournit son propre filtre de
-    /// disponibilité (voir MatchState.OccupiedWindows, 2026-08-30) : plusieurs parties concurrentes
-    /// utilisant la même carte gèrent chacune leur propre occupation de fenêtre en dehors de ce
-    /// composant, sans jamais se marcher dessus.
-    /// </summary>
-    public BuildingWindow GetClosestWindowIgnoringOccupancy(Vector3 fromPos, System.Func<int, bool> isFree)
-    {
-        if (windows == null || windows.Count == 0) return null;
-
-        BuildingWindow closest = null;
-        float minDist = float.MaxValue;
-
-        foreach (var win in windows)
-        {
-            if (isFree != null && !isFree(win.id)) continue;
-
-            float dist = Vector3.Distance(fromPos, win.position);
-            if (dist < minDist)
-            {
-                minDist = dist;
-                closest = win;
-            }
-        }
-        return closest;
-    }
-
-    /// <summary>
     /// Assigne une unité à une fenêtre de tir.
     /// </summary>
     public bool OccupyWindow(BuildingWindow window, UnitAI unit)
@@ -352,29 +254,4 @@ public class BuildingStructure : MonoBehaviour
         return true;
     }
 
-    /// <summary>
-    /// Libère une fenêtre lorsqu'une unité quitte son poste.
-    /// </summary>
-    public void VacateWindow(BuildingWindow window)
-    {
-        if (window == null) return;
-        window.isOccupied = false;
-        window.occupant = null;
-    }
-
-    /// <summary>
-    /// Libère toutes les fenêtres occupées par une unité donnée.
-    /// </summary>
-    public void VacateAllForUnit(UnitAI unit)
-    {
-        if (windows == null) return;
-        foreach (var win in windows)
-        {
-            if (win.occupant == unit)
-            {
-                win.isOccupied = false;
-                win.occupant = null;
-            }
-        }
-    }
 }

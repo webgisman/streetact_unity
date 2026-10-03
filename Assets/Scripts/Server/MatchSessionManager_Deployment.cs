@@ -24,8 +24,6 @@ namespace Novgov.Server
         public static readonly Vector3 Team2DeploymentZoneCenter = new Vector3(25f, 0f, 25f);
         public const float DeploymentZoneRadius = 22f;
 
-        public static Vector3 DeploymentZoneCenterForTeam(int team) => team == 1 ? Team1DeploymentZoneCenter : Team2DeploymentZoneCenter;
-
         // Plafonds de comptage du déploiement manuel : jusqu'à 6 unités de combat (n'importe quel
         // mélange parmi Fantassin/CharLeopard/VehiculeCanon/Mortier) + jusqu'à 8 barricades (même
         // stock que le dock solo, voir UnitSpawnerUI.maxBarricadesPerTeam) — un placement qui
@@ -90,7 +88,7 @@ namespace Novgov.Server
             // TacticalGridBuilder.DefaultWorldRadius, le même rayon utilisé pour construire la grille
             // tactique) pour éviter qu'un client modifié déploie hors du monde. Un ±25 en dur ici
             // aurait à tort recadré des placements légitimes bien à l'intérieur de la vraie carte
-            // (le rayon réel est 120, pas 25) — voir 08-known-issues-and-todo.md.
+            // (le rayon réel est 120, pas 25) — voir l'historique git (ancien journal 08).
             float r = Novgov.TacticalCore.TacticalGridBuilder.DefaultWorldRadius;
             return new Vector3(Mathf.Clamp(pos.x, -r, r), pos.y, Mathf.Clamp(pos.z, -r, r));
         }
@@ -165,13 +163,8 @@ namespace Novgov.Server
         /// partir du moment où SA propre carte est prête), puis spawn réellement les unités des deux
         /// camps via ResolveDeployment et diffuse le résultat final aux deux clients via
         /// "deployment_result" (voir 03-network-protocol.md). Appelée par RunMatchLive
-        /// (MatchSessionManager_MatchLive.cs) pour Deathmatch/Zone de Contrôle — la Conquête a sa
-        /// propre variante (RunConquestDeploymentPhase, un seul vrai joueur face à une garnison IA).
-        ///
-        /// LIMITATION CONNUE (2026-09-13) : ne répond pas à "city_verify" (2ème étage d'équité
-        /// géométrique) — comme la Conquête, qui a le même manque. Le premier étage d'équité (même
-        /// JSON Overpass envoyé aux deux clients via city_data_json dans match_found) reste actif ;
-        /// seule la resynchronisation de secours en cas de divergence est absente.</summary>
+        /// (MatchSessionManager_MatchLive.cs). Les "city_verify" reçus pendant l'attente des cartes
+        /// sont traités par DrainMessages (voir AnswerCityVerify).</summary>
         private IEnumerator RunDeploymentPhaseLive(string matchId, PlayerConnection p1, PlayerConnection p2)
         {
             p1.HasSubmittedDeployment = false;

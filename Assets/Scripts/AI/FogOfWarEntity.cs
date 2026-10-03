@@ -37,15 +37,6 @@ public class FogOfWarEntity : MonoBehaviour
         }
     }
 
-    public void SetVisibility(bool visible)
-    {
-        if (Novgov.Network.MultiplayerMatchController.IsActive) return;
-        if (unitAI != null)
-        {
-            unitAI.isVisible = true;
-            unitAI.SetVisualsVisibility(true);
-        }
-    }
     
     /// <summary>
     /// Déclenché quand l'unité fait feu : signale un tir en rouge sur le radar pendant 3.2s

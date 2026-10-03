@@ -7,16 +7,12 @@ using UnityEngine;
 namespace Novgov.Server
 {
     /// <summary>
-    /// 2026-09-13 : ce fichier ne contient plus que ce qui reste réellement utilisé après la bascule
-    /// vers le vrai moteur pour tous les modes (voir MatchSessionManager_CombatRealEngine.cs) — le
-    /// calcul de résolution via TacticalResolver.Resolve() (RunExecutionPhase, BuildTacticalUnit/
-    /// BuildUnitOrders/BuildSnapshotsFromEvents/FilterSnapshotsForTeam/ComputeVisibleUnitIds, ainsi que
-    /// RunPlanningPhase/ApplyForPlayer, plus appelés par personne) a été supprimé — voir
-    /// 13-dead-code-removal-2026-09-13.md pour le détail de ce qui a été retiré et pourquoi.
+    /// Réception des messages d'un joueur pendant une bataille (ordres, déploiement, accusés de
+    /// rejeu, vérification de géométrie), application des ordres aux unités, et capture d'un
+    /// snapshot de simulation. La simulation elle-même : MatchSessionManager_CombatRealEngine.cs.
     /// </summary>
     public partial class MatchSessionManager
     {
-        private string currentMatchMode = "deathmatch";
         private const int TickDurationMs = 250; // durée visuelle d'un pas de résolution, pour le rythme de lecture côté client
 
         private void DrainMessages(PlayerConnection conn, int turnNumber)
@@ -40,6 +36,10 @@ namespace Novgov.Server
                 else if (msg.type == "deployment_ready")
                 {
                     conn.MapReady = true;
+                }
+                else if (msg.type == "city_verify")
+                {
+                    AnswerCityVerify(conn, msg.city_building_hash);
                 }
                 else if (msg.type == "turn_result_ack" && msg.turn_number == turnNumber)
                 {
@@ -132,18 +132,9 @@ namespace Novgov.Server
                 };
             }
 
-            float zoneProgress1 = 0f, zoneProgress2 = 0f;
-            if (currentMatchMode == "zone_control" && CaptureZone.Instance != null)
-            {
-                zoneProgress1 = CaptureZone.Instance.ProgressTeam1;
-                zoneProgress2 = CaptureZone.Instance.ProgressTeam2;
-            }
-
             return new Snapshot { 
                 t = t, 
                 units = states, 
-                zone_progress_team1 = zoneProgress1, 
-                zone_progress_team2 = zoneProgress2, 
                 destroyed_building_ids = destroyedBuildingIdsThisTick,
                 destroyed_barrier_ids = destroyedBarrierIdsThisTick
             };

@@ -192,27 +192,6 @@
     -unity-font-style: bold;
 }
 
-/* En-tête de groupe dans une liste d'actions plein-écran (ex: ModeSelectScreen, "OPÉRATIONS DE
-   COMBAT" / "LOGISTIQUE") — nom distinct de DeploymentDockScreen.uss ".section-header" (même rôle,
-   mais taille pensée pour ce dock compact précis) pour qu'aucune des deux règles ne puisse jamais
-   écraser l'autre selon l'ordre de résolution des feuilles de style. */
-.hub-section-header {
-    color: var(--color-text-dim);
-    font-size: 20px;
-    -unity-font-style: bold;
-    letter-spacing: 1.5px;
-    margin-top: 16px;
-    margin-bottom: 8px;
-    margin-left: 4px;
-}
-
-.hub-separator {
-    height: 1px;
-    background-color: var(--color-panel-border-dim);
-    margin-top: 6px;
-    margin-bottom: 10px;
-}
-
 /* Bandeau d'information contextuelle en haut d'un écran de gestion (Caserne/Bâtiments/Sièges/
    Notifications) — remplace le fond bleu-gris arbitraire (rgba(20,25,30,0.9)) + texte blanc brut
    utilisé jusqu'ici sur ces 4 écrans : il ne réutilisait aucun token de Theme.tss, contrastant avec
@@ -247,19 +226,6 @@
     border-radius: 2px;
     padding: 10px 12px;
     margin-bottom: 14px;
-}
-
-/* "Chip" compact (profil, jauge de ressource) flottant en haut d'un écran plein cadre — même
-   relief que ".panel" mais padding réduit, pensé pour un contenu court sur une ou deux lignes. */
-.hub-chip {
-    background-color: var(--color-panel);
-    border-width: 2px;
-    border-top-color: var(--color-panel-border);
-    border-left-color: var(--color-panel-border);
-    border-right-color: var(--color-panel-border-dim);
-    border-bottom-color: var(--color-panel-border-dim);
-    border-radius: 2px;
-    padding: 10px 14px;
 }
 
 /* Action secondaire discrète (ex: Déconnexion) qui ne doit jamais rivaliser visuellement avec les
@@ -506,15 +472,6 @@ Button.btn-danger:hover {
     border-left-color: var(--color-danger-hover);
 }
 
-/* Boutons icône carrés (emoji seul) : cible tactile carrée minimum 56x56. */
-Button.btn-icon {
-    width: 64px;
-    height: 64px;
-    min-height: 64px;
-    padding: 0;
-    font-size: 34px;
-}
-
 /* Boutons flottants sur des panneaux "glass" (dock, menu contextuel) : fond
    translucide mais jamais sous ~0.14 d'alpha pour rester visible sans survol. */
 Button.btn-glass {
@@ -531,45 +488,6 @@ Button.btn-glass:hover {
 Button.btn-glass:active {
     background-color: var(--color-glass-fill-active);
     scale: 0.97 0.97;
-}
-
-Button.btn-team1 {
-    border-top-color: var(--color-team1);
-    border-left-color: var(--color-team1);
-    border-width: 3px;
-}
-
-Button.btn-team2 {
-    border-top-color: var(--color-team2);
-    border-left-color: var(--color-team2);
-    border-width: 3px;
-}
-
-/* Zone neutre (jamais capturée) sur l'écran Carte des Zones — distinct de btn-team1/btn-team2
-   pour ne pas laisser croire à une appartenance "alliée" ou "ennemie" qui n'existe pas encore. */
-Button.btn-zone-neutral {
-    border-top-color: var(--color-panel-border-dim);
-    border-left-color: var(--color-panel-border-dim);
-    border-width: 3px;
-}
-
-/* 2026-09-06 : cases de la mini-carte 3x3 (ZoneMapScreen.uxml, "map-grid") — ce sont des
-   VisualElement, pas des Button, donc les règles Button.btn-team1/team2/zone-neutral ci-dessus
-   (bordure seulement) ne s'appliquaient JAMAIS à elles : ces cases restaient invisibles, toujours
-   dans leur état par défaut, quelle que soit la vraie propriété de la Zone voisine. Remplissage
-   plein (pas juste une bordure) pour que ce soit visible d'un coup d'œil, avec un symbole (voir
-   ZoneMapController.UpdateMiniMapCell) en plus de la couleur pour rester lisible sans se fier
-   uniquement à la teinte. */
-.zonecell-neutral {
-    background-color: var(--color-panel-border-dim);
-}
-
-.zonecell-mine {
-    background-color: var(--color-team1);
-}
-
-.zonecell-enemy {
-    background-color: var(--color-team2);
 }
 
 /* --- Barre d'escouade (portraits d'unités, coin haut-droit — cf. Commandos) --- */
@@ -610,28 +528,6 @@ Button.squad-portrait-btn.selected {
     border-right-color: var(--color-accent-hover);
     border-bottom-color: var(--color-accent-hover);
     scale: 1.15 1.15;
-}
-
-.squad-portrait-hp-bg {
-    width: 56px;
-    height: 6px;
-    margin-top: 5px;
-    background-color: rgba(0, 0, 0, 0.55);
-    border-width: 1px;
-    border-color: rgba(0, 0, 0, 0.6);
-    border-radius: 1px;
-    overflow: hidden;
-}
-
-.squad-portrait-hp-fill {
-    height: 100%;
-    background-color: var(--color-success);
-    transition-property: width, background-color;
-    transition-duration: 0.2s;
-}
-
-.squad-portrait-hp-fill.low {
-    background-color: var(--color-danger);
 }
 
 /* Pastille de comptage (coin bas-droit d'un portrait d'escouade, voir TacticalPathManager_UI.
@@ -732,21 +628,3 @@ TextField > .unity-text-field__input {
     letter-spacing: 1px;
 }
 
-.progress-bar-bg {
-    background-color: rgb(14, 13, 9);
-    border-width: 1px;
-    border-color: var(--color-panel-border-dim);
-    height: 24px;
-    border-radius: 1px;
-    overflow: hidden;
-}
-
-.progress-bar-fill-team1 {
-    background-color: var(--color-team1);
-    height: 100%;
-}
-
-.progress-bar-fill-team2 {
-    background-color: var(--color-team2);
-    height: 100%;
-}

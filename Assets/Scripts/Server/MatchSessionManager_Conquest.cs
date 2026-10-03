@@ -1,7 +1,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using Novgov.Network;
 using Novgov.TacticalCore;
@@ -10,62 +9,26 @@ using UnityEngine.Networking;
 
 namespace Novgov.Server
 {
+    /// <summary>
+    /// Conquête territoriale — Zones de Conquête (= quartiers, grille Slippy Map fixe, zoom
+    /// CityGenerator.ZONE_ZOOM) :
+    ///   - quartier LIBRE -> capture instantanée, sans combat (mode "conquest", ci-dessous) ;
+    ///   - quartier déjà tenu par un autre joueur -> SIÈGE, une bataille au tour par tour contre son
+    ///     propriétaire (MatchSessionManager_SiegeBattle.cs / _Siege.cs). Jamais de combat contre une
+    ///     garnison IA : la Conquête n'utilise pas d'IA (2026-10-03).
+    /// Contient aussi les outils partagés de persistance des Zones (lecture du propriétaire, capture
+    /// atomique, pillage) et le chargement de la géométrie réelle d'un quartier sur le serveur.
+    /// </summary>
     public partial class MatchSessionManager
     {
-        public static bool IsHQDestroyedThisMatch = false;
-
         private const int ConquestCaptureRatingGain = 8;
-        private const int ConquestFailedAttackRatingLoss = 4;
-
-        /// <summary>Petit ajustement de classement pour un combat de conquête (NOUVEAU, 2026-08-30) —
-        /// le calcul ELO complet (UpdateRatings) suppose un adversaire humain noté ; ici
-        /// l'"adversaire" est une garnison IA sans rating propre, donc un delta fixe plutôt qu'un
-        /// calcul ELO entre deux joueurs. Objectif : donner une raison visible (le classement déjà
-        /// affiché sur le leaderboard) de jouer ce mode, qui n'avait jusqu'ici AUCUNE récompense
-        /// mesurable (voir rapport d'audit §2.B) — capturer une Zone ne faisait qu'écrire une ligne
-        /// invisible en base, sans aucun impact sur rien de visible par le joueur.</summary>
-        private IEnumerator ApplyConquestRatingDelta(PlayerConnection attacker, bool captured, bool won)
-        {
-            // "won mais pas captured" = combat gagné, mais un autre attaquant a pris la Zone entre
-            // temps (voir le champ reason="zone_lost_race" dans RunConquestSkirmish) : ni récompense
-            // ni pénalité, ce n'est pas la faute du joueur.
-            int delta = captured ? ConquestCaptureRatingGain : (won ? 0 : -ConquestFailedAttackRatingLoss);
-            if (delta == 0)
-            {
-                attacker.NewRating = 0;
-                attacker.RatingDelta = 0;
-                yield break;
-            }
-
-            // Verrouillage optimiste partagé avec UpdateRatings (MatchSessionManager_Persistence.cs)
-            // — ce même joueur peut avoir un Deathmatch qui se termine sur une autre instance à
-            // quelques centaines de ms d'écart (rapport d'audit §4).
-            yield return ApplyRatingDeltaWithRetry(attacker, delta);
-        }
-
-        // =====================================================================
-        // Conquête territoriale — Zones de Conquête (grille Slippy Map fixe, Zoom
-        // CityGenerator.ZONE_ZOOM). Portée V1 (voir tête de classe) :
-        //   - Zone neutre (jamais capturée) -> capture INSTANTANÉE, pas de combat.
-        //   - Zone déjà possédée par un autre joueur -> combat contre une garnison IA
-        //     (TacticalAIPlanner, même mécanisme que les ennemis du mode Solo), PAS contre le
-        //     propriétaire réel en direct : celui-ci n'est pas forcément connecté au moment de
-        //     l'attaque, et notifier/faire patienter un joueur en ligne pour qu'il défende en
-        //     direct nécessiterait un système de siège asynchrone qui n'existe pas encore
-        //     (à ajouter plus tard, voir 08-known-issues-and-todo.md).
-        //   - Contrairement à deathmatch/zone_control (qui gardent la carte par défaut fixe,
-        //     chargée une fois par SetupWorldOnce), un combat de conquête charge la géométrie
-        //     RÉELLE de la Zone attaquée via CityGenerator/MapTileLoader — exactement le même
-        //     (tileX, tileY) que celui utilisé côté client, ce qui garantit un NavMesh et des
-        //     bâtiments identiques sans jamais transmettre la géométrie sur le réseau.
-        // =====================================================================
 
         private void HandleConquestMessage(PlayerConnection conn, NetMessage msg)
         {
             if (matchInProgress)
             {
-                // Un seul combat/emplacement de simulation à la fois sur ce serveur (voir "Portée
-                // V1" en tête de classe) — le client peut retenter une nouvelle demande plus tard.
+                // La scène serveur est occupée (bataille de siège en cours) — le client peut retenter
+                // une nouvelle demande plus tard.
                 conn.Send(new NetMessage { type = "zone_attack_result", success = false, reason = "server_busy", zone_tile_x = msg.zone_tile_x, zone_tile_y = msg.zone_tile_y });
                 conn.Close();
                 return;
@@ -76,8 +39,8 @@ namespace Novgov.Server
             StartCoroutine(RunConquestRequestGuarded(conn, msg.zone_tile_x, msg.zone_tile_y));
         }
 
-        /// <summary>Même principe que RunMatchGuarded : une exception non prévue ne doit jamais
-        /// laisser matchInProgress bloqué à "true" pour toujours.</summary>
+        /// <summary>Une exception non prévue ne doit jamais laisser matchInProgress bloqué à "true"
+        /// pour toujours.</summary>
         private IEnumerator RunConquestRequestGuarded(PlayerConnection conn, int tileX, int tileY)
         {
             return SafeCoroutineRunner.Run(
@@ -99,7 +62,7 @@ namespace Novgov.Server
         }
 
         /// <summary>Vrai si (bx,by) est adjacente à (ax,ay) au sens des 4 directions cardinales
-        /// (Nord/Sud/Est/Ouest, jamais diagonale — voir ZoneManager.AttackNorth/South/East/West).</summary>
+        /// (Nord/Sud/Est/Ouest, jamais diagonale).</summary>
         private static bool IsAdjacentTile(int ax, int ay, int bx, int by)
         {
             return (ax == bx && Mathf.Abs(ay - by) == 1) || (ay == by && Mathf.Abs(ax - bx) == 1);
@@ -147,7 +110,7 @@ namespace Novgov.Server
                     // gagné contre une garnison : doit rapporter le même delta de classement, sinon
                     // le geste le plus fréquent du mode Conquête (capturer du neutre) reste sans
                     // aucune récompense visible (voir rapport d'audit jouabilité, défaut bloquant #3).
-                    yield return ApplyConquestRatingDelta(attacker, captured: true, won: true);
+                    yield return ApplyRatingDeltaWithRetry(attacker, ConquestCaptureRatingGain);
                     attacker.Send(new NetMessage { type = "zone_captured", success = true, zone_tile_x = tileX, zone_tile_y = tileY, your_new_rating = attacker.NewRating, rating_delta = attacker.RatingDelta });
                 }
                 else
@@ -156,166 +119,19 @@ namespace Novgov.Server
                 yield break;
             }
 
-            yield return RunConquestSkirmish(attacker, tileX, tileY, ownerId);
-        }
-
-        private IEnumerator RunConquestSkirmish(PlayerConnection attacker, int tileX, int tileY, string defenderOwnerId)
-        {
-            attacker.TeamId = 1;
-            string matchId = Guid.NewGuid().ToString();
-
-            yield return FetchUsername(attacker);
-
-            if (UnitSpawnerUI.Instance == null)
-            {
-                Debug.LogError("[MatchSessionManager] UnitSpawnerUI.Instance introuvable — la scène serveur est-elle correctement chargée ?");
-                attacker.Send(new NetMessage { type = "zone_attack_result", success = false, reason = "server_error", zone_tile_x = tileX, zone_tile_y = tileY });
-                attacker.Close();
-                yield break;
-            }
-
-            UnitSpawnerUI.Instance.ClearAllUnits();
-            yield return null;
-
-            yield return LoadZoneOnServer(tileX, tileY);
-
-            // Voir le même correctif dans RunMatch (deathmatch/zone_control) : la Conquête vise
-            // TOUJOURS une vraie tuile (jamais "Default"), le JSON est donc systématiquement attendu.
-            string cityDataJson = null;
-            if (!CityGenerator.TryReadZoneCacheFromDisk(tileX, tileY, out cityDataJson))
-            {
-                Debug.LogWarning($"[MatchSessionManager] JSON de la Zone ({tileX},{tileY}) introuvable sur disque après LoadZoneOnServer — le client va se rabattre sur sa propre génération (risque d'iniquité résiduel).");
-            }
-            attacker.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 1, opponent_username = "Garnison ennemie", mode = "conquest", zone_tile_x = tileX, zone_tile_y = tileY, city_data_json = cityDataJson });
-
-            yield return CreateMatchRecord(matchId, attacker, null, "conquest");
-
-            yield return RunConquestDeploymentPhase(attacker, defenderOwnerId);
-
-            // Le camp attaquant est piloté par un vrai joueur. La garnison IA (équipe 2) GARDE
-            // isPlayerControlled à sa valeur par défaut (false) : TacticalAIPlanner.PlanTurnForUnit()
-            // planifie donc pour elle exactement comme pour un ennemi en mode Solo (voir
-            // RunConquestPlanningPhase et UnitAI_Movement.PlanifierTourIA).
-            foreach (var unit in UnitAI.AllLivingUnits.Where(u => u.teamID == 1)) unit.isPlayerControlled = true;
-
-            int turnNumber = 1;
-            bool matchOver = false;
-            int winnerTeam = 0;
-            ConsecutiveMissedTurns = 0;
-            IsHQDestroyedThisMatch = false;
-
-            while (!matchOver)
-            {
-                yield return RunConquestPlanningPhase(attacker, turnNumber);
-
-                if (IsHQDestroyedThisMatch)
-                {
-                    Debug.Log("[Conquête] QG DÉTRUIT ! L'attaquant remporte une victoire totale.");
-                    matchOver = true;
-                    winnerTeam = 1;
-                    break;
-                }
-
-                if (attacker.IsDisconnected)
-                {
-                    matchOver = true;
-                    winnerTeam = 0;
-                    break;
-                }
-
-                // Abandon sur inactivité prolongée : sans ça, un joueur connecté mais qui ne joue plus
-                // (application en arrière-plan) immobilisait l'unique créneau de combat vivant de
-                // l'instance jusqu'au plafond de 60 tours, soit près d'une heure.
-                if (ConsecutiveMissedTurns >= MaxConsecutiveMissedTurns)
-                {
-                    Debug.Log($"[Conquête] Abandon : {ConsecutiveMissedTurns} tours consécutifs sans ordre — la garnison l'emporte et l'instance est libérée.");
-                    matchOver = true;
-                    winnerTeam = 2; // la garnison tient la Zone
-                    break;
-                }
-
-                // 2026-09-13 : RunExecutionPhaseRealEngine (vrai moteur, MatchSessionManager_
-                // CombatRealEngine.cs) remplace RunExecutionPhase (TacticalResolver.Resolve()) pour
-                // tous les modes serveur — demande explicite de l'utilisateur. Sans risque pour la
-                // garnison IA : RunConquestPlanningPhase appelle déjà u.PlanifierTourIA() pour elle
-                // PENDANT la planification (ligne ~535 plus bas dans ce fichier), son tacticalPath est
-                // donc déjà rempli avant cet appel, exactement comme un ordre humain.
-                yield return RunExecutionPhaseRealEngine(turnNumber, attacker, null);
-
-                int attackerAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 1);
-                int garrisonAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 2);
-
-                if (IsHQDestroyedThisMatch)
-                {
-                    Debug.Log("[Conquête] QG DÉTRUIT ! L'attaquant remporte une victoire totale.");
-                    matchOver = true;
-                    winnerTeam = 1;
-                }
-                else if (attackerAlive == 0 || garrisonAlive == 0)
-                {
-                    matchOver = true;
-                    winnerTeam = (attackerAlive == 0 && garrisonAlive == 0) ? 0 : (attackerAlive == 0 ? 2 : 1);
-                }
-                else if (turnNumber >= DeathmatchTurnCap)
-                {
-                    matchOver = true;
-                    int attackerHealth = UnitAI.AllLivingUnits.Where(u => u.teamID == 1).Sum(u => u.health);
-                    int garrisonHealth = UnitAI.AllLivingUnits.Where(u => u.teamID == 2).Sum(u => u.health);
-                    if (attackerAlive != garrisonAlive) winnerTeam = attackerAlive > garrisonAlive ? 1 : 2;
-                    else if (attackerHealth != garrisonHealth) winnerTeam = attackerHealth > garrisonHealth ? 1 : 2;
-                    else winnerTeam = 0;
-                }
-
-                turnNumber++;
-            }
-
-            bool won = winnerTeam == 1;
-            bool captureConfirmed = false;
-            if (won)
-            {
-                // expectedPriorOwner=defenderOwnerId : si la Zone a changé de propriétaire entre le
-                // début de ce combat et maintenant (un autre combat contre la même garnison, lancé en
-                // parallèle sur une autre instance du pool, a capturé la Zone en premier — voir
-                // rapport d'audit §1.1), cette écriture conditionnelle échoue proprement au lieu
-                // d'écraser silencieusement le résultat de l'autre combat.
-                yield return CaptureZoneInDb(tileX, tileY, attacker.UserId, defenderOwnerId, ok => captureConfirmed = ok);
-            }
-            bool captured = won && captureConfirmed;
-
-            if (captured && !string.IsNullOrEmpty(defenderOwnerId))
-            {
-                yield return LootActionPoints(attacker.UserId, defenderOwnerId);
-            }
-
-            yield return ApplyConquestRatingDelta(attacker, captured, won);
-
-            if (!attacker.IsDisconnected)
-            {
-                attacker.Send(new NetMessage
-                {
-                    type = "match_over",
-                    winner_team = winnerTeam,
-                    zone_tile_x = tileX,
-                    zone_tile_y = tileY,
-                    success = captured,
-                    // "zone_lost_race" : le combat a été GAGNÉ (winnerTeam==1) mais un autre
-                    // attaquant a capturé cette Zone entre-temps — distinct d'une simple défaite
-                    // contre la garnison, le client doit afficher un message différent.
-                    reason = (won && !captureConfirmed) ? "zone_lost_race" : "",
-                    your_new_rating = attacker.NewRating,
-                    rating_delta = attacker.RatingDelta
-                });
-            }
-
-            yield return CloseMatchRecord(matchId, winnerTeam);
+            // Quartier déjà tenu par un autre joueur : jamais de combat ici (plus de "garnison IA" —
+            // pas d'IA en multijoueur, 2026-10-03). Il se prend par un SIÈGE, une bataille au tour par
+            // tour contre son propriétaire (voir MatchSessionManager_SiegeBattle.cs) ; le client à
+            // jour ne l'envoie de toute façon jamais ici, sauf course (quartier pris entre-temps).
+            attacker.Send(new NetMessage { type = "zone_attack_result", success = false, reason = "zone_owned", zone_tile_x = tileX, zone_tile_y = tileY });
             attacker.Close();
         }
 
         [Serializable] private class PillageResult { public int stolen_ap; public int attacker_new_ap; }
         [Serializable] private class PillageQueryResult { public PillageResult[] items; }
 
-        /// <summary>Pille les Points d'Action du défenseur (ramené à 0) vers l'attaquant, lors d'une
-        /// capture de Zone déjà possédée par un vrai joueur.
+        /// <summary>Pille les Points d'Action du défenseur (ramené à 0) vers l'attaquant, quand un
+        /// siège lui prend un quartier (voir MatchSessionManager_Siege.ApplySiegeOutcome).
         /// CORRECTIF 2026-09-19 : Utilisation d'un appel RPC transactionnel (pillage_action_points)
         /// plutôt qu'un schéma Fetch -> Patch, pour éviter une condition de course permettant
         /// de dupliquer des AP si un joueur dépensait ses points pile au moment du pillage.
@@ -357,344 +173,6 @@ namespace Novgov.Server
             }
         }
 
-        // Renfort de garnison IA en fonction de la taille du territoire du défenseur (NOUVEAU,
-        // 2026-08-30 — voir rapport d'audit §2.B "rich get richer sans mécanique de retour") :
-        // jusqu'ici la garnison défendant une Zone était TOUJOURS la même composition fixe, quelle
-        // que soit la valeur stratégique de la Zone ou la taille de l'empire du propriétaire — un
-        // joueur assidu pouvait donc étendre son territoire indéfiniment sans jamais rencontrer de
-        // résistance croissante. Un empire plus grand devient maintenant mécaniquement plus difficile
-        // à continuer d'agrandir, sans avoir besoin d'un système d'économie/ressources complet.
-        private static int GarrisonExtraInfantryForZoneCount(int zoneCount)
-        {
-            if (zoneCount >= 10) return 3;
-            if (zoneCount >= 6) return 2;
-            if (zoneCount >= 3) return 1;
-            return 0;
-        }
-
-        /// <summary>Comme RunDeploymentPhase, mais un seul vrai joueur (l'attaquant, équipe 1) : la
-        /// garnison IA (équipe 2) est auto-déployée immédiatement, sans attendre — elle n'a pas de
-        /// timer de joueur à respecter. Sa force est renforcée selon le nombre de Zones déjà
-        /// possédées par le défenseur (voir GarrisonExtraInfantryForZoneCount).</summary>
-        private IEnumerator RunConquestDeploymentPhase(PlayerConnection attacker, string defenderOwnerId)
-        {
-            attacker.HasSubmittedDeployment = false;
-            attacker.PendingDeployment = null;
-            attacker.MapReady = false;
-
-            DateTime conquestDeployStartUtc = DateTime.UtcNow;
-
-            // Même filet que RunDeploymentPhase : LoadZoneOnServer a déjà attendu la génération
-            // CÔTÉ SERVEUR, mais le client attaquant doit aussi charger cette même Zone de son côté
-            // (LoadConquestZoneThenOpenDeployment) avant de voir son dock — sans attendre son
-            // "deployment_ready", le timer de 45s pouvait s'écouler entièrement pendant ce chargement.
-            float mapWait = MapReadyMaxWaitSeconds;
-            while (mapWait > 0f && !attacker.MapReady)
-            {
-                DrainMessages(attacker, 0);
-                if (attacker.IsDisconnected) yield break;
-                mapWait -= Time.deltaTime;
-                yield return null;
-            }
-            Debug.Log($"[Timing] Conquête — MapReady terminé après {(DateTime.UtcNow - conquestDeployStartUtc).TotalSeconds:F1}s réelles.");
-
-            DateTime conquestCountdownStartUtc = DateTime.UtcNow;
-            float remaining = DeploymentSeconds;
-            // Même compte à rebours de déploiement que dans RunDeploymentPhasePure (voir là-bas).
-            int lastDeployTick = -1;
-            while (remaining > 0f && !attacker.HasSubmittedDeployment)
-            {
-                DrainMessages(attacker, 0);
-                if (attacker.IsDisconnected) yield break;
-
-                int secondsLeft = Mathf.CeilToInt(remaining);
-                if (secondsLeft != lastDeployTick)
-                {
-                    lastDeployTick = secondsLeft;
-                    attacker.Send(new NetMessage { type = "turn_timer", seconds_remaining = secondsLeft });
-                }
-
-                remaining -= Time.deltaTime;
-                yield return null;
-            }
-            Debug.Log($"[Timing] Conquête — compte à rebours de déploiement terminé après {(DateTime.UtcNow - conquestCountdownStartUtc).TotalSeconds:F1}s réelles (attendu {DeploymentSeconds}s), HasSubmittedDeployment={attacker.HasSubmittedDeployment}.");
-
-            var attackerUnits = ResolveDeployment(attacker, 1, out bool attackerRosterTrimmed);
-
-            int extraGarrisonInfantry = 0;
-            if (!string.IsNullOrEmpty(defenderOwnerId))
-            {
-                // Fetch Defender Roster and Deploy
-                string url = $"{GameServerBootstrap.RestUrl}/player_roster?user_id=eq.{defenderOwnerId}";
-                using var req = UnityWebRequest.Get(url);
-                req.SetRequestHeader("apikey", GameServerBootstrap.ServiceRoleKey);
-                req.SetRequestHeader("Authorization", "Bearer " + GameServerBootstrap.ServiceRoleKey);
-                yield return req.SendWebRequest();
-                
-                Novgov.Auth.PlayerRosterItem[] defenderRoster = null;
-                if (req.result == UnityWebRequest.Result.Success)
-                {
-                    try {
-                        defenderRoster = Novgov.Auth.JsonHelper.FromJson<Novgov.Auth.PlayerRosterItem>(req.downloadHandler.text);
-                    } catch {}
-                }
-
-                if (defenderRoster != null && defenderRoster.Length > 0)
-                {
-                    Debug.Log($"[Conquête] Déploiement automatique du roster pour le défenseur {defenderOwnerId}");
-                    UnitSpawnerUI.Instance.AutoDeployRoster(2, defenderRoster);
-                }
-                else
-                {
-                    // Fallback
-                    List<(int x, int y)> defenderZones = null;
-                    yield return FetchOwnedZones(defenderOwnerId, list => defenderZones = list);
-                    extraGarrisonInfantry = GarrisonExtraInfantryForZoneCount(defenderZones?.Count ?? 0);
-                    UnitSpawnerUI.Instance.AutoDeployTeamFallback(2, extraGarrisonInfantry);
-                }
-            }
-            else
-            {
-                UnitSpawnerUI.Instance.AutoDeployTeamFallback(2, extraGarrisonInfantry);
-            }
-
-            // Brouillard de guerre au déploiement (voir RunDeploymentPhase) : l'attaquant ne voit que
-            // SA PROPRE escouade avant le premier tour — la garnison IA n'existera côté client qu'une
-            // fois repérée en jeu (voir PlaySnapshotsCoroutine).
-            if (!attacker.IsDisconnected)
-                attacker.Send(new NetMessage
-                {
-                    type = "deployment_result",
-                    deployed_units = attackerUnits.ToArray(),
-                    // "roster_trimmed" : au moins un placement soumis dépassait le budget (nombre ou
-                    // points) et a été écarté INDIVIDUELLEMENT — le reste du déploiement choisi par
-                    // le joueur est conservé tel quel (voir FilterRosterToBudget). Le client affiche
-                    // un avertissement au lieu de laisser le joueur découvrir la différence sans
-                    // explication.
-                    reason = attackerRosterTrimmed ? "roster_trimmed" : null
-                });
-        }
-
-        /// <summary>Comme RunPlanningPhase, mais la garnison IA planifie immédiatement (pas
-        /// d'attente : elle n'a pas de timer de joueur), exactement comme un ennemi en mode Solo.</summary>
-        private IEnumerator RunConquestPlanningPhase(PlayerConnection attacker, int turnNumber)
-        {
-            attacker.HasSubmittedThisTurn = false;
-
-            foreach (var u in UnitAI.AllLivingUnits.Where(u => u.teamID == 2 && !u.isDead))
-            {
-                u.PlanifierTourIA();
-            }
-
-            DateTime conquestPlanningStartUtc = DateTime.UtcNow;
-            float remaining = PlanningSeconds;
-            int lastTick = -1;
-
-            while (remaining > 0f && !attacker.HasSubmittedThisTurn)
-            {
-                DrainMessages(attacker, turnNumber);
-                if (attacker.IsDisconnected) yield break;
-
-                int secondsLeft = Mathf.CeilToInt(remaining);
-                if (secondsLeft != lastTick)
-                {
-                    lastTick = secondsLeft;
-                    attacker.Send(new NetMessage { type = "turn_timer", seconds_remaining = secondsLeft });
-                }
-
-                remaining -= Time.deltaTime;
-                yield return null;
-            }
-            Debug.Log($"[Timing] Conquête tour {turnNumber} — RunConquestPlanningPhase terminé après {(DateTime.UtcNow - conquestPlanningStartUtc).TotalSeconds:F1}s réelles (attendu max {PlanningSeconds}s), HasSubmittedThisTurn={attacker.HasSubmittedThisTurn}.");
-
-            var attackerUnitsThisTurn = UnitAI.AllLivingUnits.Where(u => u.teamID == 1).ToList();
-
-            if (attacker.HasSubmittedThisTurn)
-            {
-                ConsecutiveMissedTurns = 0;
-                foreach (var u in attackerUnitsThisTurn) u.isGhosted = false;
-                ApplyOrdersToUnits(attackerUnitsThisTurn, attacker.PendingOrders);
-            }
-            else
-            {
-                // Substitut IA comme dans ApplyForPlayer (partie à deux joueurs) : la Conquête et
-                // l'Entraînement s'en passaient totalement et se contentaient d'effacer les ordres, si
-                // bien qu'un joueur inactif regardait ses unités ne rien faire pendant des dizaines de
-                // tours. Vu en production : un combat a enchaîné 21 tours de 60s (21 minutes) avec
-                // "HasSubmittedThisTurn=False" à chaque tour et zéro ordre côté attaquant — tout en
-                // monopolisant l'unique créneau de combat "vivant" de l'instance (matchInProgress), donc
-                // en refusant l'accès à tous les autres joueurs pendant ce temps.
-                ConsecutiveMissedTurns++;
-                foreach (var u in attackerUnitsThisTurn)
-                {
-                    u.isGhosted = true;
-                    u.PlanifierTourIA();
-                }
-                Debug.Log($"[Conquête] Tour sans ordre ({ConsecutiveMissedTurns}/{MaxConsecutiveMissedTurns}) — unités de l'attaquant pilotées par l'IA de remplacement.");
-            }
-        }
-
-        // Au-delà de ce nombre de tours consécutifs sans le moindre ordre, le combat est abandonné.
-        // Borne la durée qu'un joueur inactif peut imposer : sans elle, le plafond de 60 tours à 60s
-        // laissait une instance bloquée jusqu'à une heure sur une partie que plus personne ne jouait.
-        private const int MaxConsecutiveMissedTurns = 3;
-        private int ConsecutiveMissedTurns = 0;
-
-        // Plafond de tours DÉDIÉ à l'entraînement contre l'IA, distinct de DeathmatchTurnCap (rapport
-        // d'audit §3) : l'entraînement partage le même verrou matchInProgress qu'un vrai match ou une
-        // Conquête (un seul combat "vivant" par instance) — avec le plafond de 60 tours des vrais
-        // modes et PlanningSeconds=300s, un joueur qui délibère réellement à chaque tour pouvait
-        // monopoliser une instance jusqu'à 5h et bloquer un vrai appariement Deathmatch/Zone de
-        // Contrôle en attente sur cette même instance, à l'exact opposé du but de ce mode ("patienter
-        // en attendant un vrai adversaire"). Une garnison IA de base tombe de toute façon en quelques
-        // tours ; 15 borne le pire cas à ~75 min au lieu de 5h sans changer l'équilibrage réel.
-        private const int PracticeAiTurnCap = 15;
-
-        // =====================================================================
-        // Entraînement contre l'IA (2026-09-02) — permet à un joueur SEUL en file d'attente
-        // Deathmatch/Zone de Contrôle de jouer une partie immédiate contre une garnison IA sur la
-        // carte par défaut, en attendant qu'un vrai adversaire se présente, plutôt que de patienter
-        // les bras croisés. Réutilise TEL QUEL le moteur "vivant" 1-joueur-contre-garnison déjà
-        // éprouvé par la Conquête (RunConquestDeploymentPhase/RunConquestPlanningPhase/
-        // RunExecutionPhase, TacticalAIPlanner) — jamais le moteur "Option B" en donnée pure
-        // (RunMatch), qui ne sait pas piloter d'IA. Contrainte héritée de la Conquête, inchangée :
-        // un seul combat "vivant" (Conquête OU Entraînement) à la fois par instance de serveur (voir
-        // matchInProgress) — un joueur qui déclenche l'entraînement pendant qu'un combat vivant
-        // tourne déjà reçoit un refus immédiat plutôt que d'attendre indéfiniment ; le client peut
-        // simplement retenter. Partie hors-score, sans effet sur le classement ni sur la table
-        // "zones" : uniquement pour s'entraîner/patienter.
-        // =====================================================================
-
-        private void HandlePracticeAiMessage(PlayerConnection conn)
-        {
-            if (matchInProgress)
-            {
-                conn.Send(new NetMessage { type = "match_over", winner_team = 0, reason = "server_busy" });
-                conn.Close();
-                return;
-            }
-
-            matchInProgress = true;
-            StartCoroutine(ReportInstanceStatus());
-            StartCoroutine(RunPracticeVsAIGuarded(conn));
-        }
-
-        /// <summary>Même principe que RunMatchGuarded/RunConquestRequestGuarded : une exception non
-        /// prévue ne doit jamais laisser matchInProgress bloqué à "true" pour toujours.</summary>
-        private IEnumerator RunPracticeVsAIGuarded(PlayerConnection player)
-        {
-            return SafeCoroutineRunner.Run(
-                RunPracticeVsAI(player),
-                onComplete: () =>
-                {
-                    matchInProgress = false;
-                    StartCoroutine(ReportInstanceStatus());
-                },
-                onException: (Exception e) =>
-                {
-                    Debug.LogError($"[MatchSessionManager] Exception non gérée pendant un entraînement IA — abandon : {e}");
-                    try { if (!player.IsDisconnected) player.Send(new NetMessage { type = "match_over", winner_team = 0, reason = "server_error" }); } catch { }
-                    try { player.Close(); } catch { }
-                    matchInProgress = false;
-                    StartCoroutine(ReportInstanceStatus());
-                }
-            );
-        }
-
-        private IEnumerator RunPracticeVsAI(PlayerConnection player)
-        {
-            player.TeamId = 1;
-            string matchId = Guid.NewGuid().ToString();
-
-            yield return FetchUsername(player);
-
-            if (UnitSpawnerUI.Instance == null)
-            {
-                Debug.LogError("[MatchSessionManager] UnitSpawnerUI.Instance introuvable — la scène serveur est-elle correctement chargée ?");
-                player.Send(new NetMessage { type = "match_over", winner_team = 0, reason = "server_error" });
-                player.Close();
-                yield break;
-            }
-
-            UnitSpawnerUI.Instance.ClearAllUnits();
-            yield return null;
-
-            // Toujours la carte par défaut (jamais une vraie Zone/tuile GPS) — un entraînement n'a
-            // pas de territoire réel à charger, contrairement à la Conquête (LoadZoneOnServer).
-            yield return RestoreDefaultMapOnServer();
-
-            player.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 1, opponent_username = "IA (Entraînement)", mode = "practice_ai" });
-
-            yield return CreateMatchRecord(matchId, player, null, "practice_ai");
-
-            // defenderOwnerId=null : pas de renfort de garnison lié à un territoire (voir
-            // GarrisonExtraInfantryForZoneCount) — l'entraînement n'a pas de notion de "propriétaire
-            // de Zone", la garnison reste toujours à sa force de base.
-            yield return RunConquestDeploymentPhase(player, null);
-
-            foreach (var unit in UnitAI.AllLivingUnits.Where(u => u.teamID == 1)) unit.isPlayerControlled = true;
-
-            int turnNumber = 1;
-            bool matchOver = false;
-            int winnerTeam = 0;
-
-            ConsecutiveMissedTurns = 0;
-
-            while (!matchOver)
-            {
-                yield return RunConquestPlanningPhase(player, turnNumber);
-
-                if (player.IsDisconnected)
-                {
-                    matchOver = true;
-                    winnerTeam = 0;
-                    break;
-                }
-
-                // Même filet que la Conquête : l'entraînement occupe le même créneau unique de combat
-                // vivant par instance (matchInProgress), donc un joueur parti sans se déconnecter le
-                // rendrait indisponible pour tout le monde pendant près d'une heure.
-                if (ConsecutiveMissedTurns >= MaxConsecutiveMissedTurns)
-                {
-                    Debug.Log($"[Entraînement] Abandon : {ConsecutiveMissedTurns} tours consécutifs sans ordre — instance libérée.");
-                    matchOver = true;
-                    winnerTeam = 0;
-                    break;
-                }
-
-                // 2026-09-13 : voir le même changement dans RunConquestSkirmish ci-dessus.
-                yield return RunExecutionPhaseRealEngine(turnNumber, player, null);
-
-                int playerAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 1);
-                int garrisonAlive = UnitAI.AllLivingUnits.Count(u => u.teamID == 2);
-
-                if (playerAlive == 0 || garrisonAlive == 0)
-                {
-                    matchOver = true;
-                    winnerTeam = (playerAlive == 0 && garrisonAlive == 0) ? 0 : (playerAlive == 0 ? 2 : 1);
-                }
-                else if (turnNumber >= PracticeAiTurnCap)
-                {
-                    matchOver = true;
-                    int playerHealth = UnitAI.AllLivingUnits.Where(u => u.teamID == 1).Sum(u => u.health);
-                    int garrisonHealth = UnitAI.AllLivingUnits.Where(u => u.teamID == 2).Sum(u => u.health);
-                    if (playerAlive != garrisonAlive) winnerTeam = playerAlive > garrisonAlive ? 1 : 2;
-                    else if (playerHealth != garrisonHealth) winnerTeam = playerHealth > garrisonHealth ? 1 : 2;
-                    else winnerTeam = 0;
-                }
-
-                turnNumber++;
-            }
-
-            if (!player.IsDisconnected)
-            {
-                player.Send(new NetMessage { type = "match_over", winner_team = winnerTeam, reason = "practice" });
-            }
-
-            yield return CloseMatchRecord(matchId, winnerTeam);
-            player.Close();
-        }
-
         /// <summary>Charge la géométrie réelle (bâtiments Overpass + sol OSM + NavMesh) d'une Zone
         /// de Conquête sur le serveur, en attendant qu'elle soit ENTIÈREMENT prête (voir
         /// CityGenerator.IsCityReady) avant de continuer — sans ça, le déploiement pourrait démarrer
@@ -709,7 +187,6 @@ namespace Novgov.Server
                 yield break;
             }
 
-            defaultMapLoaded = false;
             cityGen.zoneTileX = tileX;
             cityGen.zoneTileY = tileY;
             cityGen.GenerateCity();
@@ -782,27 +259,6 @@ namespace Novgov.Server
                 sum += a.x * b.y - b.x * a.y;
             }
             return Mathf.Abs(sum) * 0.5f;
-        }
-
-        /// <summary>Recharge la carte par défaut hors-ligne (deathmatch/zone_control) après qu'un
-        /// combat de conquête a temporairement remplacé la géométrie de la scène — voir
-        /// defaultMapLoaded. Mêmes appels que SetupWorldOnce(), avec une attente de complétion en plus.</summary>
-        private IEnumerator RestoreDefaultMapOnServer()
-        {
-            MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
-            CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
-            if (mapLoader != null) mapLoader.ApplyDefaultOfflineMap();
-            if (cityGen != null) cityGen.LoadDefaultOfflineCity();
-            TacticalGridBuilder.InvalidateCache(); // retour à la carte par défaut = bâtiments différents de la Zone quittée
-
-            float maxWait = 30f;
-            while (cityGen != null && !cityGen.IsCityReady && maxWait > 0f)
-            {
-                maxWait -= Time.deltaTime;
-                yield return null;
-            }
-
-            defaultMapLoaded = true;
         }
 
         // =====================================================================
@@ -911,12 +367,10 @@ namespace Novgov.Server
             onResult(!string.IsNullOrEmpty(body) && body != "[]");
         }
 
-        /// <summary>Toutes les Zones actuellement possédées par <paramref name="userId"/> — sert à la
-        /// fois à valider l'adjacence d'une nouvelle attaque (RunConquestRequest) et à renforcer la
-        /// garnison d'un défenseur selon la taille de son territoire (RunConquestDeploymentPhase). En
-        /// cas d'échec réseau, retourne une liste VIDE (pas null) : voir les appelants, qui traitent
-        /// alors le joueur comme n'ayant aucune Zone (comportement "fail-open" déjà utilisé ailleurs
-        /// dans cette classe, ex. FetchZoneOwner traite un échec comme "Zone neutre").</summary>
+        /// <summary>Toutes les Zones actuellement possédées par <paramref name="userId"/> — sert à
+        /// valider l'adjacence d'une nouvelle capture (RunConquestRequest). En cas d'échec réseau,
+        /// retourne une liste VIDE (pas null) : le joueur est alors traité comme n'ayant aucune Zone
+        /// (comportement "fail-open", comme FetchZoneOwner qui traite un échec comme "Zone neutre").</summary>
         private IEnumerator FetchOwnedZones(string userId, Action<List<(int x, int y)>> onResult)
         {
             string url = $"{GameServerBootstrap.RestUrl}/zones?owner_user_id=eq.{userId}&select=tile_x,tile_y";

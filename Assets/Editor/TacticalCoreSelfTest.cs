@@ -8,7 +8,7 @@ using Novgov.TacticalCore;
 /// AUCUNE scène ni composant Unity vivant, purement des structures de données synthétiques.
 /// TacticalResolver.cs/LineOfSight.cs et tout ce qui les testait ont été supprimés le 2026-09-13
 /// (zéro appelant en production depuis le passage de tous les modes au vrai moteur Unity — voir
-/// Assets/_ServerDocs/multiplayer/00-current-architecture-2026-09-13.md) : seul ce qui teste du
+/// Assets/_ServerDocs/multiplayer/00-architecture.md) : seul ce qui teste du
 /// code encore vivant (A*/TacticalGrid, logique client pure) survit ici.
 /// </summary>
 public static partial class TacticalCoreSelfTest

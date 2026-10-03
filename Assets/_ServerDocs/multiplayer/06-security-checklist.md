@@ -91,10 +91,9 @@ corrigés (code + base de données live) :
       `matchInProgress = false`) sur toute exception ; `ApplyOrdersToUnits` valide maintenant les
       coordonnées (rejette NaN/Infinity), l'action (doit être une valeur valide de l'enum
       `NodeAction`) et la longueur du chemin (plafond 200 points) avant utilisation.
-- [x] **Deathmatch sans plafond de tours** — contrairement à la Zone de Contrôle, deux joueurs
-      qui se cachaient indéfiniment bloquaient l'unique emplacement de match du serveur pour
-      toujours. Corrigé : plafond de 60 tours, départage par unités vivantes puis PV totaux,
-      égalité parfaite = match nul.
+- [x] **Bataille sans plafond de tours** — deux joueurs qui se cachaient indéfiniment
+      bloquaient l'unique emplacement de combat de l'instance. Corrigé : plafond de 60 tours,
+      départage par unités vivantes puis PV totaux, égalité parfaite = match nul.
 
 ## Audit de production (2026-08-29) — corrigés
 
@@ -134,9 +133,8 @@ diffusion au-delà de tests restreints) :
       `NewRating`/`RatingDelta` à leur valeur par défaut `0`, envoyée telle quelle. Fix : ne
       peupler/envoyer ces champs qu'après confirmation d'écriture réussie, ou exposer un indicateur
       explicite d'indisponibilité plutôt que la valeur par défaut `0`.
-- [ ] **Un mode de matchmaking invalide/mal orthographié tombe silencieusement en Deathmatch**
-      (`MatchSessionManager.cs`, aucune liste blanche de modes acceptés) — pas de crash, mais
-      aucune erreur n'est renvoyée si un futur client envoie une valeur inattendue.
+- [x] **Mode de connexion inconnu** — corrigé le 2026-10-03 : liste blanche (`conquest`,
+      `siege_battle`), tout autre mode est refusé (`reason="outdated_client"`) et la connexion fermée.
 
 ## Audit du 2026-08-30 — vérifié en direct sur le VPS (pas juste supposé)
 
@@ -153,16 +151,10 @@ diffusion au-delà de tests restreints) :
 - [x] `.env` en permissions `600` (propriétaire seul), pas de secret dans un fichier world-readable.
 - [x] Aucun résidu de conteneur/fichier compose de test laissé sur le VPS après les sessions de
       vérification du jour.
-- [ ] **Nouvelle surface d'attaque (2026-08-30, "des milliers de cartes") — partiellement
-      mitigée, pas fermée** : `zone_tile_x/y` pour Deathmatch/Zone de Contrôle (`join_matchmaking`)
-      n'est validé nulle part côté serveur, contrairement à la Conquête (propriété de Zone
-      vérifiée en base). Une tuile jamais vue déclenche un vrai fetch OpenStreetMap + bake NavMesh
-      synchrone (jusqu'à ~60s, gèle tout le processus le temps de l'opération). Mitigé par une
-      limite de fréquence PAR UTILISATEUR (`MatchSessionManager.CanTriggerTileGeneration`, 30s) et
-      un anti-doublon — mais PAS par IP : plusieurs comptes jetables pourraient quand même
-      déclencher des générations en rafale et ralentir le démarrage de nouvelles parties pour tout
-      le monde pendant un moment (jamais un crash, toujours plafonné à 60s par génération). Fix
-      possible si besoin : limite par IP en plus, ou CAPTCHA à l'inscription.
+- [x] **Tuile arbitraire fournie par le client** — fermé le 2026-10-03 avec la suppression de
+      Match à mort / Contrôle de zone : le serveur ne charge plus que le quartier d'un siège lu en
+      base (`zone_sieges`), jamais une tuile choisie librement par un client. La capture d'un
+      quartier libre ne charge aucune géométrie.
 - [ ] **4 comptes de test restent en base** (`testlille1-4@novgov.test`) — sans risque en soi
       (comptes normaux, pas de privilège), mais à supprimer avant une diffusion publique si on ne
       veut pas de comptes de test visibles dans les données de production.

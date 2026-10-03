@@ -280,58 +280,6 @@ namespace Novgov.TacticalCore
             return result;
         }
 
-        /// <summary>Vrai si cette tuile/carte a déjà une géométrie en cache (mémoire OU disque) — ne
-        /// désérialise rien, juste une existence de fichier pour le cas disque : sert au matchmaking
-        /// (voir MatchSessionManager.TryStartMatch, 2026-08-30) pour préférer démarrer une partie sur
-        /// une tuile déjà "chaude" plutôt que d'en déclencher une génération neuve coûteuse.</summary>
-        public static bool IsTileCached(string cacheKey)
-        {
-            if (cachedCacheKey == cacheKey && cachedWallSegments != null) return true;
-            return File.Exists(DiskCachePath(cacheKey));
-        }
-
-        /// <summary>Construit un TacticalWorldState UNIQUEMENT depuis le cache (mémoire L1 puis disque
-        /// L2) — ne touche JAMAIS la scène vivante, ne fait AUCUNE hypothèse sur ce qui y est
-        /// actuellement chargé. Renvoie null si absent des deux niveaux (voir MatchSessionManager.
-        /// RunMatch : dans ce cas, la tuile doit être générée depuis zéro — voir LoadZoneOnServer/
-        /// BuildFromScene). Les bâtiments renvoyés sont TOUJOURS à l'état neuf (santé pleine, jamais
-        /// détruits) : sans scène vivante, il n'existe aucune notion de dégâts déjà infligés à cette
-        /// tuile — cohérent avec le fait qu'une nouvelle partie démarre toujours sur une carte
-        /// intacte (2026-08-30, "des milliers de cartes").</summary>
-        public static TacticalWorldState BuildFromCacheOnly(string cacheKey)
-        {
-            List<WallSegment> walls;
-            List<TacticalBuilding> templates;
-            TacticalGrid grid;
-
-            if (cachedCacheKey == cacheKey && cachedWallSegments != null)
-            {
-                walls = cachedWallSegments;
-                templates = cachedBuildingTemplates;
-                grid = cachedGrid;
-            }
-            else if (!TryLoadFromDisk(cacheKey, out walls, out templates, out grid))
-            {
-                return null;
-            }
-
-            var state = new TacticalWorldState { wallSegments = walls, grid = grid };
-            foreach (var template in templates)
-            {
-                state.buildings.Add(new TacticalBuilding
-                {
-                    id = template.id,
-                    footprint = template.footprint,
-                    health = 300f,
-                    destroyed = false,
-                    doors = template.doors,
-                    windows = template.windows,
-                    height = template.height
-                });
-            }
-            return state; // pas de barricades : aucune n'a encore été posée sur une partie qui démarre
-        }
-
         /// <summary>Hash déterministe et portable d'une liste de bâtiments (empreinte + portes +
         /// fenêtres + hauteur) — voir "city_verify"/"city_verify_result" dans MatchState.
         /// AuthoritativeCityHash et MatchSessionManager_Deployment.HandleCityVerify pour l'usage :

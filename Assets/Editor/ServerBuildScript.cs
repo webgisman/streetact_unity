@@ -4,7 +4,7 @@ using UnityEngine;
 
 /// <summary>
 /// Build headless du serveur de jeu Linux. Réutilise EXACTEMENT les mêmes scènes que le build
-/// client (voir Assets/_ServerDocs/multiplayer/04-unity-headless-server.md, "Séparation
+/// client (voir Assets/_ServerDocs/multiplayer/01-deployment-vps.md, "Séparation
 /// client/serveur dans le code" — une seule scène partagée, du code isolé par #if UNITY_SERVER
 /// là où c'était nécessaire, pas de scène serveur séparée).
 ///

@@ -11,7 +11,7 @@ namespace Novgov.Server
     /// Résolution de tour par le VRAI moteur Unity (NavMeshAgent + Physics.RaycastAll temps réel via
     /// UnitAI.ExecuterOrdres()/UnitAI_Combat), demandée explicitement par l'utilisateur le 2026-09-13
     /// pour remplacer TacticalResolver.Resolve() (voir
-    /// 09-real-unity-combat-investigation-2026-09-13.md et 11-real-engine-switch-2026-09-13.md pour
+    /// l'historique git et l'historique git pour
     /// tout le contexte et les risques déjà discutés — non-déterminisme PhysX/NavMesh inter-appareils,
     /// désormais accepté en connaissance de cause).
     ///
@@ -123,7 +123,6 @@ namespace Novgov.Server
             {
                 yield return new WaitForSeconds(tickIntervalSec);
                 elapsed += tickIntervalSec;
-                if (currentMatchMode == "zone_control" && CaptureZone.Instance != null) CaptureZone.Instance.Tick();
                 snapshots.Add(CaptureRealEngineSnapshot(tickIndex++, allUnits, buildingsSnapshot, wasDestroyed, barriersSnapshot, barrierNames, barrierWasDestroyed));
             }
 
@@ -132,7 +131,6 @@ namespace Novgov.Server
             {
                 yield return new WaitForSeconds(tickIntervalSec);
                 combatGrace += tickIntervalSec;
-                if (currentMatchMode == "zone_control" && CaptureZone.Instance != null) CaptureZone.Instance.Tick();
                 snapshots.Add(CaptureRealEngineSnapshot(tickIndex++, allUnits, buildingsSnapshot, wasDestroyed, barriersSnapshot, barrierNames, barrierWasDestroyed));
             }
 
@@ -141,7 +139,6 @@ namespace Novgov.Server
             // pas rejouer.
             if (snapshots.Count == 0)
             {
-                if (currentMatchMode == "zone_control" && CaptureZone.Instance != null) CaptureZone.Instance.Tick();
                 snapshots.Add(CaptureRealEngineSnapshot(0, allUnits, buildingsSnapshot, wasDestroyed, barriersSnapshot, barrierNames, barrierWasDestroyed));
             }
 
@@ -205,7 +202,7 @@ namespace Novgov.Server
             if (p2 != null && !p2.IsDisconnected) p2.Send(new NetMessage { type = "turn_playback_start", turn_number = turnNumber });
 
             double totalMs = (DateTime.UtcNow - executionStartUtc).TotalMilliseconds;
-            Debug.Log($"[Timing] Tour {turnNumber} (VRAI MOTEUR) : {snapshots.Count} tick(s) réels, exécution+envoi en {totalMs:F1}ms de temps SERVEUR (le temps RÉEL de résolution était ~{elapsed + combatGrace:F1}s, contre quelques ms pour TacticalResolver.Resolve() — voir 11-real-engine-switch-2026-09-13.md).");
+            Debug.Log($"[Timing] Tour {turnNumber} (VRAI MOTEUR) : {snapshots.Count} tick(s) réels, exécution+envoi en {totalMs:F1}ms de temps SERVEUR (le temps RÉEL de résolution était ~{elapsed + combatGrace:F1}s, contre quelques ms pour TacticalResolver.Resolve() — voir l'historique git).");
         }
 
         /// <summary>Un seul tick d'échantillonnage — lit l'état RÉEL de chaque UnitAI à cet instant.
@@ -302,8 +299,6 @@ namespace Novgov.Server
                 {
                     t = src.t,
                     units = visibleUnits.ToArray(),
-                    zone_progress_team1 = src.zone_progress_team1,
-                    zone_progress_team2 = src.zone_progress_team2,
                     destroyed_building_ids = src.destroyed_building_ids,
                     destroyed_barrier_ids = src.destroyed_barrier_ids
                 };

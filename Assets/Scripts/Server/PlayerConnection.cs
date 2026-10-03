@@ -20,18 +20,7 @@ namespace Novgov.Server
         public string Username = "Joueur";
 
         public int TeamId; // assigné par MatchSessionManager au début d'un match
-        public string Mode; // "deathmatch" ou "zone_control", lu depuis join_matchmaking
-        // "fast" (5 min max/tour) ou "async" (6h max/tour) — voir NetMessage.turn_pace. Lu depuis
-        // join_matchmaking, jamais modifié ensuite. Par défaut "fast" (rétrocompatibilité).
-        public string TurnPace = "fast";
-        // Tuile Slippy Map "domicile" du joueur (voir Novgov.Generation.ZoneManager côté client,
-        // calculée UNE FOIS via GPS puis jamais réinterrogée) — lue depuis join_matchmaking
-        // (NetMessage.has_home_tile/zone_tile_x/y) pour Deathmatch/Zone de Contrôle, 2026-08-30
-        // ("des milliers de cartes"). Absent (HasHomeTile=false) = joueur sans position GPS connue,
-        // repli sur la tuile de l'adversaire ou sur "Default" (voir MatchSessionManager.TryStartMatch).
-        public bool HasHomeTile = false;
-        public int HomeTileX;
-        public int HomeTileY;
+        public string Mode; // "conquest" ou "siege" (bataille de siège), lu depuis join_matchmaking
         public int NewRating; // rempli par MatchSessionManager.UpdateRatings() en fin de partie
         public int RatingDelta;
         public DateTime LastHeartbeat = DateTime.UtcNow;

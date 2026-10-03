@@ -347,7 +347,7 @@ public partial class UnitAI
             // (voir isGuarding, mis à "true" par les branches Guetter/Embuscade plus bas mais JAMAIS
             // remis à "false" nulle part dans le projet avant ce correctif — une unité qui avait
             // guetté UNE SEULE FOIS gardait le bonus défensif -50% dégâts de TakeDamage() À VIE,
-            // trouvé en auditant 08-known-issues-and-todo.md §19.9.7, "postures à sens unique", dont
+            // trouvé en auditant l'historique git (ancien journal 08) §19.9.7, "postures à sens unique", dont
             // le correctif documenté visait TacticalResolver.Resolve — supprimé depuis le passage au
             // vrai moteur du 2026-09-13, ce qui avait fait regresser le bug en silence). Même principe
             // que isCamouflaged, qui a lui déjà ses propres conditions de rupture (subir un impact,

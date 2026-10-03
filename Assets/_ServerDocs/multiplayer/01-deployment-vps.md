@@ -8,9 +8,6 @@ second VPS, ou en cas de reconstruction complète). Voir §10 (ajoutée le 2026-
 procédure réellement utilisée pour **mettre à jour** le binaire du serveur de jeu sur un VPS déjà
 déployé, sans toucher au reste de la stack.
 
-Ce document sera suivi étape par étape quand tu me donneras l'IP, l'utilisateur SSH et le
-chemin vers ta clé privée. Chaque étape est vérifiable avant de passer à la suivante — en
-particulier les règles de pare-feu, pour ne jamais te couper l'accès SSH par erreur.
 
 ## 0. Pré-requis avant de commencer
 
@@ -136,8 +133,9 @@ ignoré si le volume `db-data` existe déjà). Toute évolution de schéma aprè
 appliquée manuellement sur la base déjà déployée via `psql` (voir §3, "Connexion Postgres
 directe"), en plus de la mise à jour de `schema.sql` pour les futurs déploiements neufs.
 
-- **2026-08-23** : ajout de `public.matches.mode` (deathmatch / zone_control) —
+- **2026-08-23** : ajout de `public.matches.mode` —
   `ALTER TABLE public.matches ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'deathmatch';`
+  (valeur par défaut historique ; les parties enregistrées aujourd'hui sont toutes `siege`).
 
 ## 9. Sauvegardes
 
@@ -156,45 +154,52 @@ panne disque/un incident fournisseur).
 
 ---
 
-## 10. Mettre à jour le binaire `game-server` sur un VPS déjà déployé (procédure réelle, 2026-08-29)
+## 10. Mettre à jour le serveur de jeu (procédure actuelle, 2026-10-03)
 
-Une fois la stack initiale en place (§6), voici la procédure réellement utilisée pour déployer une
-nouvelle version du serveur de jeu Unity **sans toucher** aux 4 autres conteneurs (`db`, `auth`,
-`rest`, `nginx`) :
+Pool de 3 conteneurs `game-server-1/2/3` (ports 7777/7778/7779), même image
+`novgov-game-server:latest` construite depuis `/opt/novgov/game-server/`. Les 4 autres conteneurs
+(`db`, `auth`, `rest`, `nginx`) ne bougent pas.
+
+```powershell
+# 1. Build (machine de développement, Unity fermé sur ce projet)
+& "C:\Program Files\Unity\Hub\Editor\6000.5.8f1\Editor\Unity.exe" -batchmode -nographics -quit `
+  -buildTarget Linux64 -standaloneBuildSubtarget Server -projectPath "E:\NOVGOV\My project" `
+  -executeMethod ServerBuildScript.BuildLinuxServer -logFile build_server.log
+```
+Vérifier que `build/LinuxServer/NovgovServer_Data/Managed/Assembly-CSharp.dll` est bien daté du
+build (Unity peut réutiliser une ancienne build en cache sans prévenir).
 
 ```bash
-# 1. Depuis la machine de build, après un ServerBuildScript.BuildLinuxServer réussi
-#    (voir 04-unity-headless-server.md) :
-scp -i ~/.ssh/streetact_vps \
-    build/LinuxServer/NovgovServer.x86_64 \
-    build/LinuxServer/UnityPlayer.so \
-    ubuntu@<ip>:/opt/novgov/game-server/
-scp -i ~/.ssh/streetact_vps -r \
-    build/LinuxServer/NovgovServer_Data \
-    ubuntu@<ip>:/opt/novgov/game-server/
+# 2. Paquet + envoi (Git Bash ; --force-local à cause du "C:" dans le chemin)
+cd build/LinuxServer
+tar --force-local -czf novgov-server.tgz NovgovServer.x86_64 NovgovServer_Data UnityPlayer.so libdecor-0.so.0 libdecor-cairo.so
+scp -i ~/.ssh/streetact_vps novgov-server.tgz ubuntu@54.36.100.151:/tmp/
 
-# 2. Sur le VPS : reconstruire et redémarrer UNIQUEMENT ce conteneur
-ssh -i ~/.ssh/streetact_vps ubuntu@<ip>
+# 3. Sur le VPS : copie datée de l'actuel, remplacement, image, redémarrage UNE instance à la fois
+ssh -i ~/.ssh/streetact_vps ubuntu@54.36.100.151
 cd /opt/novgov
-docker compose build game-server-1
-docker compose up -d game-server-1   # recrée seulement game-server-1, les 4 autres ne bougent pas
+cp -a game-server game-server.bak-$(date +%Y%m%d-%H%M%S)
+rm -rf /tmp/gs-new && mkdir -p /tmp/gs-new && tar -xzf /tmp/novgov-server.tgz -C /tmp/gs-new
+rm -rf game-server/NovgovServer_Data game-server/NovgovServer.x86_64 game-server/UnityPlayer.so
+cp -a /tmp/gs-new/NovgovServer_Data /tmp/gs-new/NovgovServer.x86_64 /tmp/gs-new/UnityPlayer.so game-server/
+sudo docker compose build game-server-1          # une seule image pour les 3
+for i in 1 2 3; do sudo docker compose up -d --no-deps game-server-$i; sleep 20; done
 
-# 3. Vérification
-docker compose logs --tail=60 game-server-1   # doit montrer "à l'écoute sur le port 7777"
-nc -zv localhost 7777
+# 4. Vérification
+sudo docker compose ps
+sudo docker compose logs --since 2m game-server-1 | grep -E "écoute|bâtiments créés|Exception"
 ```
 
-**Point d'attention** : `docker compose build game-server-1` copie `NovgovServer_Data`,
-`NovgovServer.x86_64` et `UnityPlayer.so` depuis `/opt/novgov/game-server/` (le contexte de
-build, voir le `Dockerfile` à côté) — donc bien transférer les 3 avant de builder, sinon l'image
-reconstruite embarque encore l'ancien binaire silencieusement.
+Puis `python Tools/siege_battle_test.py` (voir `07-tests.md`) pour vérifier une bataille de siège
+de bout en bout. Un redémarrage interrompt les batailles en cours sur l'instance : vérifier avant
+dans `server_instances` que les 3 sont `free`.
 
-Pendant les quelques secondes de `docker compose up -d game-server-1`, toute partie en cours sur ce
-serveur est interrompue (pas de bascule à chaud) — à faire hors d'une partie active, ou en
-prévenant les joueurs testant en même temps.
+**Retour arrière** :
+```bash
+cd /opt/novgov && rm -rf game-server && cp -a game-server.bak-<date> game-server
+sudo docker compose build game-server-1
+for i in 1 2 3; do sudo docker compose up -d --no-deps game-server-$i; done
+```
 
----
-
-**Rappel de méthode** : quand on exécutera ce runbook ensemble, on avance étape par étape avec
-vérification à chaque point de contrôle — en particulier avant `ufw enable` et avant toute
-modification touchant Postgres en production.
+**Migrations de base** : `schema.sql` ne s'exécute qu'au tout premier démarrage de Postgres ; toute
+évolution doit aussi être appliquée à la main sur la base en place (`docker compose exec -T db psql …`).

@@ -11,7 +11,7 @@ namespace Novgov.Server
     /// <summary>
     /// Point d'entrée du serveur de jeu headless. Ne s'exécute que dans un build "Dedicated Server"
     /// (UNITY_SERVER est défini automatiquement par Unity pour ce target). Voir
-    /// Assets/_ServerDocs/multiplayer/04-unity-headless-server.md.
+    /// Assets/_ServerDocs/multiplayer/01-deployment-vps.md.
     /// </summary>
     public static class GameServerBootstrap
     {

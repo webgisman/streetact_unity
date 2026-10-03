@@ -169,16 +169,6 @@ public class DestructibleEnvironment : MonoBehaviour
 
         Debug.Log($"<color=red><b>💥 EFFONDREMENT DU BÂTIMENT : {gameObject.name} EST PULVÉRISÉ EN RUINES TRAVERSABLES !</b></color>");
 
-        // Bilan de victoire de Conquête (isHQ) délibérément HORS DU PÉRIMÈTRE du rejeu réseau
-        // (applyOccupantCasualties=false) : c'est un mécanisme spécifique à la Conquête, déjà décidé
-        // par le calcul serveur autoritaire de CE mode — pas quelque chose que ce rejeu générique
-        // (Deathmatch/Zone de Contrôle) a besoin de re-déterminer lui-même.
-        if (applyOccupantCasualties && isHQ && Novgov.Network.MultiplayerMatchController.Instance != null && Novgov.Network.MultiplayerMatchController.IsFlowActive)
-        {
-            Debug.Log($"<color=magenta><b>🚨 LE QUARTIER GÉNÉRAL A ÉTÉ DÉTRUIT ! 🚨</b></color>");
-            Novgov.Server.MatchSessionManager.IsHQDestroyedThisMatch = true;
-        }
-
         // 1. Tremblement de caméra
         if (Camera.main != null)
         {

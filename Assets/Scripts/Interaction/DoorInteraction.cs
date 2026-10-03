@@ -92,13 +92,5 @@ namespace Novgov.Interaction
             return doorData.position + doorData.entryDirection * 1.2f;
         }
 
-        /// <summary>
-        /// Position à l'intérieur du bâtiment après avoir franchi la porte.
-        /// </summary>
-        public Vector3 GetInsidePosition()
-        {
-            if (doorData == null) return transform.position;
-            return doorData.position - doorData.entryDirection * 1.5f + Vector3.up * 0.05f;
-        }
     }
 }

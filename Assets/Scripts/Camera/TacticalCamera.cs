@@ -210,36 +210,6 @@ public class TacticalCamera : MonoBehaviour
         }
     }
 
-    public void Rotate45Deg()
-    {
-        currentYaw = (currentYaw + 45f) % 360f;
-    }
-
-    public void TogglePitchMode()
-    {
-        if (targetPitch > 50f) targetPitch = 30f;
-        else targetPitch = 65f;
-    }
-
-    public void CenterOnPlayerUnits()
-    {
-        Vector3 center = Vector3.zero;
-        int count = 0;
-        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
-        {
-            var u = UnitAI.AllLivingUnits[i];
-            if (u != null && u.isPlayerControlled && !u.isDead)
-            {
-                center += u.transform.position;
-                count++;
-            }
-        }
-        if (count > 0)
-        {
-            focusPosition = center / count;
-        }
-    }
-
     private void HandleTouchInput()
     {
         var activeTouches = Touch.activeTouches;

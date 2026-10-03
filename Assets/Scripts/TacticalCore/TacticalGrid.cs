@@ -78,18 +78,6 @@ namespace Novgov.TacticalCore
             walkable[Index(cx, cz)] = value;
         }
 
-        public ZStrata GetElevation(int cx, int cz)
-        {
-            if (cx < 0 || cx >= width || cz < 0 || cz >= height) return ZStrata.Sol;
-            return elevation[Index(cx, cz)];
-        }
-
-        public void SetElevation(int cx, int cz, ZStrata value)
-        {
-            if (cx < 0 || cx >= width || cz < 0 || cz >= height) return;
-            elevation[Index(cx, cz)] = value;
-        }
-
         /// <summary>Marque comme non-franchissables toutes les cellules dont le centre tombe à
         /// l'intérieur d'un des polygones de bâtiment fournis (intérieur = non marchable au Sol,
         /// on y entre uniquement par une porte — voir Pathfinding.cs pour le franchissement des
@@ -113,47 +101,5 @@ namespace Novgov.TacticalCore
             }
         }
 
-        /// <summary>Un bâtiment entier détruit (DestructibleEnvironment.DestroyEnvironment, voir
-        /// TacticalResolver.DestroyBuilding) : toutes ses cellules deviennent franchissables d'un
-        /// coup — jamais de destruction progressive mur par mur (voir TacticalBuilding).</summary>
-        public void OpenBuildingInterior(List<Vector2> footprint)
-        {
-            for (int cz = 0; cz < height; cz++)
-            {
-                for (int cx = 0; cx < width; cx++)
-                {
-                    if (GeometryMath.PointInPolygon(footprint, CellToWorld(cx, cz))) SetWalkable(cx, cz, true);
-                }
-            }
-        }
-
-        /// <summary>Recalcule uniquement les cellules touchées par un segment donné (pose/
-        /// destruction d'une barricade) — jamais besoin de refaire toute la grille.</summary>
-        public void UpdateAroundSegment(Vector2 p1, Vector2 p2, bool blocked)
-        {
-            if (!TryWorldToCell(p1, out int x1, out int z1)) return;
-            if (!TryWorldToCell(p2, out int x2, out int z2)) return;
-
-            int dx = Mathf.Abs(x2 - x1), sx = x1 < x2 ? 1 : -1;
-            int dz = -Mathf.Abs(z2 - z1), sz = z1 < z2 ? 1 : -1;
-            int err = dx + dz, e2;
-
-            while (true)
-            {
-                // Applique le blocage sur la cellule traversée et son entourage immédiat (1 cellule de padding)
-                for (int cz = z1 - 1; cz <= z1 + 1; cz++)
-                {
-                    for (int cx = x1 - 1; cx <= x1 + 1; cx++)
-                    {
-                        SetWalkable(cx, cz, !blocked);
-                    }
-                }
-
-                if (x1 == x2 && z1 == z2) break;
-                e2 = 2 * err;
-                if (e2 >= dz) { err += dz; x1 += sx; }
-                if (e2 <= dx) { err += dx; z1 += sz; }
-            }
-        }
     }
 }

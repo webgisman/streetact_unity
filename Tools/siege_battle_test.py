@@ -1,0 +1,134 @@
+"""Test de bout en bout de la bataille de siège au tour par tour contre le serveur de production.
+
+Joueur 1 (testlille1) assiège le quartier de Joueur 2 (testlille2, tuile 66648/44110), les deux
+rejoignent la salle d'attente du siège sur l'instance choisie comme le fait le client
+(instances vivantes triées par id, indice = siege_id % nombre), et on vérifie que le serveur
+envoie "match_found" (mode "siege") aux DEUX, puis qu'il répond à "city_verify". Les deux se
+déconnectent ensuite : le serveur doit rouvrir le siège ("pending").
+
+ATTENTION : agit sur le serveur de PRODUCTION avec les deux comptes de test (crée un siège s'il n'y
+en a pas déjà un ouvert). Usage, depuis la racine du projet :  python Tools/siege_battle_test.py"""
+import json, re, socket, struct, sys, time, urllib.request, urllib.error
+from datetime import datetime, timezone
+
+BASE = "https://novgov.com"
+# Clé publique "anon" : lue dans le client Unity (même valeur que SupabaseAuthClient.AnonKey).
+ANON = sys.argv[1] if len(sys.argv) > 1 else re.search(r'AnonKey = "([^"]+)"', open("Assets/Scripts/Auth/SupabaseAuthClient.cs", encoding="utf-8").read()).group(1)
+HOST = "novgov.com"
+TILE = (66648, 44110)
+
+
+def http(method, url, body=None, token=None):
+    req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None)
+    req.add_header("apikey", ANON)
+    req.add_header("Content-Type", "application/json")
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status, json.loads(r.read() or b"null")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
+def login(n):
+    st, d = http("POST", f"{BASE}/auth/v1/token?grant_type=password", {"email": f"testlille{n}@novgov.test", "password": f"TestLille{n}!"})
+    assert st == 200, d
+    return d["access_token"], d["user"]["id"]
+
+
+def send(sock, msg):
+    payload = json.dumps(msg).encode()
+    sock.sendall(struct.pack("<i", len(payload)) + payload)
+
+
+def recv_all(sock, seconds):
+    sock.settimeout(0.5)
+    out, buf, end = [], b"", time.time() + seconds
+    while time.time() < end:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+        except socket.timeout:
+            pass
+        while len(buf) >= 4:
+            n = struct.unpack("<i", buf[:4])[0]
+            if len(buf) < 4 + n:
+                break
+            out.append(json.loads(buf[4:4 + n].decode()))
+            buf = buf[4 + n:]
+    return out
+
+
+t1, uid1 = login(1)
+t2, uid2 = login(2)
+print("connectés :", uid1[:8], uid2[:8])
+
+# Réutilise un siège déjà ouvert entre les deux comptes de test (sinon start_siege refuserait :
+# "Un siège est déjà en cours sur cette zone"), sinon en déclare un nouveau.
+st, open_sieges = http("GET", f"{BASE}/rest/v1/zone_sieges?status=eq.pending&attacker_user_id=eq.{uid1}&tile_x=eq.{TILE[0]}&tile_y=eq.{TILE[1]}&select=id", token=t1)
+if st == 200 and open_sieges:
+    siege_id = open_sieges[0]["id"]
+    print("siège déjà ouvert réutilisé :", siege_id)
+else:
+    st, res = http("POST", f"{BASE}/rest/v1/rpc/start_siege", {"p_tile_x": TILE[0], "p_tile_y": TILE[1], "p_zoom": 17}, t1)
+    print("start_siege ->", st, res)
+    assert st == 200, "le siège n'a pas pu être déclaré"
+    siege_id = res[0]["new_siege_id"]
+
+st, inst = http("GET", f"{BASE}/rest/v1/server_instances?order=id.asc&select=id,public_port,updated_at", token=t1)
+now = datetime.now(timezone.utc)
+alive = [i for i in inst if i["public_port"] > 0 and (now - datetime.fromisoformat(i["updated_at"])).total_seconds() < 180]
+port = alive[siege_id % len(alive)]["public_port"]
+print(f"siège #{siege_id} -> instances vivantes {[i['id'] for i in alive]} -> port {port}")
+
+
+def connect(token):
+    s = socket.create_connection((HOST, port), timeout=10)
+    send(s, {"type": "auth", "access_token": token})
+    send(s, {"type": "join_matchmaking", "mode": "siege_battle", "siege_id": siege_id, "zone_tile_x": TILE[0], "zone_tile_y": TILE[1]})
+    return s
+
+
+attacker = connect(t1)
+early = recv_all(attacker, 4)
+print("attaquant seul en salle d'attente, messages reçus :", sorted({m.get("type") for m in early}))
+assert not any(m.get("type") == "match_found" for m in early), "la bataille ne doit pas démarrer sans le défenseur"
+
+defender = connect(t2)
+msgs_a = recv_all(attacker, 25)
+msgs_d = recv_all(defender, 1)
+mf_a = [m for m in msgs_a if m.get("type") == "match_found"]
+mf_d = [m for m in msgs_d if m.get("type") == "match_found"]
+for name, mf in (("attaquant", mf_a), ("défenseur", mf_d)):
+    if mf:
+        m = mf[0]
+        print(f"{name} : match_found mode={m.get('mode')} équipe={m.get('team_id')} adversaire={m.get('opponent_username')} quartier=({m.get('zone_tile_x')},{m.get('zone_tile_y')}) carte_json={'oui' if m.get('city_data_json') else 'non'}")
+    else:
+        print(f"{name} : PAS de match_found — messages : {sorted({x.get('type') for x in (msgs_a if name == 'attaquant' else msgs_d)})}")
+
+# Vérification de géométrie : un hash volontairement faux doit recevoir, tout de suite, un refus
+# accompagné de la structure de bâtiments de référence (resynchronisation).
+verify_ok = False
+if mf_a:
+    send(attacker, {"type": "city_verify", "city_building_hash": 1, "city_building_count": 0})
+    replies = [m for m in recv_all(attacker, 10) if m.get("type") == "city_verify_result"]
+    if replies:
+        r = replies[0]
+        nb = len(r.get("city_buildings") or [])
+        print(f"city_verify_result : success={r.get('success')} bâtiments de référence={nb}")
+        verify_ok = (not r.get("success")) and nb > 0
+    else:
+        print("city_verify_result : AUCUNE réponse en 10 s")
+
+attacker.close()
+defender.close()
+ok = bool(mf_a and mf_d and mf_a[0].get("mode") == "siege" and mf_a[0].get("team_id") == 1 and mf_d[0].get("team_id") == 2 and verify_ok)
+
+time.sleep(8)
+st, rows = http("GET", f"{BASE}/rest/v1/zone_sieges?id=eq.{siege_id}&select=id,status,deadline", token=t1)
+print("statut du siège après départ des deux joueurs :", rows)
+print("RÉSULTAT :", "OK" if ok else "ÉCHEC")
+sys.exit(0 if ok else 1)

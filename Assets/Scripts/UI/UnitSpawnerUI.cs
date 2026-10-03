@@ -897,17 +897,6 @@ public partial class UnitSpawnerUI : MonoBehaviour
         ShowMessage("Toutes les unités et barricades ont été retirées.", 2.0f);
     }
 
-    public int GetTotalLivingUnitsCount()
-    {
-        int count = 0;
-        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
-        {
-            UnitAI u = UnitAI.AllLivingUnits[i];
-            if (u != null && !u.isDead) count++;
-        }
-        return count;
-    }
-
     public int GetTeamLivingUnitsCount(int team)
     {
         int count = 0;
@@ -1163,38 +1152,6 @@ public partial class UnitSpawnerUI : MonoBehaviour
             float angle = i * 47f; // pas non-régulier : évite un alignement visuel trop mécanique
             Vector3 offset = Quaternion.Euler(0f, angle, 0f) * new Vector3(8f, 0f, 0f);
             SpawnUnitAt(UnitType.Fantassin, anchor + offset, team);
-        }
-
-        if (team == 2)
-        {
-            Vector3 towardCenter = (Vector3.zero - anchor).normalized;
-            if (towardCenter == Vector3.zero) towardCenter = Vector3.forward;
-            SpawnUnitAt(UnitType.BarricadeRoutiere, anchor + towardCenter * 10f, 2);
-        }
-    }
-
-    public void AutoDeployRoster(int team, Novgov.Auth.PlayerRosterItem[] roster)
-    {
-        Vector3 anchor = FindGroundLevelNavPoint(team == 1 ? new Vector3(-25f, 0f, -25f) : new Vector3(25f, 0f, 25f), 40f);
-        
-        int spawnedCount = 0;
-        foreach (var item in roster)
-        {
-            if (item.quantity <= 0) continue;
-            UnitType ut = UnitType.Fantassin;
-            if (item.unit_type.Equals("CharLeopard", System.StringComparison.OrdinalIgnoreCase)) ut = UnitType.CharLeopard;
-            else if (item.unit_type.Equals("VehiculeCanon", System.StringComparison.OrdinalIgnoreCase)) ut = UnitType.VehiculeCanon;
-            else if (item.unit_type.Equals("Mortier", System.StringComparison.OrdinalIgnoreCase)) ut = UnitType.Mortier;
-            else if (item.unit_type.Equals("Drone", System.StringComparison.OrdinalIgnoreCase)) ut = UnitType.Fantassin;
-
-            for (int i = 0; i < item.quantity; i++)
-            {
-                float angle = spawnedCount * 47f;
-                float radius = 3f + (spawnedCount * 0.5f);
-                Vector3 offset = Quaternion.Euler(0f, angle, 0f) * new Vector3(radius, 0f, 0f);
-                SpawnUnitAt(ut, anchor + offset, team);
-                spawnedCount++;
-            }
         }
 
         if (team == 2)

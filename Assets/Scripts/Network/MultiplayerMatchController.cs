@@ -13,9 +13,10 @@ using UnityEngine.Networking;
 namespace Novgov.Network
 {
     /// <summary>
-    /// Orchestration complète du mode multijoueur côté client : login/inscription, matchmaking,
-    /// envoi des ordres, lecture des snapshots renvoyés par le serveur. Voir
-    /// Assets/_ServerDocs/multiplayer/05-client-integration.md pour le contexte d'intégration.
+    /// Orchestration complète du jeu en ligne côté client : connexion au compte, écran Conquête
+    /// (en-tête + onglet GESTION ; l'onglet CARTE est Novgov.UI.ZoneMapController), capture de
+    /// quartiers, bataille de siège au tour par tour (envoi des ordres, rejeu des snapshots renvoyés
+    /// par le serveur). Voir Assets/_ServerDocs/multiplayer/00-architecture.md.
     /// Le mode solo (TacticalAIPlanner local) n'est jamais impacté : voir le garde
     /// "MultiplayerMatchController.IsActive" ajouté dans TacticalPathManager.LancerExecutionTour().
     ///
@@ -79,10 +80,9 @@ namespace Novgov.Network
         private enum UiState { Hidden, Hub, Login, SignUp, Connecting, Matchmaking, Deployment, InMatch, MatchOver }
         private UiState uiState = UiState.Hidden;
 
-        private string selectedMode = "deathmatch";
+        private string selectedMode = "conquest";
 
-        // Zone de Conquête ciblée par AttackZone() — ignorés par le serveur pour deathmatch/zone_control
-        // (voir NetMessage.zone_tile_x/zone_tile_y).
+        // Quartier visé par AttackZone() (capture) ou JoinSiegeBattle() (siège).
         private int attackTileX;
         private int attackTileY;
 
@@ -100,14 +100,8 @@ namespace Novgov.Network
 
         private int localTeamId = 0;
         public int LocalTeamId => localTeamId;
-        public static Dictionary<string, int> LostUnits = new Dictionary<string, int>();
 
-        // Composition RÉELLE déployée pour mon camp (unit_type -> quantité), capturée à
-        private Dictionary<string, int> deployedRosterCountByType = new Dictionary<string, int>();
-
-        private string currentMode = "deathmatch";
-        private float zoneProgressTeam1 = 0f;
-        private float zoneProgressTeam2 = 0f;
+        private string currentMode = "siege";
         private int currentTurnNumber = 1;
         private int lastServerSecondsRemaining = -1;
         public static int PhaseSecondsRemaining => Instance != null ? Instance.lastServerSecondsRemaining : 0;
@@ -132,7 +126,6 @@ namespace Novgov.Network
         private VisualElement usernameContainer;
         private Button submitButton, toggleModeButton;
         private Label teamBanner, phaseLabel, ghostBannerLabel, resultLabel, ratingLabel;
-        private VisualElement zoneBarContainer, zoneFillTeam1, zoneFillTeam2;
         private bool uiBound = false;
 
 
@@ -490,8 +483,8 @@ namespace Novgov.Network
             SetUiState(UiState.Matchmaking);
 
             int chosenPort = 7777; // Port robuste par défaut
-            string queueColumn = selectedMode == "zone_control" ? "waiting_zone_control" : "waiting_deathmatch";
-            string url = $"{SupabaseAuthClient.RestBaseUrl}/server_instances?status=neq.busy&order={queueColumn}.desc,updated_at.desc&limit=1&select=id,public_port";
+            // Capture d'un quartier libre : n'importe quelle instance libre fait l'affaire.
+            string url = $"{SupabaseAuthClient.RestBaseUrl}/server_instances?status=neq.busy&order=updated_at.desc&limit=1&select=id,public_port";
             // Bataille de siège (2026-10-03) : l'attaquant et le défenseur DOIVENT tomber sur la même
             // instance du pool (la salle d'attente du siège vit dans UN processus serveur). Choix
             // déterministe : instances vivantes triées par id, indice = siege_id modulo leur nombre —
@@ -558,32 +551,12 @@ namespace Novgov.Network
             client.OnDisconnected += HandleServerDisconnected;
             client.Connect(SupabaseAuthClient.CurrentSession.access_token);
 
-            // Deathmatch/Zone de Contrôle sur la vraie position GPS du joueur (2026-08-30, "des
-            // milliers de cartes") : envoie la tuile domicile déjà connue (voir ZoneManager,
-            // GameManagerUI.StartDeviceGPS — GPS consulté UNE SEULE fois au tout premier lancement,
-            // jamais réinterrogé ici) ; sans effet pour la Conquête, qui a déjà son propre usage de
-            // zone_tile_x/y (attackTileX/Y ci-dessus, une Zone précisément visée, pas un domicile).
-            bool hasHomeTile = false;
-            int homeTileX = 0, homeTileY = 0;
-            bool targetsSpecificZone = selectedMode == "conquest" || selectedMode == "siege_battle";
-            if (!targetsSpecificZone)
-            {
-                var zoneManager = Novgov.Generation.ZoneManager.Instance;
-                if (zoneManager != null && zoneManager.HasHomeZone)
-                {
-                    hasHomeTile = true;
-                    homeTileX = zoneManager.HomeTileX;
-                    homeTileY = zoneManager.HomeTileY;
-                }
-            }
-
             client.Send(new NetMessage
             {
                 type = "join_matchmaking",
                 mode = selectedMode,
-                zone_tile_x = targetsSpecificZone ? attackTileX : homeTileX,
-                zone_tile_y = targetsSpecificZone ? attackTileY : homeTileY,
-                has_home_tile = hasHomeTile,
+                zone_tile_x = attackTileX,
+                zone_tile_y = attackTileY,
                 siege_id = pendingSiegeId
             });
 
@@ -594,15 +567,14 @@ namespace Novgov.Network
                 "siege_battle" => siegeAsAttacker
                     ? $"Siège lancé ! En attente de {siegeOpponentName} : il vient d'être prévenu. La bataille au tour par tour commencera dès qu'il répondra"
                     : $"En attente de {siegeOpponentName} pour la bataille au tour par tour",
-                _ => "Recherche d'adversaire",
+                _ => "Connexion au serveur de jeu",
             };
         }
 
-        /// <summary>Demande au serveur d'attaquer/capturer la Zone de Conquête (tileX,tileY) — voir
-        /// MatchSessionManager.HandleConquestMessage : capture instantanée si elle est neutre, combat
-        /// contre sa garnison IA si elle appartient à un autre joueur. Résultat via "zone_captured"
-        /// (capture immédiate), "zone_attack_result" (refus) ou "match_found"/"match_over" (combat).
-        /// Appelé par ZoneManager (voir Assets/Scripts/Generation/ZoneManager.cs).</summary>
+        /// <summary>Demande au serveur de prendre le quartier LIBRE (tileX,tileY) — voir
+        /// MatchSessionManager.HandleConquestMessage : capture instantanée, sans combat. Résultat via
+        /// "zone_captured" ou "zone_attack_result" (refus). Un quartier déjà possédé se prend par un
+        /// siège (JoinSiegeBattle). Appelé par la carte de Conquête (Novgov.UI.ZoneMapController).</summary>
         public void AttackZone(int tileX, int tileY)
         {
             selectedMode = "conquest";
@@ -631,30 +603,6 @@ namespace Novgov.Network
             pendingSiegeId = siegeId;
             siegeAsAttacker = asAttacker;
             siegeOpponentName = string.IsNullOrEmpty(opponentName) ? "l'autre joueur" : opponentName;
-            StartCoroutine(ConnectToGameServerCoroutine());
-        }
-
-                /// depuis l'UI — seuls AttackZone (Conquête, un joueur contre une garnison IA, jamais un
-        /// adversaire vivant) et StartPracticeVsAI (accessible uniquement DEPUIS une file d'attente
-        /// déjà ouverte) appelaient ConnectToGameServerCoroutine. Le vrai appariement à deux joueurs
-        /// vivants (DetermineMatchCacheKey côté serveur) existait donc dans le protocole sans aucun
-        /// bouton pour l'atteindre. Ajouté ici — puis retiré de l'interface le 2026-09-30 (demande
-        /// joueur : seule la Conquête est proposée en ligne), voir "Navigation de l'écran CONQUÊTE".</summary>
-        public void StartDeathmatch()
-        {
-            selectedMode = "deathmatch";
-            StartCoroutine(ConnectToGameServerCoroutine());
-        }
-
-        public void StartZoneControl()
-        {
-            selectedMode = "zone_control";
-            StartCoroutine(ConnectToGameServerCoroutine());
-        }
-
-        public void StartPracticeVsAI()
-        {
-            selectedMode = "practice_ai";
             StartCoroutine(ConnectToGameServerCoroutine());
         }
 
@@ -772,40 +720,29 @@ namespace Novgov.Network
                 // "zone_taken" : quartier libre pris par quelqu'un d'autre entre votre demande et la
                 // réponse du serveur (deux joueurs visant le même quartier libre au même instant).
                 "zone_taken" => "Trop tard : un autre joueur vient de prendre ce quartier juste avant vous.",
+                // "zone_owned" : le quartier appartient (désormais) à un autre joueur — il se prend par
+                // un siège, jamais par une capture directe.
+                "zone_owned" => "Ce quartier appartient à un autre joueur : touchez-le sur la carte puis LANCER UN SIÈGE pour le lui prendre.",
+                "outdated_client" => "Votre version du jeu n'est plus à jour : installez la dernière version pour jouer en ligne.",
                 _ => "Impossible de prendre ce quartier pour le moment. Réessayez dans un instant.",
             };
             OnZoneResult?.Invoke(message, false);
         }
 
-                /// (mode="siege_attack_deploy") ou défenseur (mode="siege_defend_deploy") vient de valider
-        /// son placement, voir MatchSessionManager_Siege.cs. Jamais de match live derrière : le
-        /// serveur ferme la connexion juste après (comme zone_captured/zone_attack_result), d'où la
-        /// réutilisation du même drapeau/événement OnZoneResult (déjà écouté par ZoneMapController
-        /// pour afficher un écran de résultat) plutôt que d'inventer un nouvel écran pour ça.</summary>
+        /// <summary>"siege_deploy_ack" en échec : le serveur refuse l'entrée dans la salle d'attente
+        /// d'un siège (siège clos, déjà en bataille, ou échéance passée) et ferme la connexion juste
+        /// après — d'où expectingCloseAfterZoneResult, et l'écran de résultat de ZoneMapController.</summary>
         private void OnSiegeDeployAck(NetMessage msg)
         {
             expectingCloseAfterZoneResult = true;
-            string message;
-            if (msg.success)
+            string message = msg.reason switch
             {
-                message = currentMode == "siege_defend_deploy"
-                    // Le serveur joue la bataille dès que les DEUX camps ont placé leurs troupes
-                    // (MatchSessionManager_Siege.RunSiegeDefendDeploy -> ResolveSiegeNow) : pour le
-                    // défenseur, c'est presque toujours tout de suite.
-                    ? "Défense en place ! Les deux camps ont placé leurs troupes : la bataille se joue maintenant sur le serveur. Le résultat s'affichera sur l'écran Conquête dans quelques instants (et dans vos RAPPORTS)."
-                    : "Siège lancé ! Le propriétaire a maintenant 6 heures pour placer ses troupes en défense. Dès qu'il l'a fait — ou à la fin du délai — la bataille se joue toute seule : le résultat s'affichera sur l'écran Conquête et dans vos RAPPORTS.";
-            }
-            else
-            {
-                message = msg.reason switch
-                {
-                    "siege_invalid" => "Ce siège n'existe plus (déjà terminé, ou une bataille est déjà en cours).",
-                    "siege_expired" => "Le délai du siège est écoulé : la bataille se joue automatiquement avec les troupes des casernes. Le résultat arrivera dans vos RAPPORTS.",
-                    "server_busy" => "Le serveur est très occupé — réessayez dans un instant.",
-                    _ => "Impossible d'envoyer vos troupes pour ce siège pour le moment. Réessayez dans un instant.",
-                };
-            }
-            OnZoneResult?.Invoke(message, msg.success);
+                "siege_invalid" => "Ce siège n'existe plus (déjà terminé, ou une bataille est déjà en cours).",
+                "siege_expired" => "Le délai du siège est écoulé : la bataille se joue automatiquement avec les troupes des casernes. Le résultat arrivera dans vos RAPPORTS.",
+                "server_busy" => "Le serveur est très occupé — réessayez dans un instant.",
+                _ => "Impossible de rejoindre ce siège pour le moment. Réessayez dans un instant.",
+            };
+            OnZoneResult?.Invoke(message, false);
         }
 
         private int? preMatchExplorationTileX = null;
@@ -818,12 +755,8 @@ namespace Novgov.Network
             sceneDirtyFromMatch = true;
             quitConfirmArmed = false;
             RefreshCancelWaitButton();
-            LostUnits.Clear();
-            deployedRosterCountByType.Clear();
             localTeamId = msg.team_id;
-            currentMode = string.IsNullOrEmpty(msg.mode) ? "deathmatch" : msg.mode;
-            zoneProgressTeam1 = 0f;
-            zoneProgressTeam2 = 0f;
+            currentMode = string.IsNullOrEmpty(msg.mode) ? "siege" : msg.mode;
             currentTurnNumber = 1;
             statusMessage = $"Adversaire trouvé : {msg.opponent_username}";
 
@@ -839,24 +772,11 @@ namespace Novgov.Network
                 preMatchExplorationTileY = Novgov.Generation.ZoneManager.Instance.CurrentTileY;
             }
 
-            if (currentMode == "conquest" || currentMode == "siege" || currentMode == "siege_attack_deploy" || currentMode == "siege_defend_deploy")
-            {
-                // La géométrie RÉELLE de la Zone attaquée (bâtiments + sol + NavMesh) doit être
-                // chargée sur CE client avant d'ouvrir le déploiement — sans ça, le joueur placerait
-                // ses unités sur l'ancienne carte encore affichée à l'écran. Même chargement pour un
-                // déploiement de siège (attaquant ou défenseur) : c'est la même vraie Zone GPS.
-                statusMessage = currentMode == "siege"
-                    ? $"Bataille contre {msg.opponent_username} : chargement du quartier assiégé"
-                    : "Chargement du quartier visé";
-                StartCoroutine(LoadMatchMapThenOpenDeployment(true, msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
-                return;
-            }
-
-            // Deathmatch/Zone de Contrôle (2026-08-30, "des milliers de cartes") : le serveur peut
-            // désormais assigner la vraie tuile GPS d'un des deux joueurs (msg.has_home_tile) au lieu
-            // de toujours la carte par défaut fixe — voir MatchSessionManager.TryStartMatch/
-            statusMessage = "Chargement du champ de bataille...";
-            StartCoroutine(LoadMatchMapThenOpenDeployment(msg.has_home_tile, msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
+            // La géométrie RÉELLE du quartier (bâtiments + sol + NavMesh) doit être chargée sur CE
+            // client avant d'ouvrir le déploiement — sinon le joueur placerait ses unités sur
+            // l'ancienne carte encore affichée à l'écran.
+            statusMessage = $"Bataille contre {msg.opponent_username} : chargement du quartier assiégé";
+            StartCoroutine(LoadMatchMapThenOpenDeployment(true, msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
         }
 
         /// <summary>Charge la carte réellement choisie par le serveur pour cette partie (voir
@@ -1127,7 +1047,6 @@ namespace Novgov.Network
             // le joueur ne peut de toute façon plus placer de nouvelles unités passé ce point.
             UnitSpawnerUI.Instance.maxUnitsPerTeam = 8;
 
-            deployedRosterCountByType.Clear();
             if (msg.deployed_units != null)
             {
                 foreach (var u in msg.deployed_units)
@@ -1136,18 +1055,6 @@ namespace Novgov.Network
                     Vector3 pos = new Vector3(u.x, u.y, u.z);
                     UnitSpawnerUI.Instance.SpawnUnitAt(type, pos, u.team_id, forcedName: u.unit_id, skipSafeSpawnAdjustment: true);
 
-                    // Composition RÉELLE et AUTORITAIRE (validée/recadrée par le serveur) de MON
-                    // camp, capturée ici — voir OnMatchOver, qui la compare à l'effectif encore
-                    // vivant en fin de partie pour déduire les pertes (voir deployedRosterCountByType).
-                    // Barricades exclues : ni suivies par la caserne (SupabaseDatabaseClient.
-                    // KnownUnitTypes), ni des UnitAI (jamais dans AllLivingUnits, donc toujours
-                    // "0 survivante" — fausserait le calcul sans que rien ne lise ce résultat).
-                    if (u.team_id == localTeamId && type != UnitSpawnerUI.UnitType.BarricadeRoutiere)
-                    {
-                        string key = type.ToString();
-                        deployedRosterCountByType.TryGetValue(key, out int cur);
-                        deployedRosterCountByType[key] = cur + 1;
-                    }
                 }
             }
 
@@ -1183,12 +1090,10 @@ namespace Novgov.Network
 
         private void OnOpponentGhosted(NetMessage msg)
         {
-            bool realAiRan = currentMode == "conquest" || currentMode == "practice_ai";
+            // Pas d'IA en multijoueur : les unités d'un joueur absent tiennent leur position.
             string who = msg.team_id == localTeamId ? "Vous étiez" : "Adversaire";
             string pronoun = msg.team_id == localTeamId ? "vos" : "ses";
-            ghostBannerText = realAiRan
-                ? $"{who} absent — une IA de secours a joué {pronoun} unités ce tour-ci."
-                : $"{who} absent — {pronoun} unités ont tenu leur position ce tour-ci (aucun ordre, mais ripostent si attaquées).";
+            ghostBannerText = $"{who} absent — {pronoun} unités ont tenu leur position ce tour-ci (aucun ordre, mais ripostent si attaquées).";
             ghostBannerTimer = 4f;
             if (ghostBannerLabel != null)
             {
@@ -1196,45 +1101,6 @@ namespace Novgov.Network
                 ghostBannerLabel.style.display = DisplayStyle.Flex;
             }
         }
-
-                /// réellement déployée pour mon camp (deployedRosterCountByType, capturée à
-        /// OnDeploymentResult depuis la liste AUTORITAIRE du serveur) à l'effectif ENCORE VIVANT de
-        /// ce même camp à l'instant précis de la fin de partie. Avant ce correctif, LostUnits n'était
-        /// JAMAIS écrit nulle part dans tout le projet : ProcessLostUnitsAsync ne faisait donc
-        /// jamais rien (son unique garde, `if (LostUnits.Count == 0) return;`, était toujours vraie),
-        /// et aucune perte au combat n'était jamais déduite de la caserne — un joueur pouvait
-        /// redéployer indéfiniment des unités pourtant mortes en match précédent.
-        ///
-        /// Approche par DIFFÉRENCE d'effectif plutôt que par un nouveau message serveur listant les
-        /// morts une à une : ne nécessite aucun changement de protocole réseau, et reste correct même
-        /// si une unité change de représentation entre temps (elle est simplement soit vivante, soit
-        /// non, à cet instant précis).</summary>
-        private void ComputeLostUnitsFromDeployedVsAlive()
-        {
-            var aliveCountByType = new Dictionary<string, int>();
-            foreach (var u in UnitAI.AllLivingUnits)
-            {
-                if (u == null || u.isDead || u.teamID != localTeamId) continue;
-                aliveCountByType.TryGetValue(u.sourceUnitType, out int cur);
-                aliveCountByType[u.sourceUnitType] = cur + 1;
-            }
-
-            foreach (var kv in deployedRosterCountByType)
-            {
-                aliveCountByType.TryGetValue(kv.Key, out int stillAlive);
-                int lost = kv.Value - stillAlive;
-                if (lost > 0) LostUnits[kv.Key] = lost;
-            }
-        }
-
-                /// (PlayerPrefs, supprimé — voir SupabaseDatabaseClient.cs, la caserne est maintenant une
-        /// vraie table serveur, public.player_roster, verrouillée en écriture directe). Ne fait plus
-        /// rien : le déploiement ne dépend plus d'un stock d'unités possédées (voir
-        /// UnitSpawnerUI.StartPlacingUnit, demande explicite "laisse-moi déployer tout"), donc la
-        /// perte définitive d'une unité au combat n'a plus de conséquence à répercuter ici. LostUnits/
-        /// ComputeLostUnitsFromDeployedVsAlive restent calculés (inoffensif) au cas où une vraie
-        /// conséquence de perte serait réintroduite plus tard.</summary>
-        private System.Threading.Tasks.Task ProcessLostUnitsAsync() => System.Threading.Tasks.Task.CompletedTask;
 
         private IEnumerator DeferredMatchOver(NetMessage msg)
         {
@@ -1270,25 +1136,7 @@ namespace Novgov.Network
 
             IsActive = false;
             string resultText;
-            if (currentMode == "conquest")
-            {
-                // Retour spécifique conquête (voir MatchSessionManager.RunConquestSkirmish) : jusqu'ici
-                // le client ignorait totalement zone_tile_x/y et success, affichant le même "VICTOIRE
-                // !"/"DÉFAITE." générique qu'un deathmatch — sans jamais dire au joueur SI la Zone a
-                // réellement été conquise, ni pourquoi pas en cas de victoire militaire "perdue"
-                // (course avec un autre attaquant, voir reason="zone_lost_race").
-                if (msg.winner_team == 0)
-                    resultText = "Partie interrompue.";
-                else if (msg.success)
-                    resultText = $"VICTOIRE ! Le {Novgov.UI.QuartierText.Name(msg.zone_tile_x, msg.zone_tile_y)} est à vous.";
-                else if (msg.winner_team == localTeamId && msg.reason == "zone_lost_race")
-                    resultText = "Garnison vaincue, mais un autre joueur a pris ce quartier juste avant vous.";
-                else if (msg.winner_team == localTeamId)
-                    resultText = "Garnison vaincue.";
-                else
-                    resultText = "DÉFAITE — ce quartier reste aux mains de son propriétaire.";
-            }
-            else if (currentMode == "siege")
+            if (currentMode == "siege")
             {
                 // Bataille de siège au tour par tour (2026-10-03) : équipe 1 = attaquant, 2 = défenseur.
                 // success = le quartier a réellement changé de mains (voir MatchSessionManager_
@@ -1304,15 +1152,6 @@ namespace Novgov.Network
                 else
                     resultText = msg.success ? $"DÉFAITE — vous avez perdu votre {place}."
                         : $"QUARTIER DÉFENDU ! Votre {place} reste à vous.";
-            }
-            else if (currentMode == "practice_ai")
-            {
-                // Entraînement hors-score (voir MatchSessionManager.RunPracticeVsAI) : jamais de
-                // texte "Classement" en dessous (your_new_rating reste à 0, voir ratingText), pour
-                // ne pas laisser croire que cette partie compte.
-                resultText = msg.winner_team == 0 ? "Entraînement interrompu."
-                    : msg.winner_team == localTeamId ? "VICTOIRE contre l'IA ! (Entraînement)"
-                    : "DÉFAITE contre l'IA. (Entraînement)";
             }
             else
             {
@@ -1551,9 +1390,6 @@ namespace Novgov.Network
                     if (kv.Value != null && kv.Value.teamID != localTeamId && !visibleThisTick.Contains(kv.Key) && !kv.Value.isDead)
                         kv.Value.SetVisualsVisibility(false);
                 }
-
-                zoneProgressTeam1 = snap.zone_progress_team1;
-                zoneProgressTeam2 = snap.zone_progress_team2;
 
                 float elapsed = 0f;
                 while (elapsed < intervalSec)
@@ -2194,7 +2030,7 @@ namespace Novgov.Network
 
 #if UNITY_EDITOR
             // Connexion rapide aux 2 comptes de test (créés le 2026-08-29 sur novgov.com, voir
-            // 08-known-issues-and-todo.md §10) — évite de ressaisir email/mot de passe à chaque essai
+            // l'historique git (ancien journal 08) §10) — évite de ressaisir email/mot de passe à chaque essai
             // en Éditeur. Rangée entière cachée par défaut dans le UXML (display:none) : rendue
             // visible UNIQUEMENT ici, jamais sur un vrai build Android/iOS.
             // 2026-10-03 ("le mode test multijoueur est incompréhensible") : boutons "JOUEUR 1 / JOUEUR 2"
@@ -2227,9 +2063,6 @@ namespace Novgov.Network
             teamBanner = hudRoot.Q<Label>("team-banner");
             phaseLabel = hudRoot.Q<Label>("phase-label");
             ghostBannerLabel = hudRoot.Q<Label>("ghost-banner");
-            zoneBarContainer = hudRoot.Q<VisualElement>("zone-bar-container");
-            zoneFillTeam1 = hudRoot.Q<VisualElement>("zone-fill-team1");
-            zoneFillTeam2 = hudRoot.Q<VisualElement>("zone-fill-team2");
 
             matchOverRoot = UIScreenManager.Instance.GetScreen("MatchOver");
             resultLabel = matchOverRoot.Q<Label>("result-label");
@@ -2341,7 +2174,6 @@ namespace Novgov.Network
             teamBanner.RemoveFromClassList("team1-badge");
             teamBanner.RemoveFromClassList("team2-badge");
             teamBanner.AddToClassList(localTeamId == 2 ? "team2-badge" : "team1-badge");
-            zoneBarContainer.style.display = currentMode == "zone_control" ? DisplayStyle.Flex : DisplayStyle.None;
             ghostBannerLabel.style.display = DisplayStyle.None;
         }
 
@@ -2358,12 +2190,6 @@ namespace Novgov.Network
             phaseLabel.text = !string.IsNullOrEmpty(statusMessage)
                 ? statusMessage
                 : (isExecuting ? "EXÉCUTION — résolution du tour, patientez..." : "PLANIFICATION");
-
-            if (currentMode == "zone_control")
-            {
-                zoneFillTeam1.style.width = new StyleLength(Length.Percent(zoneProgressTeam1));
-                zoneFillTeam2.style.width = new StyleLength(Length.Percent(zoneProgressTeam2));
-            }
         }
 #endif
 

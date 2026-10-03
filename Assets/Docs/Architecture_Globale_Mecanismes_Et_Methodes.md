@@ -250,79 +250,33 @@ Pour éliminer toute dépendance à des fichiers audio externes et prévenir les
 
 ---
 
-## 12. Outils d'Éditeur & Automatisation Unity
+## 12. Outils d'Éditeur (`Assets/Editor/`)
 
-Emplacement : `Assets/Editor/`
+| Outil | Rôle |
+| :--- | :--- |
+| `AnimatorSetupEditor.cs` | Construit automatiquement l'arbre d'états de l'Animator des unités (Hit, Death, Escalade) — s'exécute au chargement de l'Éditeur. |
+| `FetchDefaultMapData.cs` (`Tools > Novgov > Télécharger la carte hors-ligne`) | Télécharge le JSON Overpass de la carte du mode Solo. |
+| `AppIconGenerator.cs`, `UIToolkitSetup.cs` | Icône de l'application ; création du PanelSettings de l'UI. |
+| `ServerBuildScript.cs`, `AndroidTestBuildScript.cs`, `RestoreClientBuildSettings.cs`, `AndroidManifestOrientationFix.cs` | Builds serveur Linux et APK Android. |
+| `ConquestScreenPreview.cs` | Captures PNG de l'écran Conquête (voir `_ServerDocs/multiplayer/07-tests.md`). |
+| `TacticalCoreSelfTest*.cs`, `*AutoTest.cs`, `EditorAutoTestHarness.cs` | Auto-tests (pathfinding, sélection, rejeu réseau, géométrie...). |
 
-| Menu Unity | Script Éditeur | Action Réalisée |
-| :--- | :--- | :--- |
-| **`Novgov > 1. Réparer les Squelettes 3D (Humanoid)`** | `AnimationSetupTool.cs` | Force l'import de tous les FBX de personnages en Humanoid. |
-| **`Novgov > 2. Configuration Magique des Animations`** | `AnimationSetupTool.cs` | Configure les clips d'animation et leurs propriétés. |
-| **`Novgov > 3. Assigner Textures Briques Rouges`** | `MaterialSetupTool.cs` | Configure les matériaux de façade des bâtiments. |
-| **`Novgov > 4. Activer le Loop et Fixer les Saccades`** | `FixLoopTimeTool.cs` | Active `Bake Into Pose` (XZ & Rotation) sur les clips de course pour supprimer le jittering. |
-| **`Tools > Configurer Animator Unités (Hit, Death et Escalade)`** | `AnimatorSetupEditor.cs` | Construit automatiquement l'arbre d'état de l'Animator Controller. |
-| **`Tools > Configurer Combat (Armes & Animations)`** | `CombatSetupTool.cs` | Positionne les armes et points d'ancrage sur les modèles. |
-| **`Tools > Configurer le Tank (Leopard 2)`** | `TankSetupEditor.cs` | Configure les os de tourelle et canon du char. |
-| **`Tools > Réparer les Couleurs du Tank Leopard`** | `TankMaterialFixer.cs` | Applique les shaders et textures militaires sur les véhicules. |
-| **`Tools > Configurer WarFX (Auto-Setup)`** | `WarFXSetupEditor.cs` | Relie les prefabs de particules de tir et d'impacts. |
-| **`Tools > Novgov > Télécharger la carte hors-ligne`** | `FetchDefaultMapData.cs` | Télécharge et enregistre en local le JSON Overpass de référence. |
+Les outils de configuration ponctuels (squelettes Humanoid, boucles d'animation, matériaux, char
+Leopard, WarFX) ont été retirés le 2026-10-03 : leurs réglages sont enregistrés dans les assets.
 
 ---
 
-## 13. Architecture Multijoueur, Conquête et Persistance (Supabase)
+## 13. Jeu en ligne
 
-Fichiers clés : [`SupabaseAuthClient.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Auth/SupabaseAuthClient.cs), [`SupabaseDatabaseClient.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Auth/SupabaseDatabaseClient.cs), [`MultiplayerMatchController.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Network/MultiplayerMatchController.cs), [`MatchSessionManager.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Server/MatchSessionManager.cs), [`ZoneMapController.cs`](file:///e:/streetact/My%20project/Assets/Scripts/UI/ZoneMapController.cs)
-
-### 13.1. Gestion des Comptes & Monétisation
-- L'authentification (Inscription / Connexion) est gérée nativement via **Supabase Auth** (`SupabaseAuthClient`).
-- Chaque joueur possède un profil persistant (Table `profiles`) contenant ses **Points d'Action (AP)** et son **Elo / Rating**.
-- Les Points d'Action servent de monnaie d'échange pour l'achat de nouvelles unités dans la **Boutique de Recrutement (Hub)**.
-
-### 13.2. Persistance d'Armée (Roster)
-- L'inventaire d'unités du joueur est enregistré sur le cloud (Table `player_roster`).
-- L'achat d'unités déduit les AP en toute sécurité via l'API REST de Supabase.
-- Chaque déploiement tactique en Conquête puise strictement dans cette réserve, garantissant un système d'économie fermé.
-
-### 13.3. Guerre de Territoires & Défense Asynchrone
-- Le serveur autoritaire (`MatchSessionManager`) gère l'arbitrage complet des combats (Timer, Déconnexions, Déploiements).
-- La **Carte des Zones** (`ZoneMapController`) affiche une Minimap stratégique 3x3 basée sur les données `zones` de Supabase (les zones alliées en bleu, ennemies en rouge).
-- **Défense Asynchrone :** En cas d'attaque sur une zone appartenant à un joueur déconnecté, le serveur télécharge automatiquement l'inventaire (`Roster`) du défenseur et **déploie ses unités autour du Quartier Général (HQ)** pour assurer la défense !
-- **Victoire & Pillage (Loot) :** Si l'attaquant détruit le Quartier Général du défenseur, le serveur déclare une victoire totale et pille **100% des Points d'Action (AP)** du vaincu pour les transférer à l'attaquant !
+Voir `Assets/_ServerDocs/multiplayer/00-architecture.md` (référence à jour). En résumé : écran
+CONQUÊTE (carte OpenStreetMap des quartiers + gestion), capture des quartiers libres, revenu en
+Points d'Action, caserne, et prise des quartiers des autres joueurs par des **sièges joués au tour
+par tour entre les deux joueurs** sur un serveur autoritaire (vrai moteur Unity). Aucune IA en
+multijoueur : les unités d'un joueur absent tiennent leur position.
 
 ---
 
-## 14. Synthèse Exhaustive des Scripts et Responsabilités
+## 14. Où trouver chaque script
 
-| Script / Classe | Emplacement | Rôle Principal |
-| :--- | :--- | :--- |
-| **[`CityGenerator.cs`](file:///e:/streetact/My%20project/Assets/CityGenerator.cs)** | `Assets/` | Téléchargement OpenStreetMap/Overpass, création des maillages de bâtiments, murs double-face et bake NavMesh. |
-| **[`BuildingStructure.cs`](file:///e:/streetact/My%20project/Assets/BuildingStructure.cs)** | `Assets/` | Empreinte polygonale 2D, calcul du centroïde, détection `ContainsPoint2D`, gestion des portes et fenêtres. |
-| **[`TacticalCamera.cs`](file:///e:/streetact/My%20project/Assets/TacticalCamera.cs)** | `Assets/` | Moteur de caméra hybride 2D/3D fluide, zoom continu, rotation orbitale, pan sans saccade en `LateUpdate()`. |
-| **[`CameraStateManager.cs`](file:///e:/streetact/My%20project/Assets/CameraStateManager.cs)** | `Assets/` | Machine à états de caméra (Command 2D vs Action 3D), transitions et gestion des Culling Masks. |
-| **[`TacticalPathManager.cs`](file:///e:/streetact/My%20project/Assets/TacticalPathManager.cs)** | `Assets/` | Gestion du cycle de tour, détection des clics polygonaux, menus contextuels, cache de tracés. |
-| **[`UnitAI.cs`](file:///e:/streetact/My%20project/Assets/UnitAI.cs)** | `Assets/` | Définition principale de l'unité, santé, inventaire d'armes, drapeaux d'état et initialisation. |
-| **[`UnitAI_Movement.cs`](file:///e:/streetact/My%20project/Assets/UnitAI_Movement.cs)** | `Assets/` | Exécution séquentielle des déplacements, escalade, franchissement de portes et gestion du NavMesh. |
-| **[`UnitAI_Combat.cs`](file:///e:/streetact/My%20project/Assets/UnitAI_Combat.cs)** | `Assets/` | Lignes de vue, visée de tourelle, cadences de tir, calcul de couverture et tirs en temps réel. |
-| **[`UnitAI_Visuals.cs`](file:///e:/streetact/My%20project/Assets/UnitAI_Visuals.cs)** | `Assets/` | Barres de vie 3D, anneaux de sélection holographiques, particules de sang et animations. |
-| **[`TacticalAIPlanner.cs`](file:///e:/streetact/My%20project/Assets/Scripts/AI/TacticalAIPlanner.cs)** | `Assets/Scripts/AI/` | Cerveau décisionnel de l'IA adverse (gestion équitable du brouillard, patrouille, snipers, mortiers). |
-| **[`MortarShell.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Combat/MortarShell.cs)** | `Assets/Scripts/Combat/` | Obus d'artillerie balistique parabolique haute avec dégâts de zone (AoE Blast). |
-| **[`RoadBarrier.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Combat/RoadBarrier.cs)** | `Assets/Scripts/Combat/` | Barricade routière tactique destructible avec blocage NavMesh et couverture lourde (-60%). |
-| **[`DestructibleEnvironment.cs`](file:///e:/streetact/My%20project/Assets/Scripts/DestructibleEnvironment.cs)** | `Assets/Scripts/` | Pulvérisation des bâtiments en ruines calcinées et libération des zones franchissables. |
-| **[`TacticalRadarUI.cs`](file:///e:/streetact/My%20project/Assets/Scripts/TacticalRadarUI.cs)** | `Assets/Scripts/` | Radar militaire circulaire HUD temps réel (balayage sonar, pings visuels, suivi alliés/ennemis). |
-| **[`UnitSpawnerUI.cs`](file:///e:/streetact/My%20project/Assets/UnitSpawnerUI.cs)** | `Assets/` | Menu tactique de déploiement d'unités (drag & drop, sélection équipe bleue/rouge). |
-| **[`GameManagerUI.cs`](file:///e:/streetact/My%20project/Assets/GameManagerUI.cs)** | `Assets/` | Sélecteur de carte au démarrage, verrouillage 60 FPS, activation automatique du GPU Instancing. |
-| **[`TacticalStreamingManager.cs`](file:///e:/streetact/My%20project/Assets/TacticalStreamingManager.cs)** | `Assets/` | Activation sélective des maillages 3D par centroïde dans un rayon de 260m. |
-| **[`TacticalVisibility.cs`](file:///e:/streetact/My%20project/Assets/TacticalVisibility.cs)** | `Assets/` | Gestion de la vue en coupe semi-transparente (80%) pour les toits occupés. |
-| **[`GeoProjection.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Core/GeoProjection.cs)** | `Assets/Scripts/Core/` | Projection cartographique Web Mercator EPSG:3857 calibrée en mètres Unity. |
-| **[`BuildingSubdivider.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Generation/BuildingSubdivider.cs)** | `Assets/Scripts/Generation/` | Découpage récursif des blocs polygonaux OSM en parcelles individuelles. |
-| **[`DoorInteraction.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Interaction/DoorInteraction.cs)** | `Assets/Scripts/Interaction/` | Points d'entrée/sortie au RDC des bâtiments. |
-| **[`WindowInteraction.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Interaction/WindowInteraction.cs)** | `Assets/Scripts/Interaction/` | Postes de tir de fenêtre avec couverture de garnison (-75%). |
-| **[`MapTileLoader.cs`](file:///e:/streetact/My%20project/Assets/MapTileLoader.cs)** | `Assets/` | Téléchargement des tuiles cartographiques et génération du maillage de sol. |
-| **[`ProceduralAudioBuilder.cs`](file:///e:/streetact/My%20project/Assets/ProceduralAudioBuilder.cs)** | `Assets/` | Génération d'ondes audio PCM procédurales temps réel (zéro asset externe). |
-| **[`SafeMaterialFactory.cs`](file:///e:/streetact/My%20project/Assets/SafeMaterialFactory.cs)** | `Assets/` | Usine de matériaux et shaders compatibles multi-pipelines. |
-| **[`SupabaseAuthClient.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Auth/SupabaseAuthClient.cs)** | `Assets/Scripts/Auth/` | Gestion de l'authentification (Email/Mdp, Inscription, Connexion) via l'API REST Supabase. |
-| **[`SupabaseDatabaseClient.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Auth/SupabaseDatabaseClient.cs)** | `Assets/Scripts/Auth/` | Couche d'accès aux données persistantes (AP, Rating, Roster d'unités). |
-| **[`MultiplayerMatchController.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Network/MultiplayerMatchController.cs)** | `Assets/Scripts/Network/` | Orchestration du Hub central, boutique de recrutement, file d'attente réseau et UI multijoueur. |
-| **[`MatchSessionManager.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Server/MatchSessionManager.cs)** | `Assets/Scripts/Server/` | Serveur autoritaire gérant la conquête, l'IA de garnison asynchrone, les timers, et le pillage. |
-| **[`ZoneMapController.cs`](file:///e:/streetact/My%20project/Assets/Scripts/UI/ZoneMapController.cs)** | `Assets/Scripts/UI/` | Affichage stratégique de la Minimap 3x3 et sélection des territoires à conquérir. |
-| **[`GameServerClient.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Network/GameServerClient.cs)** | `Assets/Scripts/Network/` | Couche réseau client connectant Unity au serveur autoritaire (TCP). |
+Voir `Organisation_Des_Scripts.md` (dossiers `Assets/Scripts/AI`, `Auth`, `Camera`, `Combat`, `Core`,
+`Generation`, `Interaction`, `Network`, `Rendering`, `Server`, `TacticalCore`, `UI`).

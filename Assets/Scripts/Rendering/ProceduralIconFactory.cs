@@ -54,14 +54,6 @@ public static class ProceduralIconFactory
 
     // --- Icônes ---
 
-    public static Texture2D House() => Get("house", p =>
-    {
-        // Corps carré + toit triangulaire
-        bool body = p.x > 8 && p.x < 20 && p.y > 4 && p.y < 15;
-        bool roofTri = p.y >= 15 && p.y <= 24 && Mathf.Abs(p.x - 14) < (24f - p.y) * 0.72f;
-        return (body || roofTri) ? Ink : Color.clear;
-    });
-
     public static Texture2D Ladder() => Get("ladder", p =>
     {
         Color c = Color.clear;
@@ -89,14 +81,6 @@ public static class ProceduralIconFactory
                        (p.x < 6.4f || p.x > 21.6f || p.y < 6.4f || p.y > 21.6f);
         bool cross = Mathf.Abs(p.x - 14) < 0.7f || Mathf.Abs(p.y - 14) < 0.7f;
         return (onFrame || (cross && p.x > 5 && p.x < 23 && p.y > 5 && p.y < 23)) ? Ink : Color.clear;
-    });
-
-    public static Texture2D Shield() => Get("shield", p =>
-    {
-        Vector2 d = p - Center;
-        bool inCircle = d.magnitude < 9.5f;
-        bool cross = (Mathf.Abs(d.x) < 1.4f && Mathf.Abs(d.y) < 6f) || (Mathf.Abs(d.y) < 1.4f && Mathf.Abs(d.x) < 6f);
-        return (inCircle && !cross) ? new Color(Ink.r, Ink.g, Ink.b, 0.85f) : (cross ? Ink : Color.clear);
     });
 
     public static Texture2D Mortar() => Get("mortar", p =>
@@ -175,51 +159,12 @@ public static class ProceduralIconFactory
         return (hull || barrel || wheel1 || wheel2) ? Ink : Color.clear;
     });
 
-    public static Texture2D Barrier() => Get("barrier", p =>
-    {
-        bool plank = p.x > 3 && p.x < 25 && p.y > 10 && p.y < 18;
-        bool stripe1 = Mathf.Abs((p.x - p.y) - 0f) < 2f && plank;
-        bool stripe2 = Mathf.Abs((p.x - p.y) - 10f) < 2f && plank;
-        bool stripe3 = Mathf.Abs((p.x - p.y) + 10f) < 2f && plank;
-        bool border = plank && (p.y < 11.4f || p.y > 16.6f);
-        return (stripe1 || stripe2 || stripe3 || border) ? Ink : Color.clear;
-    });
-
-    public static Texture2D Bolt() => Get("bolt", p =>
-    {
-        Color c = Line(p, new Vector2(17, 25), new Vector2(10, 14), 1.8f, Ink);
-        c = Blend(c, Line(p, new Vector2(10, 14), new Vector2(16, 14), 1.8f, Ink));
-        c = Blend(c, Line(p, new Vector2(16, 14), new Vector2(9, 3), 1.8f, Ink));
-        return c;
-    });
-
     public static Texture2D Reset() => Get("reset", p =>
     {
         float dist = Vector2.Distance(p, Center);
         bool arc = Mathf.Abs(dist - 9f) < 1.4f && !(p.x > 14 && p.y > 14 && p.x < 22 && p.y < 22);
         bool arrowHead = Vector2.Distance(p, new Vector2(21, 17)) < 2.4f;
         return (arc || arrowHead) ? Ink : Color.clear;
-    });
-
-    public static Texture2D Squad() => Get("squad", p =>
-    {
-        bool h1 = Vector2.Distance(p, new Vector2(10, 20)) < 2.6f;
-        bool h2 = Vector2.Distance(p, new Vector2(18, 20)) < 2.6f;
-        bool b1 = p.x > 6 && p.x < 14 && p.y > 5 && p.y < 15;
-        bool b2 = p.x > 14 && p.x < 22 && p.y > 7 && p.y < 15;
-        return (h1 || h2 || b1 || b2) ? Ink : Color.clear;
-    });
-
-    public static Texture2D Cube3D() => Get("cube3d", p =>
-    {
-        Color c = Color.clear;
-        Vector2 a = new Vector2(9, 8), b = new Vector2(19, 8), cc = new Vector2(19, 18), d = new Vector2(9, 18);
-        Vector2 a2 = a + new Vector2(4, 4), b2 = b + new Vector2(4, 4), c2 = cc + new Vector2(4, 4);
-        c = Blend(c, Line(p, a, b, 1.1f, Ink)); c = Blend(c, Line(p, b, cc, 1.1f, Ink));
-        c = Blend(c, Line(p, cc, d, 1.1f, Ink)); c = Blend(c, Line(p, d, a, 1.1f, Ink));
-        c = Blend(c, Line(p, b, b2, 1.1f, Ink)); c = Blend(c, Line(p, cc, c2, 1.1f, Ink));
-        c = Blend(c, Line(p, b2, c2, 1.1f, Ink));
-        return c;
     });
 
     /// <summary>

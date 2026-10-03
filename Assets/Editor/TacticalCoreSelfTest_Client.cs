@@ -29,7 +29,7 @@ public static partial class TacticalCoreSelfTest
 
         // 2026-09-13 : RunVerticalBudgetTests/RunWaitTests/RunBuildingEntryTests/RunDoorEntryTests/
         // RunResolveMutationTests ont ete retires avec TacticalResolver.cs/LineOfSight.cs (plus
-        // aucun appelant en production, voir 00-current-architecture-2026-09-13.md) : ils testaient
+        // aucun appelant en production, voir 00-architecture.md) : ils testaient
         // tous exclusivement TacticalResolver.Resolve(), jamais autre chose.
     }
 

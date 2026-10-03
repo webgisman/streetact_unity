@@ -655,14 +655,6 @@ public partial class UnitAI : MonoBehaviour
         return currentLookTarget != null && !currentLookTarget.isDead && Vector3.Distance(transform.position, currentLookTarget.transform.position) <= porteeDetection;
     }
 
-    /// <summary>
-    /// Indique si l'unité est actuellement en train de se déplacer physiquement sur le terrain.
-    /// </summary>
-    public bool IsMoving()
-    {
-        return isExecuting && agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh && !agent.isStopped && agent.hasPath;
-    }
-
     private void EquipWeapon()
     {
         if (animator == null) return;

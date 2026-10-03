@@ -9,24 +9,6 @@ namespace Novgov.TacticalCore
     /// </summary>
     public static class GeometryMath
     {
-        /// <summary>Vrai si les segments [a1,a2] et [b1,b2] se croisent (intersection stricte,
-        /// pas juste un contact aux extrémités) — méthode de l'orientation par produit en croix,
-        /// sans division ni racine carrée, donc sans risque d'instabilité numérique près des cas
-        /// dégénérés qu'aurait une résolution paramétrique classique.</summary>
-        public static bool SegmentsIntersect(Vector2 a1, Vector2 a2, Vector2 b1, Vector2 b2)
-        {
-            float d1 = Cross(b2 - b1, a1 - b1);
-            float d2 = Cross(b2 - b1, a2 - b1);
-            float d3 = Cross(a2 - a1, b1 - a1);
-            float d4 = Cross(a2 - a1, b2 - a1);
-
-            if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-                ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))
-            {
-                return true;
-            }
-            return false;
-        }
 
         private static float Cross(Vector2 a, Vector2 b) => a.x * b.y - a.y * b.x;
 
@@ -67,57 +49,6 @@ namespace Novgov.TacticalCore
                 if (d < best) best = d;
             }
             return best;
-        }
-
-        /// <summary>Bâtiment contenant <paramref name="pt"/>, ou à défaut le plus proche dont le
-        /// contour passe à moins de <paramref name="maxDistance"/> — sinon -1. Renvoie l'identifiant
-        /// (<c>TacticalBuilding.id</c>), pas l'index.
-        ///
-        /// POURQUOI LA TOLÉRANCE (2026-09-07). Les actions de porte (ENTRER DANS LE BÂTIMENT,
-        /// GUETTER PAR LA PORTE) désignent forcément un point qui n'est PAS dans l'empreinte : une
-        /// porte est générée 5 cm en DEHORS de sa façade (CityGenerator), et le « seuil extérieur »
-        /// 1.25 m dehors. Un test d'appartenance strict renvoyait donc « aucun bâtiment » pour
-        /// 100 % des points de porte — l'unité n'entrait jamais, et la garnison de porte accordait
-        /// -75 % de dégâts subis sans rattacher l'unité à quoi que ce soit.
-        ///
-        /// Déterministe : balayage par index croissant, comparaison stricte, donc à égalité exacte
-        /// de distance c'est toujours le plus petit index qui gagne.</summary>
-        public static int FindBuildingAtOrNear(System.Collections.Generic.List<TacticalBuilding> buildings, Vector2 pt, float maxDistance)
-        {
-            if (buildings == null) return -1;
-
-            for (int i = 0; i < buildings.Count; i++)
-            {
-                var b = buildings[i];
-                if (b.footprint != null && b.footprint.Count >= 3 && PointInPolygon(b.footprint, pt)) return b.id;
-            }
-
-            float bestSqr = maxDistance * maxDistance;
-            int best = -1;
-            for (int i = 0; i < buildings.Count; i++)
-            {
-                var b = buildings[i];
-                if (b.footprint == null || b.footprint.Count < 3) continue;
-                float d = SqrDistanceToPolygonEdge(b.footprint, pt);
-                if (d < bestSqr) { bestSqr = d; best = b.id; }
-            }
-            return best;
-        }
-
-        /// <summary>Test de cône SANS trigonométrie : un point est "dans le cône" si le produit
-        /// scalaire entre la direction normalisée vers ce point et la direction de visée dépasse
-        /// cosHalfAngle (= cos(angle/2), précalculé une fois côté données, jamais recalculé ici).</summary>
-        public static bool InsideCone(Vector2 origin, Vector2 facing, float cosHalfAngle, float range, Vector2 point)
-        {
-            Vector2 toPoint = point - origin;
-            float sqrDist = toPoint.x * toPoint.x + toPoint.y * toPoint.y;
-            if (sqrDist > range * range) return false;
-            if (sqrDist < 0.0001f) return true; // origin == point
-
-            float dist = Mathf.Sqrt(sqrDist); // sqrt : opération de base IEEE 754, sûre
-            Vector2 dir = new Vector2(toPoint.x / dist, toPoint.y / dist);
-            float dot = dir.x * facing.x + dir.y * facing.y;
-            return dot >= cosHalfAngle;
         }
 
         /// <summary>Point-dans-polygone 2D (ray casting), même algorithme que

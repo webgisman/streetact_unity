@@ -93,24 +93,6 @@ namespace Novgov.Auth
             return (true, fallback);
         }
 
-        public static async Task<bool> UpdateProfile(string username)
-        {
-            if (SupabaseAuthClient.CurrentSession == null || SupabaseAuthClient.CurrentSession.user == null) return false;
-            if (string.IsNullOrEmpty(username)) return true;
-
-            string userId = SupabaseAuthClient.CurrentSession.user.id;
-            string url = $"{SupabaseAuthClient.RestBaseUrl}/profiles?id=eq.{userId}";
-            string escapedUsername = username.Replace("\"", "\\\"");
-            string json = $"{{\"username\": \"{escapedUsername}\"}}";
-            using var req = new UnityWebRequest(url, "PATCH");
-            req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
-            req.downloadHandler = new DownloadHandlerBuffer();
-            SetupHeaders(req);
-            req.SetRequestHeader("Content-Type", "application/json");
-            await req.SendWebRequest();
-            return req.result == UnityWebRequest.Result.Success;
-        }
-
         [Serializable] private class DailyBonusEntry { public int new_action_points; public bool already_claimed; }
 
         /// <summary>Appelle la fonction Postgres claim_daily_bonus() (schema.sql §10) — +50 AP une

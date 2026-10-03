@@ -30,39 +30,16 @@ namespace Novgov.Network
         public string reason;
         public int winner_team;
 
-        // join_matchmaking (mode="siege_attack_deploy"/"siege_defend_deploy", 2026-09-13) : id de la
-        // ligne public.zone_sieges concernée (créée côté client via l'appel RPC start_siege() AVANT
-        // d'ouvrir cette connexion — voir SupabaseDatabaseClient.StartSiege). Le serveur revérifie
-        // toujours en base que ce siège existe, est "pending", et que l'appelant est bien
-        // attacker_user_id/defender_user_id selon le mode — un client modifié ne peut donc jamais
-        // soumettre un déploiement pour un siège qui n'est pas le sien.
+        // join_matchmaking (mode="siege_battle") : id de la ligne public.zone_sieges concernée (créée
+        // côté client par l'appel RPC start_siege(), voir SupabaseDatabaseClient.StartSiege). Le serveur
+        // revérifie toujours en base que ce siège existe, est "pending", et que l'appelant en est bien
+        // l'attaquant ou le défenseur.
         public long siege_id;
 
-        // join_matchmaking (mode="conquest") / match_found / zone_captured / zone_attack_result :
-        // index de tuile Slippy Map (Zoom CityGenerator.ZONE_ZOOM) de la Zone de Conquête concernée.
-        // join_matchmaking (mode="deathmatch"/"zone_control", 2026-08-30, "des milliers de cartes") :
-        // tuile "domicile" du joueur (Novgov.Generation.ZoneManager.HomeTileX/Y côté client) si
-        // has_home_tile est vrai — voir has_home_tile ci-dessous, ces deux champs ne veulent rien dire
-        // seuls pour ce mode. match_found (deathmatch/zone_control) : tuile RÉELLEMENT retenue pour la
-        // partie par le serveur (voir MatchSessionManager.TryStartMatch) — (0,0) signifie la carte
-        // "Default" partagée, jamais une vraie tuile GPS (voir has_home_tile).
+        // join_matchmaking / match_found / match_over / zone_captured / zone_attack_result : index de
+        // tuile Slippy Map (zoom CityGenerator.ZONE_ZOOM) du quartier concerné.
         public int zone_tile_x;
         public int zone_tile_y;
-
-        // join_matchmaking (deathmatch/zone_control uniquement, 2026-08-30) : vrai si zone_tile_x/y
-        // ci-dessus est une vraie tuile domicile du joueur. Champ séparé plutôt que de surcharger le
-        // sentinel (0,0) — (0,0) est une tuile Slippy Map réelle (bien qu'improbable, en plein océan),
-        // et ce champ devient une vraie donnée de matchmaking (pas seulement documentaire) une fois
-        // que Deathmatch/Zone de Contrôle l'utilisent réellement (voir PlayerConnection.HasHomeTile).
-        public bool has_home_tile;
-
-        // join_matchmaking / match_found (2026-09-13, deathmatch/zone_control uniquement) : rythme de
-        // tour choisi par le joueur — "fast" (5 min max par tour, comportement d'origine, connexion
-        // TCP maintenue ouverte) ou "async" (6h max par tour, pensé pour un joueur qui relance son
-        // appli de temps en temps). Absent/vide = "fast" (rétrocompatibilité avec un client plus
-        // ancien). Les deux joueurs appariés partagent TOUJOURS le même rythme — voir les files
-        // d'attente séparées dans MatchSessionManager.cs.
-        public string turn_pace;
 
         // zone_captured / zone_attack_result : résultat de la demande d'attaque/capture d'une Zone.
         public bool success;
@@ -188,17 +165,13 @@ namespace Novgov.Network
         public int t;
         public UnitState[] units;
 
-        // Mode "zone_control" uniquement — 0 à 100, absent (0/0) en mode deathmatch.
-        public float zone_progress_team1;
-        public float zone_progress_team2;
-
         // Bâtiments détruits PENDANT CE TICK précis (2026-09-12) : index dans BuildingStructure.
         // AllBuildings, voir TacticalGridBuilder ("template.id") — jamais retiré de cette liste côté
         // client pendant un rejeu réseau (voir DestructibleEnvironment.ApplyNetworkDestruction),
         // pour que cet index reste valide pour tout le reste de la partie. Avant ce champ,
         // TacticalEvent.Kind.WallDestroyed n'avait AUCUN consommateur réseau — le bâtiment restait
         // visuellement intact chez les deux joueurs alors que le serveur le savait détruit (voir
-        // §19.9.3 de 08-known-issues-and-todo.md). Null/vide la plupart des ticks.
+        // §19.9.3 de l'historique git (ancien journal 08)). Null/vide la plupart des ticks.
         public int[] destroyed_building_ids;
         
         // Barricades routières détruites PENDANT CE TICK précis (noms des GameObjects)

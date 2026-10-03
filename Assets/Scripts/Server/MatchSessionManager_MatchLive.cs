@@ -9,100 +9,47 @@ using UnityEngine;
 namespace Novgov.Server
 {
     /// <summary>
-    /// Point d'entrée Deathmatch/Zone de Contrôle "vivant" — bascule demandée par l'utilisateur le
-    /// 2026-09-13, voir Assets/_ServerDocs/multiplayer/09-real-unity-combat-investigation-2026-09-13.md
-    /// pour le contexte complet (le calcul sous-jacent, TacticalResolver.Resolve(), reste identique à
-    /// la famille "Pure" — ce qui change ici, c'est que Deathmatch/Zone de Contrôle utilisent
-    /// maintenant de vraies UnitAI/BuildingStructure de scène, exactement comme la Conquête, au lieu
-    /// de données pures isolées par match). Remplace RunMatch (MatchSessionManager_Matchmaking.cs,
-    /// laissé intact mais plus appelé) comme cible de TryStartMatch.
+    /// Moteur de partie au tour par tour entre DEUX vrais joueurs, sur de vraies UnitAI/
+    /// BuildingStructure de scène — utilisé par la bataille de siège (MatchSessionManager_
+    /// SiegeBattle.cs). Déroulé : chargement de la carte du quartier, "match_found" aux deux joueurs,
+    /// déploiement des deux camps, puis à chaque tour planification (les deux joueurs envoient leurs
+    /// ordres) -> simulation au vrai moteur Unity (MatchSessionManager_CombatRealEngine.cs) -> rejeu
+    /// synchronisé chez les deux clients, jusqu'à l'élimination d'un camp ou le plafond de tours.
     ///
-    /// CONSÉQUENCE ASSUMÉE (demandée explicitement) : un seul match (Deathmatch, Zone de Contrôle OU
-    /// Conquête) peut tourner à la fois sur ce processus — la scène/le NavMesh sont de nouveau
-    /// partagés. C'est exactement la contrainte que l'Option B (2026-08-30) avait supprimée pour ces
-    /// deux modes ; elle revient ici en échange de vraies UnitAI/BuildingStructure de scène. Voir
-    /// TryStartMatchLive ci-dessous pour comment matchInProgress sérialise désormais TOUS les modes
-    /// entre eux (Conquête comprise), pas seulement Deathmatch/Zone de Contrôle entre eux.
+    /// Un seul match à la fois par processus : la scène/le NavMesh sont partagés (matchInProgress).
+    /// Pas d'IA : un joueur absent ou en retard voit simplement ses unités ne recevoir aucun ordre ce
+    /// tour-là (elles tiennent leur position et se défendent), voir ApplyOrdersOrHold.
     /// </summary>
     public partial class MatchSessionManager
     {
-        /// <summary>Remplace l'ancien TryStartMatch (toujours utilisé tel quel pour appeler cette
-        /// méthode, voir MatchSessionManager_Matchmaking.cs) : ne démarre un nouveau match Deathmatch/
-        /// Zone de Contrôle QUE si aucun autre match (Deathmatch/Zone de Contrôle/Conquête) ne tourne
-        /// déjà sur ce processus — matchInProgress est maintenant tenu pour TOUTE la durée d'un match
-        /// Live, pas juste l'instant bref de la capture de géométrie comme du temps de la famille
-        /// Pure. Les joueurs déjà en file d'attente patientent simplement un tick de plus, sans
-        /// message d'erreur (contrairement à HandleConquestMessage qui rejette du "server_busy" pour
-        /// une demande ponctuelle) : une file d'attente FIFO n'a pas besoin d'être prévenue, elle sera
-        /// simplement servie au prochain passage libre.</summary>
-        private void TryStartMatchLive(List<PlayerConnection> queue)
-        {
-            if (matchInProgress) return;
-            if (queue.Count < 2) return;
+        // Nombre de batailles en cours sur ce processus (diagnostic d'instance).
+        private int activeMatchCount = 0;
 
-            int i1 = 0, i2 = -1;
-            for (int j = 1; j < queue.Count; j++)
-            {
-                if (queue[j].UserId != queue[i1].UserId) { i2 = j; break; }
-            }
-            if (i2 < 0) return;
-
-            PlayerConnection p1 = queue[i1];
-            PlayerConnection p2 = queue[i2];
-            queue.RemoveAt(i2);
-            queue.RemoveAt(i1);
-            var (cacheKey, _) = DetermineMatchCacheKey(p1, p2);
-
-            matchInProgress = true;
-            activeMatchCount++;
-            StartCoroutine(ReportInstanceStatus());
-            StartCoroutine(RunMatchLiveGuarded(p1, p2, cacheKey));
-        }
-
-        /// <summary>Même principe que RunMatchGuarded (famille Pure) : une exception non prévue ne
-        /// doit ni planter le processus ni laisser matchInProgress bloqué à "true" pour toujours
-        /// (ce qui empêcherait tout futur match, Deathmatch/Zone de Contrôle ET Conquête, de jamais
-        /// démarrer sur ce processus).</summary>
-        private IEnumerator RunMatchLiveGuarded(PlayerConnection p1, PlayerConnection p2, string cacheKey)
-        {
-            return SafeCoroutineRunner.Run(
-                RunMatchLive(p1, p2, cacheKey),
-                onComplete: () =>
-                {
-                    activeMatchCount--;
-                },
-                onException: (Exception e) =>
-                {
-                    Debug.LogError($"[MatchSessionManager] Exception non gérée pendant un match Live — abandon en match nul : {e}");
-                    AbortMatchSafely(p1);
-                    AbortMatchSafely(p2);
-                    if (CaptureZone.Instance != null) UnityEngine.Object.Destroy(CaptureZone.Instance.gameObject);
-                    matchInProgress = false;
-                    activeMatchCount--;
-                    StartCoroutine(ReportInstanceStatus());
-                }
-            );
-        }
+        // Géométrie de référence de la bataille en cours (figée au chargement du quartier) — sert à
+        // répondre à "city_verify" (voir AnswerCityVerify).
+        private int authoritativeCityHash;
+        private List<TacticalBuilding> authoritativeBuildings = new List<TacticalBuilding>();
 
         /// <summary>Complément du message "match_over" rempli par <c>onBeforeMatchOver</c> (bataille de
         /// siège : le quartier a-t-il réellement changé de mains ?).</summary>
         private class MatchOverExtras { public bool Success; public string Reason; }
 
-        /// <summary>Équivalent "vivant" de RunMatch (MatchSessionManager_Matchmaking.cs) — même
-        /// protocole réseau côté client (match_found/deployment_result/turn_timer/turn_result/
-        /// match_over, voir 03-network-protocol.md, RIEN ne change pour le client), mais orchestre de
-        /// vraies UnitAI/BuildingStructure au lieu de MatchState.World.
-        /// <paramref name="onBeforeMatchOver"/> (2026-10-03, bataille de siège, voir
-        /// MatchSessionManager_SiegeBattle.cs) : appelé avec (vainqueur, deux départs, extras) juste
-        /// avant le classement et "match_over", pour appliquer les conséquences propres au mode.</summary>
-        private IEnumerator RunMatchLive(PlayerConnection p1, PlayerConnection p2, string cacheKey,
+        private static void AbortMatchSafely(PlayerConnection p)
+        {
+            try { if (!p.IsDisconnected) p.Send(new NetMessage { type = "match_over", winner_team = 0 }); } catch { }
+            try { p.Close(); } catch { }
+        }
+
+        /// <summary>Joue une bataille complète sur le quartier (tileX, tileY), p1 = équipe 1, p2 =
+        /// équipe 2. <paramref name="onBeforeMatchOver"/> est appelé avec (vainqueur, deux départs,
+        /// extras) juste avant le classement et "match_over", pour appliquer les conséquences propres
+        /// au mode (prise du quartier pour un siège). Libère matchInProgress en fin de partie.</summary>
+        private IEnumerator RunMatchLive(PlayerConnection p1, PlayerConnection p2, int tileX, int tileY, string mode,
             Func<int, bool, MatchOverExtras, IEnumerator> onBeforeMatchOver = null)
         {
             string matchId = Guid.NewGuid().ToString();
             p1.TeamId = 1;
             p2.TeamId = 2;
-            string mode = string.IsNullOrEmpty(p1.Mode) ? "deathmatch" : p1.Mode;
-            currentMatchMode = mode;
 
             yield return FetchUsername(p1);
             yield return FetchUsername(p2);
@@ -119,72 +66,30 @@ namespace Novgov.Server
             UnitSpawnerUI.Instance.ClearAllUnits();
             yield return null;
 
-            // Charge RÉELLEMENT la carte dans la scène serveur (contrairement à la famille Pure, qui
-            // ne touche qu'un cache de géométrie hors-scène) — chemin GPS réel ou carte par défaut,
-            // même logique que GenerateAndCacheTile (voir MatchSessionManager_Matchmaking.cs).
-            bool hasRealTile = TryParseTileCacheKey(cacheKey, out int tileX, out int tileY);
-            if (hasRealTile)
-            {
-                yield return LoadZoneOnServer(tileX, tileY);
-            }
-            else if (!defaultMapLoaded)
-            {
-                yield return RestoreDefaultMapOnServer();
-            }
-
-            // Zone de Contrôle : CaptureZone.Instance n'est JAMAIS instancié ailleurs dans ce projet
-            // (CreateAtMapCenter() n'avait jusqu'ici aucun appelant — vérifié par recherche exhaustive
-            // avant d'écrire ce fichier) — sans cette création explicite, RunExecutionPhase aurait
-            // silencieusement ignoré toute logique de capture de zone (son garde
-            // "CaptureZone.Instance != null" restant toujours faux), rendant le mode "zone_control"
-            // injouable via ce chemin Live (seule la victoire par élimination/plafond de tours aurait
-            // jamais pu se déclencher).
-            if (mode == "zone_control")
-            {
-                if (CaptureZone.Instance != null) UnityEngine.Object.Destroy(CaptureZone.Instance.gameObject);
-                CaptureZone.CreateAtMapCenter();
-            }
+            // Charge RÉELLEMENT la carte du quartier dans la scène serveur — exactement la même tuile
+            // que celle chargée par les clients (géométrie autoritaire, voir city_verify).
+            yield return LoadZoneOnServer(tileX, tileY);
 
             TacticalWorldState liveWorldSnapshot = TacticalGridBuilder.BuildFromScene();
-            int authoritativeCityHash = TacticalGridBuilder.ComputeBuildingListHash(liveWorldSnapshot.buildings);
-            Debug.Log($"[CityVerify] [{matchId}] (Live) Hash de référence figé : {authoritativeCityHash} ({liveWorldSnapshot.buildings.Count} bâtiments, tuile {cacheKey}).");
+            authoritativeBuildings = liveWorldSnapshot.buildings;
+            authoritativeCityHash = TacticalGridBuilder.ComputeBuildingListHash(liveWorldSnapshot.buildings);
+            Debug.Log($"[CityVerify] [{matchId}] Hash de référence figé : {authoritativeCityHash} ({liveWorldSnapshot.buildings.Count} bâtiments, quartier ({tileX},{tileY})).");
 
-            string cityDataJson = null;
-            if (hasRealTile && !CityGenerator.TryReadZoneCacheFromDisk(tileX, tileY, out cityDataJson))
+            if (!CityGenerator.TryReadZoneCacheFromDisk(tileX, tileY, out string cityDataJson))
             {
-                Debug.LogWarning($"[MatchSessionManager] (Live) JSON de la tuile ({tileX},{tileY}) introuvable sur disque malgré une géométrie résolue — les clients vont se rabattre sur leur propre génération (risque d'iniquité résiduel).");
+                Debug.LogWarning($"[MatchSessionManager] JSON du quartier ({tileX},{tileY}) introuvable sur disque malgré une géométrie résolue — les clients vont se rabattre sur leur propre génération (risque d'iniquité résiduel).");
             }
 
-            p1.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 1, opponent_username = p2.Username, mode = mode, has_home_tile = hasRealTile, zone_tile_x = tileX, zone_tile_y = tileY, city_data_json = cityDataJson });
-            p2.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 2, opponent_username = p1.Username, mode = mode, has_home_tile = hasRealTile, zone_tile_x = tileX, zone_tile_y = tileY, city_data_json = cityDataJson });
+            p1.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 1, opponent_username = p2.Username, mode = mode, zone_tile_x = tileX, zone_tile_y = tileY, city_data_json = cityDataJson });
+            p2.Send(new NetMessage { type = "match_found", match_id = matchId, team_id = 2, opponent_username = p1.Username, mode = mode, zone_tile_x = tileX, zone_tile_y = tileY, city_data_json = cityDataJson });
 
             yield return CreateMatchRecord(matchId, p1, p2, mode);
 
             yield return RunDeploymentPhaseLive(matchId, p1, p2);
 
-            // CRITIQUE (2026-09-13, moteur réel) : ResolveDeployment/UnitSpawnerUI.SpawnUnitAt ne
-            // marque isPlayerControlled=true que pour l'équipe 1 côté serveur (repli hérité de la
-            // Conquête, où l'équipe 2 est TOUJOURS une garnison IA — voir UnitSpawnerUI.SpawnUnitAt,
-            // branche UNITY_SERVER). Ici les DEUX équipes sont de vrais joueurs : sans cette ligne,
-            // TacticalAIPlanner n'aurait jamais pris le relais pour l'équipe 2 (isPlayerControlled y
-            // reste à sa valeur de spawn), mais ExecuterOrdres() sur une unité isPlayerControlled=
-            // false peut emprunter des branches pensées pour un ennemi IA (voir UnitAI_Movement) —
-            // jamais exercées ni voulues ici. Même correctif que RunConquestSkirmish fait pour son
-            // équipe 1 (ligne 236 de MatchSessionManager_Conquest.cs), étendu aux deux équipes.
+            // ResolveDeployment/UnitSpawnerUI.SpawnUnitAt ne marque isPlayerControlled=true que pour
+            // l'équipe 1 côté serveur : ici les DEUX équipes sont de vrais joueurs, sans IA.
             foreach (var unit in UnitAI.AllLivingUnits) unit.isPlayerControlled = true;
-
-            // 2026-09-13, rythme "async" (voir MatchSessionManager_AsyncPause.cs) : dès le tour 1,
-            // sérialise l'effectif et libère la scène/matchInProgress AVANT la première attente de
-            // planification — un tour 1 peut, comme n'importe quel autre, durer jusqu'à 6h, il n'y a
-            // aucune raison de le traiter différemment des tours suivants.
-            bool isAsync = p1.TurnPace == "async";
-            if (isAsync)
-            {
-                yield return PersistPausedRoster(matchId);
-                UnitSpawnerUI.Instance.ClearAllUnits();
-                if (CaptureZone.Instance != null) UnityEngine.Object.Destroy(CaptureZone.Instance.gameObject);
-                matchInProgress = false;
-            }
 
             int turnNumber = 1;
             bool matchOver = false;
@@ -192,55 +97,14 @@ namespace Novgov.Server
 
             while (!matchOver)
             {
-                if (isAsync)
-                {
-                    yield return WaitForBothOrdersAsync(p1, p2, turnNumber, matchId);
-
-                    if (p1.IsDisconnected && p2.IsDisconnected)
-                    {
-                        matchOver = true;
-                        winnerTeam = 0;
-                        break;
-                    }
-
-                    // Reprend la main sur la scène partagée — peut attendre si un autre match (fast,
-                    // async ou Conquête) est en train de l'utiliser à cet instant précis.
-                    while (matchInProgress) yield return null;
-                    matchInProgress = true;
-
-                    if (hasRealTile) yield return LoadZoneOnServer(tileX, tileY);
-                    else if (!defaultMapLoaded) yield return RestoreDefaultMapOnServer();
-
-                    PausedRosterDto roster = null;
-                    yield return FetchPausedRosterWithRetry(matchId, (r, ok) => roster = r);
-                    RespawnPausedRoster(roster);
-                    // Zone de Contrôle : une CaptureZone fraîche est recréée (l'ancienne a été
-                    // détruite avant la pause), mais sa progression est restaurée depuis le roster
-                    // sérialisé (2026-09-13) — elle ne repart plus de 0% à chaque reprise.
-                    if (mode == "zone_control")
-                    {
-                        var zone = CaptureZone.CreateAtMapCenter();
-                        if (roster != null) zone.RestoreProgress(roster.zone_progress_team1, roster.zone_progress_team2);
-                    }
-
-                    ApplyForPlayerLiveNoAI(p1, p2);
-                    ApplyForPlayerLiveNoAI(p2, p1);
-                }
-                else
-                {
-                    yield return RunPlanningPhaseLiveNoAI(p1, p2, turnNumber);
-                }
+                yield return RunPlanningPhase(p1, p2, turnNumber);
 
                 if (p1.IsDisconnected && p2.IsDisconnected)
                 {
-                    matchOver = true;
                     winnerTeam = 0;
                     break;
                 }
 
-                // 2026-09-13 : RunExecutionPhaseRealEngine (vrai moteur, MatchSessionManager_
-                // CombatRealEngine.cs) remplace RunExecutionPhase (TacticalResolver.Resolve(), laissée
-                // intacte mais plus appelée par ce chemin) — demande explicite de l'utilisateur.
                 yield return RunExecutionPhaseRealEngine(turnNumber, p1, p2);
 
                 int team1Alive = UnitAI.AllLivingUnits.Count(u => u.teamID == 1 && !u.isDead);
@@ -251,24 +115,9 @@ namespace Novgov.Server
                     matchOver = true;
                     winnerTeam = (team1Alive == 0 && team2Alive == 0) ? 0 : (team1Alive == 0 ? 2 : 1);
                 }
-                else if (mode == "zone_control")
+                else if (turnNumber >= BattleTurnCap)
                 {
-                    int zoneWinner = CaptureZone.Instance != null ? CaptureZone.Instance.GetWinningTeamIfComplete() : 0;
-                    if (zoneWinner != 0)
-                    {
-                        matchOver = true;
-                        winnerTeam = zoneWinner;
-                    }
-                    else if (turnNumber >= ZoneControlTurnCap)
-                    {
-                        matchOver = true;
-                        float p1Progress = CaptureZone.Instance != null ? CaptureZone.Instance.ProgressTeam1 : 0f;
-                        float p2Progress = CaptureZone.Instance != null ? CaptureZone.Instance.ProgressTeam2 : 0f;
-                        winnerTeam = Mathf.Approximately(p1Progress, p2Progress) ? 0 : (p1Progress > p2Progress ? 1 : 2);
-                    }
-                }
-                else if (turnNumber >= DeathmatchTurnCap)
-                {
+                    // Plafond atteint : plus d'unités vivantes, puis plus de PV totaux, l'emporte.
                     matchOver = true;
                     int team1Health = UnitAI.AllLivingUnits.Where(u => u.teamID == 1 && !u.isDead).Sum(u => u.health);
                     int team2Health = UnitAI.AllLivingUnits.Where(u => u.teamID == 2 && !u.isDead).Sum(u => u.health);
@@ -291,9 +140,7 @@ namespace Novgov.Server
 
             yield return CloseMatchRecord(matchId, winnerTeam);
 
-            // Libère la scène pour le prochain match (Live ou Conquête) — indispensable maintenant
-            // qu'un seul match à la fois occupe la scène partagée.
-            if (CaptureZone.Instance != null) UnityEngine.Object.Destroy(CaptureZone.Instance.gameObject);
+            // Libère la scène pour la prochaine bataille ou capture.
             UnitSpawnerUI.Instance.ClearAllUnits();
 
             p1.Close();
@@ -302,13 +149,44 @@ namespace Novgov.Server
             StartCoroutine(ReportInstanceStatus());
         }
 
-        /// <summary>Équivalent de RunPlanningPhase (CombatLive.cs), mais appelle ApplyForPlayerLiveNoAI
-        /// au lieu de ApplyForPlayer à la fin — voir ce dernier pour le pourquoi (pas de reprise IA
-        /// pour un joueur absent en Deathmatch/Zone de Contrôle, demande explicite déjà satisfaite par
-        /// la famille Pure via ApplyForPlayerPure). Corps de boucle IDENTIQUE à RunPlanningPhase par
-        /// ailleurs — dupliqué plutôt que paramétré pour ne jamais risquer de changer le comportement
-        /// de la Conquête, même pattern que Pure/Live pour RunExecutionPhase(Pure).</summary>
-        private IEnumerator RunPlanningPhaseLiveNoAI(PlayerConnection p1, PlayerConnection p2, int turnNumber)
+        /// <summary>Réponse à "city_verify" (envoyé par chaque client une fois sa carte générée, avant
+        /// d'ouvrir son déploiement) : succès immédiat si sa géométrie concorde avec celle du serveur,
+        /// sinon la structure de bâtiments de référence complète pour qu'il se resynchronise
+        /// (CityGenerator.ApplyAuthoritativeBuildings). Avant le 2026-10-03 le serveur ne répondait
+        /// jamais : le client attendait 15 s pour rien au début de chaque bataille.</summary>
+        private void AnswerCityVerify(PlayerConnection conn, int clientHash)
+        {
+            bool match = clientHash == authoritativeCityHash;
+            var reply = new NetMessage { type = "city_verify_result", success = match };
+            if (!match)
+            {
+                Debug.LogWarning($"[CityVerify] Géométrie divergente chez {conn.UserId} (client {clientHash} / serveur {authoritativeCityHash}) — envoi de la structure de référence ({authoritativeBuildings.Count} bâtiments).");
+                reply.city_buildings = authoritativeBuildings.Select(b => new BuildingGeometryDto
+                {
+                    id = b.id,
+                    height = b.height,
+                    footprint = (b.footprint ?? new List<Vector2>()).Select(p => new Vector2Data { x = p.x, y = p.y }).ToArray(),
+                    doors = b.doors.Select(d => new DoorGeometryDto
+                    {
+                        position = new Vector2Data { x = d.position.x, y = d.position.y },
+                        entry_direction = new Vector2Data { x = d.entryDirection.x, y = d.entryDirection.y },
+                        width = d.width
+                    }).ToArray(),
+                    windows = b.windows.Select(w => new WindowGeometryDto
+                    {
+                        id = w.id,
+                        position = new Vector2Data { x = w.position.x, y = w.position.y },
+                        outward_normal = new Vector2Data { x = w.outwardNormal.x, y = w.outwardNormal.y },
+                        floor_level = w.floorLevel
+                    }).ToArray()
+                }).ToArray();
+            }
+            conn.Send(reply);
+        }
+
+        /// <summary>Attend les ordres des deux joueurs (ou le délai de PlanningSeconds), en envoyant
+        /// le compte à rebours, puis les applique aux unités.</summary>
+        private IEnumerator RunPlanningPhase(PlayerConnection p1, PlayerConnection p2, int turnNumber)
         {
             p1.HasSubmittedThisTurn = false;
             p2.HasSubmittedThisTurn = false;
@@ -336,21 +214,16 @@ namespace Novgov.Server
                 yield return null;
             }
 
-            ApplyForPlayerLiveNoAI(p1, p2);
-            ApplyForPlayerLiveNoAI(p2, p1);
+            ApplyOrdersOrHold(p1, p2);
+            ApplyOrdersOrHold(p2, p1);
         }
 
-        /// <summary>Équivalent de ApplyForPlayer (CombatLive.cs), mais SANS reprise IA
-        /// (TacticalAIPlanner.PlanifierTourIA) pour un joueur absent/en retard. Demande explicite de
-        /// l'utilisateur ("je ne veux pas d'IA dans le jeu multijoueur", déjà satisfaite pour la
-        /// famille Pure via ApplyForPlayerPure — voir project_novgov_scaling_2026-08-30 en mémoire de
-        /// session). Réutiliser ApplyForPlayer tel quel ici aurait réintroduit CETTE régression déjà
-        /// corrigée : un joueur ghosté voit simplement ses unités ne recevoir AUCUN ordre ce tour-ci
-        /// (chemin tactique vidé, jamais régénéré par TacticalAIPlanner) — TacticalResolver.Resolve()
-        /// (appelé par RunExecutionPhase) évalue quand même les tirs pour TOUTE unité vivante qu'elle
-        /// ait un ordre actif ou non, donc ces unités se défendent normalement, elles n'avancent/ne
-        /// flanquent juste pas activement comme le ferait une vraie IA.</summary>
-        private void ApplyForPlayerLiveNoAI(PlayerConnection conn, PlayerConnection opponent)
+        /// <summary>Applique les ordres reçus de <paramref name="conn"/> — ou, s'il est absent/en retard,
+        /// ne donne AUCUN ordre à ses unités ce tour-ci (pas de reprise par une IA, demande explicite :
+        /// "je ne veux pas d'IA dans le jeu multijoueur") : elles tiennent leur position et se
+        /// défendent (le vrai moteur évalue les tirs pour toute unité vivante), et l'adversaire est
+        /// prévenu ("opponent_ghosted").</summary>
+        private void ApplyOrdersOrHold(PlayerConnection conn, PlayerConnection opponent)
         {
             var myUnits = UnitAI.AllLivingUnits.Where(u => u.teamID == conn.TeamId).ToList();
             bool shouldGhost = conn.IsDisconnected || !conn.HasSubmittedThisTurn;

@@ -6,7 +6,7 @@ using UnityEngine;
 /// Test Éditeur AUTOMATISÉ du rejeu réseau cosmétique (2026-09-12) — même esprit et mêmes
 /// techniques que TacticalSelectionAutoTest.cs (voir son en-tête), mais pour
 /// DestructibleEnvironment.ApplyNetworkDestruction (destruction de bâtiment enfin transmise au
-/// client, voir §19.9.3 de 08-known-issues-and-todo.md) plutôt que la sélection.
+/// client, voir §19.9.3 de l'historique git (ancien journal 08)) plutôt que la sélection.
 ///
 /// Usage : voir l'en-tête de TacticalSelectionAutoTest.cs pour la ligne de commande EXACTE à
 /// utiliser — TOUJOURS avec "-buildTarget StandaloneWindows64 -standaloneBuildSubtarget Player"

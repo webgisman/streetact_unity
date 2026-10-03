@@ -12,8 +12,7 @@ namespace Novgov.Server
     /// je planifie mes trajectoires et je fais fin de tour, l'autre joueur aussi, puis le serveur
     /// vérifie, simule et rend la simulation aux joueurs pour qu'ils la regardent, et ainsi de suite
     /// jusqu'à la fin"). Remplace, pour les clients à jour, le siège "en différé" de
-    /// MatchSessionManager_Siege.cs (chaque camp déployait séparément, puis UN seul tour de combat
-    /// headless tranchait sans que personne ne joue).
+    /// MatchSessionManager_Siege.cs, qui ne garde plus que la résolution automatique à l'échéance.
     ///
     /// Règle choisie par le joueur pour un adversaire absent : LE PREMIER ARRIVÉ ATTEND L'AUTRE.
     ///   1. L'attaquant déclare le siège (RPC start_siege, côté client) puis se connecte avec
@@ -30,6 +29,9 @@ namespace Novgov.Server
     ///      ApplySiegeOutcome, partagé avec la résolution automatique.
     ///   4. S'ils ne se retrouvent pas avant l'échéance (6 h), SiegeResolutionLoop joue la bataille
     ///      automatiquement avec les troupes de leurs casernes (MatchSessionManager_Siege.ResolveSiegeNow).
+    ///
+    /// Avant le 2026-10-03, le siège se jouait « en différé » (chaque camp déployait séparément, puis
+    /// un unique tour headless tranchait) — ce mode a été supprimé.
     ///
     /// Les DEUX joueurs doivent se connecter à la MÊME instance du pool : le client la choisit de façon
     /// déterministe à partir du siege_id (voir MultiplayerMatchController.ConnectToGameServerCoroutine).
@@ -190,8 +192,7 @@ namespace Novgov.Server
             }
 
             Debug.Log($"[SiègeBataille] #{siege.id} : bataille au tour par tour lancée sur le quartier ({siege.tile_x},{siege.tile_y}).");
-            string cacheKey = $"Z{siege.zoom}_{siege.tile_x}_{siege.tile_y}";
-            yield return RunMatchLive(lobby.Attacker, lobby.Defender, cacheKey,
+            yield return RunMatchLive(lobby.Attacker, lobby.Defender, siege.tile_x, siege.tile_y, "siege",
                 (winnerTeam, bothLeft, extras) => OnSiegeBattleOver(siege, winnerTeam, bothLeft, extras));
         }
 
