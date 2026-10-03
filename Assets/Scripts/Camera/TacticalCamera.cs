@@ -166,6 +166,16 @@ public class TacticalCamera : MonoBehaviour
         }
     }
 
+    /// <summary>Centre la vue sur <paramref name="center"/> et règle le zoom de la vue 2D
+    /// (demi-hauteur visible, en mètres) — ex. sur ses troupes au début d'une partie, où le recul
+    /// panoramique par défaut (95 m) rend un fantassin presque invisible sur un téléphone.</summary>
+    public void FrameOn(Vector3 center, float orthoSize)
+    {
+        focusPosition = new Vector3(center.x, 0f, center.z);
+        panVelocity = Vector3.zero;
+        targetOrthoSize = Mathf.Clamp(orthoSize, minOrthoSize, maxOrthoSize);
+    }
+
     public void ShakeCamera(float intensity, float duration)
     {
         shakeIntensity = intensity;

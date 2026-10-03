@@ -644,7 +644,7 @@ namespace Novgov.UI
 
             if (!mapLoaded)
             {
-                detailTitle.text = "VOTRE SECTEUR";
+                detailTitle.text = "VOTRE QUARTIER";
                 SetChip(null, null);
                 detailText.text = "Chargement de la carte...";
                 SetActions(null, null);
@@ -653,7 +653,7 @@ namespace Novgov.UI
 
             if (!selectedTile.HasValue)
             {
-                detailTitle.text = "VOTRE SECTEUR";
+                detailTitle.text = "VOTRE QUARTIER";
                 SetChip(null, null);
                 detailText.text = myTiles.Count == 0
                     ? "Voici la vraie carte de votre quartier (au centre) et des 8 quartiers qui l'entourent.\n\nPour bien démarrer, prenez votre premier quartier : touchez une case LIBRE."
@@ -703,7 +703,7 @@ namespace Novgov.UI
                     detailText.text = $"{name} occupe ce quartier. Pour le lui prendre, lancez un SIÈGE :\n\n" +
                         $"1. {name} est prévenu, et la bataille commence dès que vous êtes tous les deux en ligne ;\n" +
                         "2. chacun place ses troupes, trace ses trajectoires et termine son tour ;\n" +
-                        "3. le serveur simule le tour et vous regardez la simulation ensemble, jusqu'à la victoire.\n\n" +
+                        "3. le tour se joue pour vous deux en même temps, et vous le regardez ensemble, jusqu'à la victoire.\n\n" +
                         "Si vous ne vous retrouvez pas sous 6 h, la bataille se joue automatiquement avec les troupes de vos casernes.";
                     SetActions("LANCER UN SIÈGE", () => Siege(tile.x, tile.y), "RECRUTER DES TROUPES", OpenRoster);
                     break;

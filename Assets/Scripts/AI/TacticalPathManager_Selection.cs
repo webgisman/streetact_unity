@@ -4,7 +4,7 @@ using UnityEngine;
 public partial class TacticalPathManager
 {
     // ==========================================
-    // SÉLECTION D'UNITÉ (joueur direct, cloche "unité blessée", cycle depuis la squad-bar)
+    // SÉLECTION D'UNITÉ (tap direct, bouton BLESSÉS, cycle depuis les portraits)
     // ==========================================
 
     private void SelectionnerUnite(GameObject unite)
@@ -14,7 +14,7 @@ public partial class TacticalPathManager
             UnitAI unitAI = unite.GetComponent<UnitAI>();
 
             // On ne peut sélectionner que les unités du joueur. Tous les appelants actuels
-            // (ResolveClosestPlayerUnit, RefreshSquadBar/CycleSelectGroup, la cloche "blessés")
+            // (ResolveClosestPlayerUnit, RefreshSquadBar/CycleSelectGroup, le bouton BLESSÉS)
             // filtrent déjà isPlayerControlled avant d'arriver ici, mais ce garde reste la SEULE
             // protection si l'un d'eux rate ce filtre un jour — et jusqu'ici, en cas d'échec,
             // `uniteSelectionnee = unite` était affecté INCONDITIONNELLEMENT plus haut (avant ce
@@ -90,7 +90,7 @@ public partial class TacticalPathManager
         }
     }
 
-    /// <summary>Cloche de notification (haut-droit) : sélectionne la prochaine unité alliée
+    /// <summary>Bouton BLESSÉS (barre du haut) : sélectionne la prochaine unité alliée
     /// vivante en dessous de 50% de vie, pour que le joueur puisse réagir sans devoir la
     /// repérer visuellement sur la carte. Ne fait rien si aucune unité n'est en difficulté.</summary>
     private void SelectionnerProchaineUniteBlessee()
@@ -116,8 +116,8 @@ public partial class TacticalPathManager
         SelectionnerUnite(candidate.gameObject);
     }
 
-    /// <summary>Nombre d'unités alliées vivantes en dessous de 50% de vie — affiché en pastille
-    /// sur la cloche de notification.</summary>
+    /// <summary>Nombre d'unités alliées vivantes en dessous de 50% de vie — affiché sur le bouton
+    /// BLESSÉS.</summary>
     private int CountWoundedPlayerUnits()
     {
         int count = 0;

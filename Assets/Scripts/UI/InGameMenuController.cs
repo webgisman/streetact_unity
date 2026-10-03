@@ -80,7 +80,7 @@ namespace Novgov.UI
         public static void Close()
         {
             armedAction = null;
-            Time.timeScale = 1f;
+            Time.timeScale = TacticalPathManager.SoloSpeed; // reprend à la vitesse choisie (ACCÉLÉRER)
             UIScreenManager.Instance?.SetVisible("PauseMenu", false);
         }
 

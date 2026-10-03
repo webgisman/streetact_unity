@@ -19,7 +19,7 @@ namespace Novgov.Network
         // auth
         public string access_token;
 
-        // join_matchmaking / match_found : "deathmatch", "zone_control" ou "conquest"
+        // join_matchmaking : "conquest" (capture) ou "siege_battle" ; match_found : "siege"
         public string mode;
 
         // match_found / opponent_ghosted / turn_timer / match_over

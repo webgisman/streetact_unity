@@ -243,17 +243,33 @@ public class MapTileLoader : MonoBehaviour
         float longitude = CityGenerator.DefaultOfflineLongitude;
         GeoProjection.SetCenter(latitude, longitude);
 
-        // Tuile "virtuelle" centrée sur ce même point, uniquement pour dimensionner/positionner le
-        // quad avec la même fonction que pour une vraie Zone — la ville par défaut n'est rattachée
-        // à aucune vraie tuile Slippy Map.
-        int defaultTileX = GeoProjection.LonToTileX(longitude, CityGenerator.ZONE_ZOOM);
-        int defaultTileY = GeoProjection.LatToTileY(latitude, CityGenerator.ZONE_ZOOM);
-        GeoProjection.TileToSubTileRange(defaultTileX, defaultTileY, CityGenerator.ZONE_ZOOM, zoom, out int minTileX, out int minTileY, out int subTileCount);
-        int maxTileX = minTileX + subTileCount - 1;
-        int maxTileY = minTileY + subTileCount - 1;
-
-        GenerateQuadMesh(latitude, longitude, minTileX, maxTileX, minTileY, maxTileY);
+        // Le quad couvre EXACTEMENT les dalles assemblées dans DefaultMapTexture (voir
+        // DefaultOfflineTileRange). Jusqu'au 2026-10-03 il couvrait la tuile de quartier (194 m) qui
+        // contient le point : l'image de ~580 m y était écrasée et décalée, les rues du fond ne
+        // tombaient pas sous les immeubles et les trois quarts de la ville Solo étaient sur du gris.
+        DefaultOfflineTileRange(out int minTileX, out int maxTileX, out int minTileY, out int maxTileY);
+        GenerateQuadMesh(latitude, longitude, minTileX, maxTileX, minTileY, maxTileY, DefaultOfflineTileZoom);
         ApplyTextureToMaterial(globalTexture);
+    }
+
+    /// <summary>Carte du mode Solo (Resources/DefaultMapTexture.png + DefaultCityData.json, produites
+    /// par l'outil Éditeur FetchDefaultMapData) : dalles OSM de ce zoom couvrant un carré de
+    /// ±DefaultOfflineRadiusMeters autour de CityGenerator.DefaultOffline*.</summary>
+    public const int DefaultOfflineTileZoom = 18;
+    public const float DefaultOfflineRadiusMeters = 250f;
+
+    /// <summary>Dalles (zoom DefaultOfflineTileZoom) de la carte Solo — calcul partagé avec
+    /// FetchDefaultMapData pour que l'image et son placement au sol ne puissent pas diverger.</summary>
+    public static void DefaultOfflineTileRange(out int minTileX, out int maxTileX, out int minTileY, out int maxTileY)
+    {
+        double latitude = CityGenerator.DefaultOfflineLatitude;
+        double longitude = CityGenerator.DefaultOfflineLongitude;
+        double deltaLat = DefaultOfflineRadiusMeters / 111320.0;
+        double deltaLon = DefaultOfflineRadiusMeters / (40075000.0 * Math.Cos(latitude * Math.PI / 180.0) / 360.0);
+        minTileX = GeoProjection.LonToTileX(longitude - deltaLon, DefaultOfflineTileZoom);
+        maxTileX = GeoProjection.LonToTileX(longitude + deltaLon, DefaultOfflineTileZoom);
+        minTileY = GeoProjection.LatToTileY(latitude + deltaLat, DefaultOfflineTileZoom);
+        maxTileY = GeoProjection.LatToTileY(latitude - deltaLat, DefaultOfflineTileZoom);
     }
 
     private void ApplyTextureToMaterial(Texture2D globalTexture)
@@ -305,16 +321,19 @@ public class MapTileLoader : MonoBehaviour
         Debug.Log($"<color=green>[MapTileLoader] ✅ Texture OSM appliquée avec succès au sol ({globalTexture.width}x{globalTexture.height}) avec le shader {shader.name} !</color>");
     }
 
-    private void GenerateQuadMesh(float latitude, float longitude, int minTileX, int maxTileX, int minTileY, int maxTileY)
+    /// <summary><paramref name="tileZoom"/> : zoom des dalles min/max (par défaut <see cref="zoom"/>,
+    /// celui des quartiers en ligne).</summary>
+    private void GenerateQuadMesh(float latitude, float longitude, int minTileX, int maxTileX, int minTileY, int maxTileY, int tileZoom = -1)
     {
         EnsureSolObject();
+        if (tileZoom < 0) tileZoom = zoom;
 
         GeoProjection.SetCenter(latitude, longitude);
 
-        double topLeftLat = GeoProjection.TileYToLat(minTileY, zoom);
-        double topLeftLon = GeoProjection.TileXToLon(minTileX, zoom);
-        double bottomRightLat = GeoProjection.TileYToLat(maxTileY + 1, zoom);
-        double bottomRightLon = GeoProjection.TileXToLon(maxTileX + 1, zoom);
+        double topLeftLat = GeoProjection.TileYToLat(minTileY, tileZoom);
+        double topLeftLon = GeoProjection.TileXToLon(minTileX, tileZoom);
+        double bottomRightLat = GeoProjection.TileYToLat(maxTileY + 1, tileZoom);
+        double bottomRightLon = GeoProjection.TileXToLon(maxTileX + 1, tileZoom);
 
         Vector3 topLeftUnity = GeoProjection.CoordinateToWorldPoint(topLeftLat, topLeftLon);
         Vector3 bottomRightUnity = GeoProjection.CoordinateToWorldPoint(bottomRightLat, bottomRightLon);

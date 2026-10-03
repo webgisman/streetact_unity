@@ -22,7 +22,7 @@ Ce document constitue la **référence technique et architecturale exhaustive** 
 
 ## 2. Système de Caméra Hybride 2D / 3D
 
-Fichiers clés : [`TacticalCamera.cs`](file:///e:/streetact/My%20project/Assets/TacticalCamera.cs), [`CameraStateManager.cs`](file:///e:/streetact/My%20project/Assets/CameraStateManager.cs)
+Fichiers clés : `Assets/Scripts/Camera/TacticalCamera.cs`, `Assets/Scripts/Camera/CameraStateManager.cs`
 
 ### 2.1. Vue 2D (Mode Commandement)
 - **Rôle** : Offrir une vision globale et claire du champ de bataille pour l'élaboration des tactiques.
@@ -52,7 +52,7 @@ Fichiers clés : [`TacticalCamera.cs`](file:///e:/streetact/My%20project/Assets/
 
 ## 3. Génération Urbaine, Projection & Découpage
 
-Fichiers clés : [`CityGenerator.cs`](file:///e:/streetact/My%20project/Assets/CityGenerator.cs), [`BuildingStructure.cs`](file:///e:/streetact/My%20project/Assets/BuildingStructure.cs), [`MapTileLoader.cs`](file:///e:/streetact/My%20project/Assets/MapTileLoader.cs), [`GeoProjection.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Core/GeoProjection.cs), [`BuildingSubdivider.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Generation/BuildingSubdivider.cs)
+Fichiers clés : `Assets/Scripts/Generation/CityGenerator.cs`, `Assets/Scripts/Generation/BuildingStructure.cs`, `Assets/Scripts/Generation/MapTileLoader.cs`, `Assets/Scripts/Core/GeoProjection.cs`, `Assets/Scripts/Generation/BuildingSubdivider.cs`
 
 ```
 [OSM / Overpass API] ──> [GeoProjection (EPSG:3857)] ──> [BuildingSubdivider (Lots)]
@@ -94,7 +94,7 @@ Chaque bâtiment conserve en mémoire :
 
 ## 4. Moteur de Rendu, GPU Instancing & Streaming
 
-Fichiers clés : [`TacticalStreamingManager.cs`](file:///e:/streetact/My%20project/Assets/TacticalStreamingManager.cs), [`TacticalVisibility.cs`](file:///e:/streetact/My%20project/Assets/TacticalVisibility.cs), [`SafeMaterialFactory.cs`](file:///e:/streetact/My%20project/Assets/SafeMaterialFactory.cs), [`GameManagerUI.cs`](file:///e:/streetact/My%20project/Assets/GameManagerUI.cs)
+Fichiers clés : `Assets/Scripts/Generation/TacticalStreamingManager.cs`, `Assets/Scripts/AI/TacticalVisibility.cs`, `Assets/Scripts/Rendering/SafeMaterialFactory.cs`, `Assets/Scripts/UI/GameManagerUI.cs`
 
 ### 4.1. GPU Instancing Automatique au Démarrage
 - Dans `GameManagerUI.OptimizeSceneMaterials()`, le jeu parcourt tous les matériaux au chargement et active dynamiquement `enableInstancing = true`, réduisant drastiquement les Draw Calls sur les scènes comportant des centaines d'éléments de décor.
@@ -113,7 +113,7 @@ Fichiers clés : [`TacticalStreamingManager.cs`](file:///e:/streetact/My%20proje
 
 ## 5. Gestionnaire Tactique & Actions Contextuelles
 
-Fichiers clés : [`TacticalPathManager.cs`](file:///e:/streetact/My%20project/Assets/TacticalPathManager.cs), [`RoadBarrier.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Combat/RoadBarrier.cs), [`DestructibleEnvironment.cs`](file:///e:/streetact/My%20project/Assets/Scripts/DestructibleEnvironment.cs)
+Fichiers clés : `Assets/Scripts/AI/TacticalPathManager.cs`, `Assets/Scripts/Combat/RoadBarrier.cs`, `Assets/Scripts/Combat/DestructibleEnvironment.cs`
 
 ### 5.1. Détection & Interaction Contextuelle
 Lorsqu'un clic/toucher est détecté en phase de planification :
@@ -135,7 +135,7 @@ Lorsqu'un clic/toucher est détecté en phase de planification :
 
 ## 6. Architecture des Unités, Déplacements & Combat
 
-Fichiers clés : [`UnitAI.cs`](file:///e:/streetact/My%20project/Assets/UnitAI.cs), [`UnitAI_Movement.cs`](file:///e:/streetact/My%20project/Assets/UnitAI_Movement.cs), [`UnitAI_Combat.cs`](file:///e:/streetact/My%20project/Assets/UnitAI_Combat.cs), [`UnitAI_Visuals.cs`](file:///e:/streetact/My%20project/Assets/UnitAI_Visuals.cs), [`UnitTacticalMarker.cs`](file:///e:/streetact/My%20project/Assets/UnitTacticalMarker.cs)
+Fichiers clés : `Assets/Scripts/AI/UnitAI.cs`, `Assets/Scripts/AI/UnitAI_Movement.cs`, `Assets/Scripts/AI/UnitAI_Combat.cs`, `Assets/Scripts/AI/UnitAI_Visuals.cs`, `Assets/Scripts/AI/UnitTacticalMarker.cs`
 
 ```
 [TacticalNode]
@@ -175,7 +175,7 @@ Fichiers clés : [`UnitAI.cs`](file:///e:/streetact/My%20project/Assets/UnitAI.c
 
 ## 7. Système d'Artillerie Balistique & Mortier
 
-Fichier clé : [`MortarShell.cs`](file:///e:/streetact/My%20project/Assets/Scripts/Combat/MortarShell.cs)
+Fichier clé : `Assets/Scripts/Combat/MortarShell.cs`
 
 - **Trajectoire Parabolique Haute** : L'obus de mortier s'élève avec un sommet d'apogée dynamique (`apexHeight = 22m à 50m`) lui permettant de survoler tous les gratte-ciels et immeubles intermédiaires.
 - **Traînée Incandescente** : Composant `TrailRenderer` générant une traînée de fumée et de flammes pendant le vol (durée 2.2s).
@@ -189,7 +189,7 @@ Fichier clé : [`MortarShell.cs`](file:///e:/streetact/My%20project/Assets/Scrip
 
 ## 8. Cerveau Tactique IA Ennemi
 
-Fichier clé : [`TacticalAIPlanner.cs`](file:///e:/streetact/My%20project/Assets/Scripts/AI/TacticalAIPlanner.cs)
+Fichier clé : `Assets/Scripts/AI/TacticalAIPlanner.cs`
 
 - **Brouillard de Guerre Équitable** : L'IA n'utilise pas de données de triche. Elle ne cible que les unités joueuses détectées par ligne de vue directe ou repérées par un éclaireur (`UnitAI.IsUnitSpottedByTeam`).
 - **Comportement en Patrouille / Brouillard** :
@@ -202,31 +202,42 @@ Fichier clé : [`TacticalAIPlanner.cs`](file:///e:/streetact/My%20project/Assets
 
 ---
 
-## 9. Interface Militaire, Déploiement & Radar HUD
+## 9. Interface de bataille, déploiement et radar
 
-Fichiers clés : [`UnitSpawnerUI.cs`](file:///e:/streetact/My%20project/Assets/UnitSpawnerUI.cs), [`TacticalRadarUI.cs`](file:///e:/streetact/My%20project/Assets/Scripts/TacticalRadarUI.cs), [`GameManagerUI.cs`](file:///e:/streetact/My%20project/Assets/GameManagerUI.cs)
+Fichiers clés : `Assets/Scripts/UI/UnitSpawnerUI.cs`, `Assets/Scripts/AI/TacticalPathManager_UI.cs`,
+`Assets/Scripts/UI/TacticalRadarUI.cs`, `Assets/Scripts/UI/GameManagerUI.cs`.
 
-### 9.1. Menu de Déploiement Drag & Drop (`UnitSpawnerUI`)
-- Permet de déployer manuellement les 5 types d'unités (Fantassin, Leopard 2, Véhicule Canon, Mortier, Barricade) pour l'équipe bleue ou rouge (jusqu'à 12 unités par camp).
-- Anneau holographique de prévisualisation au sol (`DeploymentPreviewRing`) projeté par raycast.
-- Déploiement automatique de secours (`AutoDeployBattlefield`) si aucune unité n'est présente au démarrage.
+### 9.1. Placement des troupes (`UnitSpawnerUI`, écran `DeploymentDockScreen.uxml`)
+- **Solo** (depuis le 2026-10-03, une vraie escarmouche) : la carte chargée, l'armée de l'IA se place
+  seule au nord-est (`AutoDeployTeamFallback(2)`), la caméra se cadre sur la base du joueur et le
+  panneau VOS TROUPES s'ouvre. Le joueur touche une unité (chacune décrite en une ligne), puis un
+  endroit de la carte ; PLACEMENT AUTOMATIQUE pose l'escouade standard ; COMMENCER LA BATAILLE
+  ferme le placement (`IsSoloDeploymentPhase`). Ni ordres ni FIN DE TOUR avant ce moment, et plus
+  de renforts ensuite.
+- **En ligne** : même panneau, limité à 6 unités de combat et 2 mortiers, bouton CONFIRMER MES
+  POSITIONS ; un joueur qui ne confirme pas à temps est placé par le serveur.
+- Anneau de prévisualisation au sol (`DeploymentPreviewRing`) ; un blindé ne se pose jamais sur un toit.
 
-### 9.2. Radar Militaire HUD Temps Réel (`TacticalRadarUI`)
-- Rendu vectoriel immédiat `OnGUI` style affichage tête haute (HUD militaire) :
-  - Réticule circulaire gradué avec faisceau de balayage sonar rotatif.
-  - Blips lumineux en temps réel : Alliés en bleu cyan, Ennemis détectés en rouge vif.
-  - Ondes de détection circulaires (*Pings*) générées lors des coups de feu et explosions.
+### 9.2. Barre de bataille (`TacticalBottomBarScreen.uxml`, `TacticalPathManager_UI`)
+- Boutons en mots : MENU (pause), BLESSÉS (n) (sélectionne tour à tour les unités blessées), VUE 3D,
+  RETIRER LE POINT, FIN DE TOUR ; pendant un tour Solo, ACCÉLÉRER (vitesse ×3, remise à 1 en fin de tour).
+- Consigne du moment en bas de l'écran (`RefreshTurnHint`) : toucher une unité, puis la carte, puis
+  FIN DE TOUR.
+- En ligne, le bandeau du haut dit qui attaque ou défend, le numéro du tour et le temps restant
+  (5 minutes par tour).
 
-### 9.3. Gestionnaire Global & Écran de Démarrage (`GameManagerUI`)
-- Sélecteur de ville au démarrage (`IsStartupSelectionActive`).
-- Verrouillage automatique à 60 FPS (`Application.targetFrameRate = 60; QualitySettings.vSyncCount = 0;`).
-- Configuration de l'ambiance visuelle du brouillard de guerre (`RenderSettings.fog`).
+### 9.3. Radar (`TacticalRadarUI`)
+- Rendu `OnGUI` : réticule, balayage, alliés en bleu, ennemis repérés en rouge, ondes lors des tirs.
+
+### 9.4. Écran de démarrage (`GameManagerUI`)
+- JOUER SOLO / JOUER EN LIGNE ; 30 images/s pour ménager la batterie ; console de développement
+  Unity désactivée à l'écran.
 
 ---
 
 ## 10. Destruction Procédurale de l'Environnement
 
-Fichier clé : [`DestructibleEnvironment.cs`](file:///e:/streetact/My%20project/Assets/Scripts/DestructibleEnvironment.cs)
+Fichier clé : `Assets/Scripts/Combat/DestructibleEnvironment.cs`
 
 - Lorsqu'un bâtiment ou une barricade subit des dégâts critiques (tirs d'obus de mortier ou de char) :
   1. Les occupants (tireurs d'élite, garnisons) subissent des dégâts létaux de chute/écrasement.
@@ -239,7 +250,7 @@ Fichier clé : [`DestructibleEnvironment.cs`](file:///e:/streetact/My%20project/
 
 ## 11. Synthèse Audio Procédurale
 
-Fichier clé : [`ProceduralAudioBuilder.cs`](file:///e:/streetact/My%20project/Assets/ProceduralAudioBuilder.cs)
+Fichier clé : `Assets/Scripts/Core/ProceduralAudioBuilder.cs`
 
 Pour éliminer toute dépendance à des fichiers audio externes et prévenir les erreurs d'assets manquants, le jeu embarque un synthétiseur d'ondes PCM temps réel :
 - `CreateClickSound()` : Bip UI court sinusoïdal modulé.

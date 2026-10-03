@@ -38,7 +38,7 @@ public partial class TacticalPathManager
     // le signale avant qu'il ne soit trop tard. Fenêtre de confirmation "retapez pour confirmer",
     // même mécanisme que ShowInvalidTapFeedback (aucun nouvel écran/dialogue) : un premier tap sur
     // FIN DE TOUR alors qu'il reste au moins une unité SANS AUCUN ORDRE affiche un avertissement et
-    // n'arme rien d'autre ; un second tap dans les 3s qui suivent est traité comme une confirmation
+    // n'arme rien d'autre ; un second tap dans les 5 s qui suivent est traité comme une confirmation
     // explicite et termine bien le tour.
     private float pendingEndTurnConfirmUntil = -1f;
 
@@ -61,13 +61,16 @@ public partial class TacticalPathManager
 
         if (Time.time > pendingEndTurnConfirmUntil && AnyPlayerUnitWithoutOrders())
         {
-            pendingEndTurnConfirmUntil = Time.time + 3f;
+            pendingEndTurnConfirmUntil = Time.time + 5f;
 #if !UNITY_SERVER
-            ShowInvalidTapFeedback("Des unités n'ont reçu aucun ordre — retapez FIN DE TOUR pour confirmer", 3f);
+            ShowInvalidTapFeedback("Certaines unités n'ont aucun ordre. Touchez encore FIN DE TOUR pour jouer quand même.", 5f);
 #endif
             return;
         }
         pendingEndTurnConfirmUntil = -1f;
+#if !UNITY_SERVER
+        HideInvalidTapFeedback(); // l'avertissement « unités sans ordre » n'a plus lieu d'être
+#endif
 
         team1CountAtTurnStart = CountLivingByTeam(1);
         team2CountAtTurnStart = CountLivingByTeam(2);
@@ -84,7 +87,6 @@ public partial class TacticalPathManager
         Debug.Log("--- DÉBUT DE LA PHASE D'EXÉCUTION (Action en cours) ---");
 
         SelectionnerUnite(null); // On désélectionne tout
-        if (menuPanel != null) menuPanel.SetActive(false);
 
         // Nettoyer les anciens marqueurs de waypoints holographiques au début de l'exécution
         WaypointMarker[] existingMarkers = FindObjectsByType<WaypointMarker>(FindObjectsInactive.Include);
@@ -246,6 +248,22 @@ public partial class TacticalPathManager
         return false;
     }
 
+    /// <summary>Vitesse du tour Solo en cours (1 = normale, 3 = ACCÉLÉRER) — relue par le menu pause
+    /// à la reprise. Toujours remise à 1 à la fin du tour.</summary>
+    public static float SoloSpeed { get; private set; } = 1f;
+
+    private void ToggleSoloSpeed()
+    {
+        if (Novgov.Network.MultiplayerMatchController.IsFlowActive || phaseActuelle != GamePhase.Execution) return;
+        SetSoloSpeed(SoloSpeed > 1f ? 1f : 3f);
+    }
+
+    private static void SetSoloSpeed(float speed)
+    {
+        SoloSpeed = speed;
+        Time.timeScale = speed;
+    }
+
     public void ForcerFinExecution()
     {
         if (turnExecutionCoroutine != null)
@@ -254,6 +272,7 @@ public partial class TacticalPathManager
             turnExecutionCoroutine = null;
         }
 
+        SetSoloSpeed(1f);
         phaseActuelle = GamePhase.Planification;
 
         // Compter les unités qui n'ont PAS fini leur trajet avant de tout effacer : la troncature était
@@ -380,10 +399,5 @@ public partial class TacticalPathManager
             };
         }
         UIScreenManager.Instance.SetVisible("GameOver", true);
-    }
-
-    public void SignalerFinMouvement(UnitAI unit)
-    {
-        // Résolution dynamique gérée par ExecuterTourCoroutine
     }
 }

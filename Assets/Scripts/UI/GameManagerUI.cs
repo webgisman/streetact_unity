@@ -19,7 +19,7 @@ public class GameManagerUI : MonoBehaviour
     // multijoueur). GameManagerUI lui-même est recréé à chaque rechargement (pas de
     // DontDestroyOnLoad), mais les Button qu'il câble viennent de UIScreenManager, qui LUI est
     // persistant — sans ce garde, chaque rechargement rajoutait un abonnement `clicked +=`
-    // supplémentaire sur les MÊMES boutons "MODE SOLO"/"MODE CAMPAGNE MULTIJOUEUR", faisant
+    // supplémentaire sur les MÊMES boutons JOUER SOLO / JOUER EN LIGNE, faisant
     // déclencher leurs actions (chargement de carte, connexion serveur) une fois par rechargement
     // vécu depuis le lancement de l'app.
     private static bool startupButtonsBound = false;
@@ -118,22 +118,10 @@ public class GameManagerUI : MonoBehaviour
     }
 
 #if !UNITY_SERVER
-    private UnityEngine.UIElements.Button zoneMapButton;
-
     private void Update()
     {
         if (gpsStatusLabel != null) gpsStatusLabel.text = gpsStatus;
         if (locationStatusLabel != null) locationStatusLabel.text = gpsStatus;
-
-        // Le bouton "CARTE DES ZONES" n'a de sens qu'une fois une Zone d'origine fixée (voir
-        // ZoneManager.InitializeHomeZoneFromGps, appelé au premier "MODE CAMPAGNE MULTIJOUEUR") —
-        // revérifié chaque frame plutôt qu'une seule fois au binding, puisque ça peut devenir vrai
-        // en cours de session.
-        if (zoneMapButton != null)
-        {
-            bool hasHomeZone = Novgov.Generation.ZoneManager.Instance != null && Novgov.Generation.ZoneManager.Instance.HasHomeZone;
-            zoneMapButton.style.display = hasHomeZone ? UnityEngine.UIElements.DisplayStyle.Flex : UnityEngine.UIElements.DisplayStyle.None;
-        }
     }
 
     private void BindStartupUI()
@@ -155,9 +143,8 @@ public class GameManagerUI : MonoBehaviour
         {
             try
             {
-                // Menu réduit à 2 choix : MODE SOLO (carte déjà présente, contre l'IA) et MODE CAMPAGNE
-                // MULTIJOUEUR (géolocalisation GPS — anciennement un 3e bouton séparé "btn-gps" — puis
-                // connexion PvP, anciennement déclenchée directement sans passer par le GPS).
+                // Deux choix : JOUER SOLO (contre l'ordinateur) et JOUER EN LIGNE (compte, puis
+                // localisation du QG).
                 // Via GameManagerUI.Instance, JAMAIS via `this` (correctif 2026-09-30) : ce câblage
                 // n'a lieu qu'une fois par lancement de l'app (voir startupButtonsBound), donc `this`
                 // désignait pour toujours l'instance de la PREMIÈRE scène. Après n'importe quel
@@ -192,7 +179,6 @@ public class GameManagerUI : MonoBehaviour
         }
 
         gpsStatusLabel = root.Q<Label>("gps-status-label");
-        zoneMapButton = root.Q<UnityEngine.UIElements.Button>("btn-zone-map");
         BindLocationPromptOnce();
 
         // Enchaînement demandé AVANT le rechargement de scène (voir ReloadSceneThen) : on saute le
@@ -428,11 +414,18 @@ public class GameManagerUI : MonoBehaviour
         if (mapLoader != null) mapLoader.ApplyDefaultOfflineMap();
         if (cityGen != null) cityGen.LoadDefaultOfflineCity();
 
-        yield return new WaitForSeconds(0.4f);
+        // La ville (et son NavMesh) doit être prête avant de poser l'armée de l'IA sur ses rues.
+        float waited = 0f;
+        while (cityGen != null && !cityGen.IsCityReady && waited < 30f)
+        {
+            waited += Time.deltaTime;
+            yield return null;
+        }
 
-        // Plus de déploiement automatique : la carte se charge vide, le joueur place lui-même ses
-        // unités via le dock "QG Renforts" (voir UnitSpawnerUI.Start()).
         UIScreenManager.Instance?.SetVisible("Loading", false);
+#if !UNITY_SERVER
+        UnitSpawnerUI.Instance?.BeginSoloDeployment();
+#endif
     }
 
     public void HideLoading()

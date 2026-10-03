@@ -58,14 +58,14 @@
 
 .dock-title {
     color: var(--color-text);
-    font-size: 19px;
+    font-size: 22px;
     -unity-font-style: bold;
     letter-spacing: 1.5px;
 }
 
 .dock-effectifs {
     color: var(--color-accent);
-    font-size: 16px;
+    font-size: 20px;
     -unity-font-style: bold;
 }
 
@@ -84,30 +84,6 @@
     background-color: var(--color-panel-border-dim);
     margin-top: 10px;
     margin-bottom: 10px;
-}
-
-.dock-team-btn {
-    min-height: 42px;
-    font-size: 16px;
-    border-radius: 2px;
-    border-width: 1px;
-    border-color: var(--color-panel-border-dim);
-    background-color: var(--color-glass-fill);
-    color: var(--color-text-dim);
-    -unity-font-style: bold;
-    transition-duration: 0.2s;
-}
-
-.dock-team-btn--active-p1 {
-    background-color: rgba(72, 128, 168, 0.4);
-    border-color: var(--color-team1);
-    color: var(--color-text);
-}
-
-.dock-team-btn--active-p2 {
-    background-color: rgba(188, 62, 48, 0.4);
-    border-color: var(--color-team2);
-    color: var(--color-text);
 }
 
 .dock-unit-btn {
@@ -145,20 +121,6 @@
     border-width: 1px;
 }
 
-.danger-btn {
-    background-color: rgba(150, 42, 32, 0.15);
-    border-color: var(--color-danger);
-    color: rgb(224, 110, 96);
-}
-.danger-btn:hover { background-color: rgba(150, 42, 32, 0.35); }
-
-.warning-btn {
-    background-color: rgba(176, 48, 40, 0.12);
-    border-color: var(--color-accent);
-    color: var(--color-accent);
-}
-.warning-btn:hover { background-color: rgba(176, 48, 40, 0.3); }
-
 .secondary-btn {
     background-color: var(--color-glass-fill);
     border-color: var(--color-panel-border-dim);
@@ -194,4 +156,58 @@
     flex-shrink: 0;
     -unity-background-scale-mode: scale-to-fit;
     -unity-background-image-tint-color: var(--color-text);
+}
+
+.dock-hint {
+    color: var(--color-text-dim);
+    font-size: 18px;
+    white-space: normal;
+    margin-bottom: 10px;
+}
+
+.dock-unit-text {
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+.dock-unit-name {
+    color: var(--color-text);
+    font-size: 22px;
+    -unity-font-style: bold;
+}
+
+.dock-unit-desc {
+    color: var(--color-text-dim);
+    font-size: 17px;
+    white-space: normal;
+}
+
+/* Bouton qui fait avancer la partie : même remplissage plein que FIN DE TOUR (.btn-primary). */
+.dock-confirm-btn {
+    min-height: 56px;
+    margin-top: 4px;
+    background-color: var(--color-accent);
+    border-width: 2px;
+    border-top-color: var(--bevel-light);
+    border-left-color: var(--bevel-light);
+    border-right-color: var(--bevel-dark);
+    border-bottom-color: var(--bevel-dark);
+    border-radius: 2px;
+    color: var(--color-accent-text);
+    font-size: 19px;
+    -unity-font-style: bold;
+    -unity-text-align: middle-center;
+    justify-content: center;
+}
+
+.dock-confirm-btn:hover { background-color: var(--color-accent-hover); }
+.dock-confirm-btn:active { background-color: rgb(120, 30, 24); }
+
+/* Les Label internes des boutons héritent sinon du 34px par défaut de Theme.tss (Label). */
+.dock-tab-button Label { font-size: 20px; }
+.dock-action-btn Label { font-size: 18px; }
+.dock-confirm-btn Label {
+    font-size: 22px;
+    -unity-font-style: bold;
+    color: var(--color-accent-text);
 }

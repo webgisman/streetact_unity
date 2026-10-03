@@ -244,11 +244,8 @@ Button.btn-ghost:hover {
     background-color: var(--color-glass-fill);
 }
 
-/* Regroupe les actions du HUD tactique (cloche/vue 3D/annuler/FIN DE TOUR) en UN SEUL bandeau
-   "glass" au lieu de boutons flottants indépendants côte à côte (2026-09-13, retour utilisateur
-   direct sur capture d'écran : "ne mets pas les boutons éparpillés comme ça, c'est pas
-   gamefiable/intuitif") — même langage visuel que .dock-panel (glass + liseré laiton en haut),
-   pour que ce groupe se lise comme UN tableau de bord cohérent plutôt que des morceaux disjoints. */
+/* Regroupe les actions du HUD tactique (MENU, BLESSÉS, VUE 3D, RETIRER LE POINT, FIN DE TOUR) en
+   un seul bandeau — retour joueur 2026-09-13 : « ne mets pas les boutons éparpillés ». */
 .hud-action-cluster {
     flex-direction: row;
     align-items: center;
@@ -259,6 +256,32 @@ Button.btn-ghost:hover {
     border-top-color: var(--color-accent);
     border-radius: 4px;
     padding: 6px 10px;
+}
+
+/* Bouton en mots du HUD de bataille (MENU, BLESSÉS, VUE 3D, RETIRER LE POINT, ACCÉLÉRER). */
+Button.hud-text-btn {
+    height: 52px;
+    min-height: 52px;
+    padding: 0 14px;
+    margin-right: 10px;
+    font-size: 19px;
+    -unity-font-style: bold;
+    -unity-text-align: middle-center;
+    white-space: nowrap;
+}
+
+/* Consigne du moment en bataille (« Touchez une de vos unités… »), en bas de l'écran. */
+.turn-hint {
+    background-color: rgba(20, 18, 12, 0.85);
+    border-width: 1px;
+    border-color: var(--color-panel-border-dim);
+    border-left-width: 3px;
+    border-left-color: var(--color-accent);
+    border-radius: 2px;
+    padding: 10px 16px;
+    color: var(--color-text);
+    font-size: 22px;
+    -unity-text-align: middle-center;
 }
 
 /* white-space: normal en base, ici et sur Button ci-dessous : par défaut, UI Toolkit NE fait PAS
@@ -380,14 +403,6 @@ Button.btn-with-icon .btn-text-col {
 Button.btn-with-icon .btn-text-col Label {
     white-space: normal;
     -unity-text-align: middle-left;
-}
-
-/* Bouton carré ne contenant qu'une icône (cloche, fermer, passer...) — remplace l'ancien
-   Button.btn-icon pensé pour un unique glyphe emoji centré par sa taille de police. */
-Button.btn-icon-only {
-    align-items: center;
-    justify-content: center;
-    padding: 0;
 }
 
 .btn-subtitle {

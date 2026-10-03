@@ -312,6 +312,9 @@ Button.cq-detail-secondary {
     margin-right: 6px;
 }
 
+/* Même gris que la case d'un quartier protégé (.cq-overlay--shield). */
+.cq-legend-swatch--shield { background-color: rgb(96, 96, 100); }
+
 .cq-legend-label {
     font-size: 16px;
     color: var(--color-text-dim);

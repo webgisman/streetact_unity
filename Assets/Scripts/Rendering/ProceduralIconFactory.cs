@@ -67,14 +67,6 @@ public static class ProceduralIconFactory
         return c;
     });
 
-    public static Texture2D Door() => Get("door", p =>
-    {
-        bool onFrame = p.x > 8 && p.x < 20 && p.y > 3 && p.y < 25 &&
-                       (p.x < 9.4f || p.x > 18.6f || p.y > 23.6f || p.y < 4.4f);
-        bool handle = Vector2.Distance(p, new Vector2(17, 13)) < 1.4f;
-        return (onFrame || handle) ? Ink : Color.clear;
-    });
-
     public static Texture2D Window() => Get("window", p =>
     {
         bool onFrame = p.x > 5 && p.x < 23 && p.y > 5 && p.y < 23 &&
@@ -97,25 +89,6 @@ public static class ProceduralIconFactory
         // Obus / projectile au sommet
         bool shell = Vector2.Distance(p, new Vector2(23, 24)) < 2.2f;
         if (shell) c = Ink;
-        return c;
-    });
-
-    public static Texture2D Eye() => Get("eye", p =>
-    {
-        Vector2 d = (p - Center);
-        float lens = (d.x * d.x) / (10.5f * 10.5f) + (d.y * d.y) / (5.5f * 5.5f);
-        bool onLens = lens < 1f && lens > 0.55f;
-        bool pupil = d.magnitude < 2.6f;
-        return (onLens || pupil) ? Ink : Color.clear;
-    });
-
-    public static Texture2D Clock() => Get("clock", p =>
-    {
-        float dist = Vector2.Distance(p, Center);
-        bool ring = Mathf.Abs(dist - 9.5f) < 1.3f;
-        Color c = ring ? Ink : Color.clear;
-        c = Blend(c, Line(p, Center, Center + new Vector2(0, 6.5f), 1.1f, Ink));
-        c = Blend(c, Line(p, Center, Center + new Vector2(4.5f, 0), 1.1f, Ink));
         return c;
     });
 

@@ -9,7 +9,7 @@ namespace Novgov.Server
 {
     public partial class MatchSessionManager
     {
-        // Mêmes points d'ancrage que UnitSpawnerUI.AutoDeployBattlefield/AutoDeployTeamFallback —
+        // Mêmes points d'ancrage que UnitSpawnerUI.AutoDeployTeamFallback —
         // le rayon délimite la zone légale où un placement manuel soumis via "submit_deployment"
         // est accepté (voir ClampToDeploymentZone) ; au-delà, la position est ramenée sur le bord
         // de la zone plutôt que rejetée en bloc, pour rester tolérant à une imprécision de tap tout
@@ -78,10 +78,8 @@ namespace Novgov.Server
             return kept;
         }
 
-        /// <summary>Ramène (x, z) dans la zone de déploiement légale du camp — désactivé (no-op) le
-        /// 2026-09-06 sur demande explicite : le placement manuel est accepté n'importe où sur la
-        /// carte. Les constantes/centres restent utilisés par AutoDeployBattlefield (déploiement
-        /// automatique), non concerné par ce changement.</summary>
+        /// <summary>Garde seulement (x, z) dans les limites du monde généré : depuis le 2026-09-06
+        /// (demande explicite), le placement manuel est accepté n'importe où sur la carte.</summary>
         private static Vector3 ClampToDeploymentZone(Vector3 pos, int team)
         {
             // Borne la position aux limites RÉELLES du monde généré (voir

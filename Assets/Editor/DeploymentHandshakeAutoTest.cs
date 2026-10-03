@@ -10,8 +10,8 @@ using UnityEngine;
 
 /// <summary>
 /// Test Éditeur AUTOMATISÉ du "handshake" de déploiement multijoueur (2026-09-19) — répond au rapport
-/// "après déploiement, le jeu reste bloqué sur 'en attente de l'adversaire'" en Deathmatch réel à 2
-/// joueurs. Isole EXACTEMENT `MatchSessionManager.RunDeploymentPhaseLive` (le coroutine qui attend
+/// "après déploiement, le jeu reste bloqué sur 'en attente de l'adversaire'" lors d'une vraie partie
+/// à 2 joueurs. Isole EXACTEMENT `MatchSessionManager.RunDeploymentPhaseLive` (le coroutine qui attend
 /// deployment_ready puis submit_deployment des DEUX joueurs et diffuse deployment_result) — pas
 /// RunMatchLive dans son ensemble, qui a besoin de Supabase (FetchUsername/CreateMatchRecord) pour
 /// des étapes qui n'ont RIEN à voir avec le bug rapporté. Deux vraies connexions TCP en boucle locale

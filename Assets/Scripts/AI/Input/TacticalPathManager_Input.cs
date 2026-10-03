@@ -163,7 +163,6 @@ public partial class TacticalPathManager
         // à bloquer TOUT effet secondaire 3D, y compris celui-ci.
         if (raycastUnit != null && !(UnitSpawnerUI.Instance != null && UnitSpawnerUI.Instance.IsPointerOverInteractiveControl(tapPosition)))
         {
-            if (menuPanel != null) menuPanel.SetActive(false);
             phaseActuelle = GamePhase.Planification;
             SelectionnerUnite(raycastUnit.gameObject); // referme aussi tout menu ouvert (voir SelectionnerUnite)
             TapDiagnosticOverlay.Report(DescribeSelectedUnitOwnership("Sélection DIRECTE (raycast)", raycastUnit));
@@ -215,7 +214,6 @@ public partial class TacticalPathManager
 
         if (closestUnit != null)
         {
-            if (menuPanel != null) menuPanel.SetActive(false);
             phaseActuelle = GamePhase.Planification;
             SelectionnerUnite(closestUnit.gameObject); // referme aussi tout menu ouvert (voir SelectionnerUnite)
             TapDiagnosticOverlay.Report(DescribeSelectedUnitOwnership($"Sélection TOLÉRANTE (rayon {maxTouchRadiusPx:F0}px, pas de hit direct)", closestUnit));

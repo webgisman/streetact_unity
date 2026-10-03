@@ -146,9 +146,7 @@ public class DestructibleEnvironment : MonoBehaviour
     /// Ne retire PAS non plus ce bâtiment de BuildingStructure.AllBuildings (contrairement à
     /// DestroyEnvironment, ligne ~290) : TacticalGridBuilder identifie chaque bâtiment par son INDEX
     /// dans cette liste (voir son commentaire, "template.id"), figé une seule fois au début de la
-    /// partie côté PUR (Deathmatch/Zone de Contrôle — TacticalWorldState.buildings n'est plus jamais
-    /// reconstruit depuis la scène après ça, voir RunExecutionPhasePure, "AUCUNE écriture sur un
-    /// DestructibleEnvironment"). Si CE client retirait un bâtiment de la liste au premier détruit,
+    /// partie. Si CE client retirait un bâtiment de la liste au premier détruit,
     /// tous les buildingId suivants envoyés par le serveur (des index dans SA PROPRE liste, jamais
     /// raccourcie puisqu'il n'appelle jamais TakeDamage sur le vrai composant) désigneraient le
     /// mauvais bâtiment pour le reste de la partie — un décalage d'un cran par bâtiment déjà détruit.</summary>

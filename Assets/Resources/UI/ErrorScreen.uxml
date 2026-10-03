@@ -3,7 +3,7 @@
         <ui:VisualElement class="panel" style="width: 75%; max-width: 600px; align-items: center;">
             <ui:Label text="ERREUR" class="title" style="margin-bottom: 16px; color: rgb(224, 110, 96);" />
             <ui:Label name="error-text" text="" class="error-text" style="margin-bottom: 24px; -unity-text-align: middle-center;" />
-            <ui:Button name="btn-load-offline" text="CHARGER LE MODE HORS-LIGNE" class="btn-primary" style="width: 100%;" />
+            <ui:Button name="btn-load-offline" text="JOUER EN SOLO" class="btn-primary" style="width: 100%;" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

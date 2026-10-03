@@ -54,6 +54,16 @@ Lance la scène en Play Mode, affiche l'écran Conquête avec des propriétaires
 OpenStreetMap sont réelles) et écrit des PNG en paysage 2400×1080, portrait 1080×2400 et fenêtre PC
 1280×720 (dont l'écran de connexion avec le bloc MODE TEST), puis quitte l'Éditeur. Pas en `-batchmode`.
 
+Même principe pour une partie **Solo**, vue 3D et interface composées :
+
+```
+Unity.exe -projectPath "<projet>" -executeMethod BattleScreenPreview.Run -previewOut "<dossier>"
+```
+
+Joue le parcours d'un joueur (JOUER SOLO, PLACEMENT AUTOMATIQUE, COMMENCER LA BATAILLE, sélection
+d'une unité, menu d'ordre, FIN DE TOUR) et écrit une capture à chaque étape, en téléphone 2400×1080
+et en PC 1280×720 (le radar, dessiné en IMGUI, n'apparaît pas). Pas en `-batchmode`.
+
 ## 5. Déplacements d'infanterie sur les toits (vrai moteur, sans serveur)
 
 ```

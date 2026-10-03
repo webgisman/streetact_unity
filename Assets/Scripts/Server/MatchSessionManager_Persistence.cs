@@ -177,8 +177,8 @@ namespace Novgov.Server
         /// avec verrouillage optimiste (lecture fraîche + écriture conditionnée sur cette même
         /// valeur, voir PostgrestPatchChecked/CaptureZoneInDb pour le même principe déjà utilisé pour
         /// zones.owner_user_id) — sans ça, deux parties de ce même joueur qui se terminent à
-        /// quelques centaines de ms d'écart sur deux instances différentes (Conquête + Deathmatch,
-        /// rien ne l'empêche) pouvaient voir la seconde écriture écraser la première avec un rating
+        /// quelques centaines de ms d'écart sur deux instances différentes (une capture et une
+        /// bataille de siège, rien ne l'empêche) pouvaient voir la seconde écriture écraser la première avec un rating
         /// déjà obsolète, perdant silencieusement un delta de classement (rapport d'audit §4).
         /// Utilisé à la fois ici (ELO complet) et par ApplyConquestRatingDelta (delta fixe).</summary>
         private IEnumerator ApplyRatingDeltaWithRetry(PlayerConnection player, int delta)

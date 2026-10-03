@@ -18,7 +18,7 @@ using UnityEngine;
 /// DOIT JAMAIS (1) infliger de dégâts aux unités proches — le serveur autoritaire a déjà décidé qui
 /// meurt via les événements Death du même snapshot — ni (2) retirer le bâtiment de
 /// BuildingStructure.AllBuildings, puisque TacticalGridBuilder identifie chaque bâtiment par son
-/// INDEX dans cette liste, figé pour toute la partie côté moteur pur (Deathmatch/Zone de Contrôle) :
+/// INDEX dans cette liste, figé pour toute la partie :
 /// le retirer décalerait l'identité de tous les bâtiments suivants pour le reste de la partie.
 /// </summary>
 public static class TacticalNetworkReplayAutoTest

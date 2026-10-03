@@ -145,7 +145,6 @@ public partial class TacticalPathManager
         selectedBuilding = null;
         isGroundCheckpointSelected = false;
 
-        if (menuPanel != null) menuPanel.SetActive(false);
     }
 
     public void ConfirmerBuildingAction(int choice)
@@ -237,7 +236,6 @@ public partial class TacticalPathManager
         isWindowSelected = false;
         isGroundCheckpointSelected = false;
 
-        if (menuPanel != null) menuPanel.SetActive(false);
         DessinerTousLesChemins();
     }
 
@@ -287,17 +285,24 @@ public partial class TacticalPathManager
         invalidTapToastTimer = duration;
     }
 
+    private void HideInvalidTapFeedback()
+    {
+        if (!tacticalUiBound) return;
+        invalidTapToastTimer = 0f;
+        invalidTapToastEl.style.display = DisplayStyle.None;
+    }
+
     private void ShowBuildingMenu()
     {
         // Les libellés de ce menu (construits dynamiquement, pas via UXML) ne portent plus
         // d'emoji : Theme.tss assigne désormais une police custom (Oswald) à tous les Label/Button
         // UI Toolkit, et cette police n'a aucun glyphe emoji de repli — un emoji laissé ici
         // s'afficherait comme un carré vide ("tofu") sur la plupart des appareils Android.
-        ShowContextMenu($"BÂTIMENT : {selectedBuilding.gameObject.name}",
+        ShowContextMenu("IMMEUBLE",
             () => { isBuildingSelected = false; selectedBuilding = null; },
-            ("1. INFILTRATION / INTÉRIEUR (RDC)", NovgovTheme.Success, () => ConfirmerBuildingAction(1)),
-            ("2. MONTER SUR LE TOIT (Sniper / Guet)", NovgovTheme.Info, () => ConfirmerBuildingAction(2)),
-            ("3. PORTE LA PLUS PROCHE", NovgovTheme.Accent, () => ConfirmerBuildingAction(3))
+            ("1. ENTRER DANS L'IMMEUBLE", NovgovTheme.Success, () => ConfirmerBuildingAction(1)),
+            ("2. MONTER SUR LE TOIT (voit et tire de plus loin)", NovgovTheme.Info, () => ConfirmerBuildingAction(2)),
+            ("3. ALLER À LA PORTE LA PLUS PROCHE", NovgovTheme.Accent, () => ConfirmerBuildingAction(3))
         );
     }
 
@@ -305,28 +310,28 @@ public partial class TacticalPathManager
     {
         if (isExitDoorAction)
         {
-            ShowContextMenu($"PORTE : {selectedDoor.building.gameObject.name}",
+            ShowContextMenu("PORTE",
                 () => { isDoorSelected = false; },
                 ("1. SORTIR DANS LA RUE", NovgovTheme.Success, () => ConfirmerAction((int)NodeAction.SortirBatiment)),
-                ("2. GUETTER PAR LA PORTE", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.GuetterPorte)),
-                ("3. CHECKPOINT SIMPLE", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Continuer))
+                ("2. SURVEILLER LA RUE DEPUIS LA PORTE", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.GuetterPorte)),
+                ("3. ALLER JUSQU'À LA PORTE", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Continuer))
             );
         }
         else
         {
-            ShowContextMenu($"ENTRÉE : {selectedDoor.building.gameObject.name}",
+            ShowContextMenu("PORTE",
                 () => { isDoorSelected = false; },
-                ("ENTRER DANS LE BÂTIMENT", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.EntrerBatiment))
+                ("ENTRER DANS L'IMMEUBLE", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.EntrerBatiment))
             );
         }
     }
 
     private void ShowWindowMenu()
     {
-        ShowContextMenu($"FENÊTRE : {selectedWindow.building.gameObject.name}",
+        ShowContextMenu("FENÊTRE",
             () => { isWindowSelected = false; },
-            ("1. GUETTER (Couvert -75%)", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.GarnisonFenetre)),
-            ("2. CHECKPOINT SIMPLE", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Continuer))
+            ("1. SE POSTER À LA FENÊTRE (protégé : -75 % de dégâts)", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.GarnisonFenetre)),
+            ("2. ALLER JUSQU'À LA FENÊTRE", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Continuer))
         );
     }
 
@@ -342,10 +347,10 @@ public partial class TacticalPathManager
 
         if (isMortarUnit)
         {
-            ShowContextMenu("ARTILLERIE : ORDRE DE TIR", onCancel,
-                ("1. TIR DE MORTIER (Zone AoE)", NovgovTheme.Danger, () => ConfirmerAction((int)NodeAction.TirMortier)),
-                ("2. SE DÉPLACER (Position)", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
-                ("3. ATTENDRE 30 SECONDES", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
+            ShowContextMenu("MORTIER", onCancel,
+                ("1. BOMBARDER CE POINT", NovgovTheme.Danger, () => ConfirmerAction((int)NodeAction.TirMortier)),
+                ("2. ALLER ICI", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
+                ("3. ALLER ICI ET ATTENDRE 30 S", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
             );
             return;
         }
@@ -357,11 +362,11 @@ public partial class TacticalPathManager
             // (voir UnitAI.isCanonVehicle, vérifié fiable de bout en bout), mais ce menu affichait
             // jusqu'ici le même intitulé générique "BLINDÉ" pour les deux types, laissant croire à
             // une confusion entre les deux alors qu'il s'agissait seulement d'un libellé partagé.
-            string title = selectedUnitAI.isCanonVehicle ? "VÉHICULE CANON : ORDRE DE MANOEUVRE" : "CHAR : ORDRE DE MANOEUVRE";
+            string title = selectedUnitAI.isCanonVehicle ? "VÉHICULE CANON" : "CHAR";
             ShowContextMenu(title, onCancel,
-                ("1. AVANCER (Déplacement)", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
-                ("2. GUETTER (Surveillance)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
-                ("3. ATTENDRE 30 SECONDES", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
+                ("1. ALLER ICI", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
+                ("2. ALLER ICI ET GUETTER (+50 % de défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("3. ALLER ICI ET ATTENDRE 30 S", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
             );
             return;
         }
@@ -390,18 +395,18 @@ public partial class TacticalPathManager
         {
             if (unitIsAlreadyOnRoof)
             {
-                ShowContextMenu("INFANTERIE : DÉPLACEMENT TOIT", onCancel,
-                    ("1. CONTINUER SUR LE TOIT", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
-                    ("2. GUETTER SUR LE TOIT", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
-                    ("3. ATTENDRE 30 SECONDES", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
+                ShowContextMenu("FANTASSIN : SUR LE TOIT", onCancel,
+                    ("1. ALLER ICI", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
+                    ("2. ALLER ICI ET GUETTER (+50 % de défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
+                    ("3. ALLER ICI ET ATTENDRE 30 S", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
                 );
             }
             else
             {
-                ShowContextMenu("INFANTERIE : ESCALADE DE FAÇADE", onCancel,
-                    ("1. ESCALADER SUR LE TOIT", NovgovTheme.Success, () => ConfirmerAction((int)NodeAction.Escalade)),
-                    ("2. GUETTER (+50% Défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
-                    ("3. ATTENDRE 30 SECONDES", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
+                ShowContextMenu("FANTASSIN : TOIT", onCancel,
+                    ("1. ESCALADER LA FAÇADE JUSQU'ICI", NovgovTheme.Success, () => ConfirmerAction((int)NodeAction.Escalade)),
+                    ("2. ALLER ICI ET GUETTER (+50 % de défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
+                    ("3. ALLER ICI ET ATTENDRE 30 S", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
                 );
             }
             return;
@@ -412,9 +417,9 @@ public partial class TacticalPathManager
             // L'unité descend par le bord du toit qui donne sur la rue la mieux placée, puis marche
             // jusqu'au point en contournant les obstacles (UnitAI.ExecuteClimbDown) — les libellés le
             // disent, plutôt qu'un « GUETTER » qui laissait croire que l'unité resterait sur le toit.
-            ShowContextMenu("INFANTERIE : DESCENDRE DANS LA RUE", onCancel,
+            ShowContextMenu("FANTASSIN : DESCENDRE DANS LA RUE", onCancel,
                 ("1. DESCENDRE ET Y ALLER", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Descendre)),
-                ("2. DESCENDRE ET GUETTER (+50% Défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("2. DESCENDRE ET GUETTER (+50 % de défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
                 ("3. DESCENDRE ET ATTENDRE 30 S", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
             );
             return;
@@ -422,29 +427,29 @@ public partial class TacticalPathManager
 
         if (unitIsInsideBuilding)
         {
-            ShowContextMenu("INFANTERIE : DÉPLACEMENT INTÉRIEUR", onCancel,
-                ("1. SE DÉPLACER À L'INTÉRIEUR", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
-                ("2. GUETTER INTÉRIEUR", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
-                ("3. ATTENDRE 30 SECONDES", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
+            ShowContextMenu("FANTASSIN : DANS L'IMMEUBLE", onCancel,
+                ("1. ALLER ICI", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
+                ("2. ALLER ICI ET GUETTER (+50 % de défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("3. ALLER ICI ET ATTENDRE 30 S", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
             );
             return;
         }
 
         if (isNearBuildingWall)
         {
-            ShowContextMenu("INFANTERIE : ORDRE TACTIQUE", onCancel,
-                ("1. CONTINUER (Mouvement)", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
-                ("2. GUETTER (+50% Défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
-                ("3. ATTENDRE 30 SECONDES", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s)),
-                ("4. SE CACHER (Contre mur)", NovgovTheme.Success, () => ConfirmerAction((int)NodeAction.SeCacher))
+            ShowContextMenu("FANTASSIN", onCancel,
+                ("1. ALLER ICI", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
+                ("2. ALLER ICI ET GUETTER (+50 % de défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("3. ALLER ICI ET ATTENDRE 30 S", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s)),
+                ("4. SE CACHER CONTRE LE MUR (invisible)", NovgovTheme.Success, () => ConfirmerAction((int)NodeAction.SeCacher))
             );
         }
         else
         {
-            ShowContextMenu("INFANTERIE : ORDRE TACTIQUE", onCancel,
-                ("1. CONTINUER (Mouvement)", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
-                ("2. GUETTER (+50% Défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
-                ("3. ATTENDRE 30 SECONDES", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
+            ShowContextMenu("FANTASSIN", onCancel,
+                ("1. ALLER ICI", NovgovTheme.Neutral, () => ConfirmerAction((int)NodeAction.Continuer)),
+                ("2. ALLER ICI ET GUETTER (+50 % de défense)", NovgovTheme.Info, () => ConfirmerAction((int)NodeAction.Guetter)),
+                ("3. ALLER ICI ET ATTENDRE 30 S", NovgovTheme.Accent, () => ConfirmerAction((int)NodeAction.Attendre30s))
             );
         }
     }
@@ -483,10 +488,10 @@ public partial class TacticalPathManager
         // L'option est nommée comme un CHOIX à surligner ("1. ..."), pas comme le bouton d'action
         // lui-même — sinon on croit que la cliquer suffit, alors qu'il faut ENSUITE cliquer
         // TERMINÉ (footer de ShowContextMenu) pour que ça s'applique, exactement comme pour
-        // n'importe quel autre ordre tactique (ex: "1. CONTINUER" puis TERMINÉ).
-        ShowContextMenu($"EXTENSION : {count} BARRICADE(S) SUPPLÉMENTAIRE(S)",
+        // n'importe quel autre ordre tactique (ex: "1. ALLER ICI" puis TERMINÉ).
+        ShowContextMenu(count == 1 ? "AJOUTER 1 BARRICADE ?" : $"AJOUTER {count} BARRICADES À LA SUITE ?",
             () => { if (UnitSpawnerUI.Instance != null) UnitSpawnerUI.Instance.CancelPendingBarricadeExtension(); },
-            ("1. DÉPLOYER CETTE EXTENSION", NovgovTheme.Danger, () => { if (UnitSpawnerUI.Instance != null) UnitSpawnerUI.Instance.ConfirmPendingBarricadeExtension(); })
+            ("1. POSER CES BARRICADES", NovgovTheme.Danger, () => { if (UnitSpawnerUI.Instance != null) UnitSpawnerUI.Instance.ConfirmPendingBarricadeExtension(); })
         );
     }
 

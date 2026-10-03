@@ -265,8 +265,7 @@ public partial class UnitAI
         // multijoueur") : ShootAt (le VRAI tir, solo/Conquête "vivante") appelle
         // FogOfWarEntity.NotifyAttack() ici, qui déclenche l'onde rouge de TacticalRadarUI —
         // seule alerte qui indique OÙ un combat a lieu sans que le joueur ait déjà l'œil dessus.
-        // PlayNetworkShotEffects, le rejeu PUREMENT COSMÉTIQUE utilisé par le multijoueur
-        // (Deathmatch/Zone de Contrôle), reproduit tous les autres effets (son, traceur, flash)
+        // PlayNetworkShotEffects, le rejeu PUREMENT COSMÉTIQUE utilisé en ligne, reproduit tous les autres effets (son, traceur, flash)
         // mais oubliait CELUI-CI : le radar restait muet pendant un échange de tirs multijoueur,
         // même si le tireur ET la cible étaient déjà visibles/existants côté client.
         FogOfWarEntity fow = GetComponent<FogOfWarEntity>();

@@ -43,11 +43,8 @@ namespace Novgov.Generation
         /// InitializeHomeZoneFromGps() n'a plus aucun effet, le GPS n'est plus jamais consulté.</summary>
         public bool HasHomeZone => PlayerPrefs.HasKey(HomeTileXPrefKey);
 
-        // Tuile d'origine STABLE (jamais modifiée après InitializeHomeZoneFromGps), distincte de
-        // CurrentTileX/Y ci-dessus qui, elle, change à chaque exploration (ExpandNorth/South/East/
-        // West) ou chargement d'une Zone de combat (LoadZone) — voir MultiplayerMatchController,
-        // 2026-08-30 ("des milliers de cartes") : le matchmaking Deathmatch/Zone de Contrôle a besoin
-        // de LA tuile domicile, pas de la dernière Zone parcourue par le joueur.
+        // Quartier d'origine du joueur (son QG), fixé une fois par InitializeHomeZoneFromGps —
+        // distinct de CurrentTileX/Y, qui suit le quartier affiché ou la bataille en cours.
         public int HomeTileX => PlayerPrefs.GetInt(HomeTileXPrefKey);
         public int HomeTileY => PlayerPrefs.GetInt(HomeTileYPrefKey);
 

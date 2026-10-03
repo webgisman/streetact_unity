@@ -8,7 +8,7 @@ using UnityEngine;
 ///       (PointerFrameReader, GestureScale, TapGestureDetector, UnitSelectionResolver)
 ///   - Input/TacticalPathManager_TapActionRouter.cs : cascade porte/fenêtre/bâtiment/sol/barricade
 ///       une fois qu'aucune unité n'est visée par le tap
-///   - TacticalPathManager_Selection.cs : sélection d'unité (clic direct, cloche blessés, squad-bar)
+///   - TacticalPathManager_Selection.cs : sélection d'unité (clic direct, bouton BLESSÉS, portraits)
 ///   - TacticalPathManager_ContextMenu.cs : ouverture/fermeture des menus d'ordre, confirmation
 ///   - TacticalPathManager_UI.cs : binding UI Toolkit (barre du bas, squad-bar, ContextMenu)
 ///   - TacticalPathManager_PathDrawing.cs : tracé des trajectoires (LineRenderer par unité)
@@ -43,9 +43,6 @@ public partial class TacticalPathManager : MonoBehaviour
         public Vector3 position;
         public NodeAction action;
     }
-
-    [Header("UI Références")]
-    public GameObject menuPanel;
 
     public GameObject uniteSelectionnee;
     // Vector3.positiveInfinity (pas Vector3.zero) comme sentinelle "aucun clic en attente" : le plan
@@ -181,13 +178,13 @@ public partial class TacticalPathManager : MonoBehaviour
         if (Novgov.UI.InGameMenuController.IsOpen) return;
 
         // Bloquer l'assignation de nouveaux ordres pendant l'exécution, pendant le placement d'unités,
-        // ou tant que le déploiement initial est en cours (dock "QG Renforts" ouvert, voir
+        // ou tant que le placement initial des troupes est en cours (Solo ou en ligne, voir
         // UnitSpawnerUI/UnitAI_Movement) — avant ce garde-fou, une unité déjà posée restait
         // sélectionnable/planifiable via ce même menu tactique alors que le tour/la partie n'a pas
         // encore commencé (rapport utilisateur : "il faut pas laisser le joueur choisir des
         // trajectoire ... le jeu n'a pas encore commencé"). Même flag que UnitAI_Movement.cs utilise
         // déjà pour geler les NavMeshAgent pendant cette même fenêtre.
-        if (phaseActuelle == GamePhase.Execution || UnitSpawnerUI.IsPlacingUnit
+        if (phaseActuelle == GamePhase.Execution || UnitSpawnerUI.IsPlacingUnit || UnitSpawnerUI.IsSoloDeploymentPhase
             || Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive) return;
 
         // APERÇU DE DESTINATION (correctif 2026-09-03). Le tracé n'était redessiné que sur
@@ -230,17 +227,6 @@ public partial class TacticalPathManager : MonoBehaviour
             DessinerTousLesChemins();
         }
 
-        // NOTE (2026-09-19) : ce garde-fou vérifiait autrefois `menuPanel.activeSelf` pour attendre
-        // l'interaction du joueur tant qu'un panneau d'action (porte/fenêtre/bâtiment) était ouvert.
-        // `menuPanel` est un champ uGUI hérité d'avant la bascule vers UI Toolkit — plus aucun code
-        // ne l'active jamais (grep confirmé : aucun `menuPanel.SetActive(true)` dans tout le projet),
-        // ce test était donc TOUJOURS faux et ne gardait plus rien depuis longtemps. Supprimé pour ne
-        // plus laisser croire que c'est ICI que le jeu attend la fermeture d'un menu — le vrai garde-
-        // fou "un menu/dock UI Toolkit ouvert absorbe ce tap" vit dans HandlePointerInput
-        // (UnitSpawnerUI.IsPointerOverOnGUI, voir Input/TacticalPathManager_Input.cs), et NE bloque
-        // plus du tout un tap DIRECT sur une autre unité (voir le commentaire "UN TAP DIRECT SUR UNE
-        // AUTRE UNITÉ..." dans ce même fichier) — le champ `menuPanel` lui-même reste déclaré (des
-        // appels `.SetActive(false)` défensifs subsistent ailleurs) mais ne conditionne plus rien ici.
         HandlePointerInput();
     }
 }

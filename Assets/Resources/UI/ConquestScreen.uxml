@@ -3,8 +3,7 @@
     <!-- CONQUÊTE (2026-09-30, demande joueur : "après multijoueur je veux juste Conquête, et dans
          Conquête la gestion et le mode carte, qui doit être beau, pour choisir le quartier à côté,
          avec du son"). Remplace l'ancien hub (ModeSelectScreen), la Carte des Zones (ZoneMapScreen)
-         et le choix de bataille (BattleSelectScreen) : Match à mort / Contrôle de zone /
-         Entraînement ne sont plus proposés.
+         et le choix de bataille (BattleSelectScreen).
          - CARTE : les 9 cases (générées en C#, ZoneMapController) sont les VRAIES tuiles
            OpenStreetMap du quartier du joueur et de ses 8 voisins ; toucher une case ouvre sa fiche
            ("detail") qui dit en clair ce qu'elle est et ce que le bouton va faire.
@@ -73,7 +72,7 @@
 
                 <ui:VisualElement name="map-detail" class="panel cq-detail">
                   <ui:ScrollView name="detail-scroll" style="flex-grow: 1; flex-shrink: 1;">
-                    <ui:Label name="detail-title" text="VOTRE SECTEUR" class="cq-detail-title" />
+                    <ui:Label name="detail-title" text="VOTRE QUARTIER" class="cq-detail-title" />
                     <ui:Label name="detail-chip" text="" class="cq-chip" style="display: none;" />
                     <ui:Label name="detail-text" text="" class="cq-detail-text" />
                     <ui:Button name="btn-detail-action" text="" class="btn-primary cq-detail-action" style="display: none;" />
@@ -96,6 +95,10 @@
                         <ui:VisualElement class="cq-legend-item">
                             <ui:VisualElement class="cq-legend-swatch" style="background-color: rgb(20, 20, 16);" />
                             <ui:Label text="Hors de portée pour l'instant" class="cq-legend-label" />
+                        </ui:VisualElement>
+                        <ui:VisualElement class="cq-legend-item">
+                            <ui:VisualElement class="cq-legend-swatch cq-legend-swatch--shield" />
+                            <ui:Label text="Protégé : sort d'un siège, attaque impossible pendant 6 h" class="cq-legend-label" />
                         </ui:VisualElement>
                     </ui:VisualElement>
                   </ui:ScrollView>

@@ -16,7 +16,7 @@ public static class TacticalAIPlanner
         // d'être marqué "ghost" ce tour-ci (absent/déconnecté/pas soumis à temps, voir
         // MatchSessionManager.ApplyForPlayer) — dans ce cas précis, elle prend temporairement le
         // relais plutôt que de laisser l'unité totalement immobile face à un adversaire humain.
-        if (unit.isPlayerControlled && !unit.isGhosted) return;
+        if (unit.isPlayerControlled) return;
 
         unit.tacticalPath.Clear();
         unit.currentNodeIndex = 0;

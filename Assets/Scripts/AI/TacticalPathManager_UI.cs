@@ -21,15 +21,16 @@ public partial class TacticalPathManager
     private VisualElement topDashboardEl;
     private VisualElement buttonContainerEl;
     private Button view3dButtonEl, cancelBtnEl, confirmBtnEl;
-    /// <summary>Bouton "annuler le dernier point" (2026-09-07). Voir son commentaire dans
-    /// TacticalBottomBarScreen.uxml : l'annulation n'existait qu'au clic droit, donc nulle part sur
-    /// un téléphone.</summary>
+    /// <summary>RETIRER LE POINT : seule façon d'annuler un point posé sur un téléphone (le clic
+    /// droit n'existe qu'à la souris).</summary>
     private Button undoNodeButtonEl;
-    // Conservé pour pouvoir masquer "Passer" en multijoueur (voir RefreshTacticalUI) : il n'y abrège
-    // rien, c'est le serveur qui décide de la fin du tour.
+    // ACCÉLÉRER : Solo uniquement (en ligne, le rythme du rejeu est celui du serveur).
     private Button skipButtonEl;
+    private Button endTurnButtonEl;
+    // BLESSÉS (n) : sélectionne tour à tour vos unités blessées ; masqué s'il n'y en a aucune.
+    private Button woundedButtonEl;
+    private Label turnHintEl;
     private Label menuTitleEl;
-    private Label notifBellBadgeEl;
     private Label invalidTapToastEl;
     private float invalidTapToastTimer = 0f;
     private System.Action currentMenuCancelAction;
@@ -70,50 +71,31 @@ public partial class TacticalPathManager
             invalidTapToastEl = bottomBarRoot.Q<Label>("invalid-tap-toast");
             if (invalidTapToastEl == null) { Debug.LogError("[TacticalPathManager] Élément 'invalid-tap-toast' introuvable dans le UXML instancié."); return; }
 
-            Button endTurnBtn = bottomBarRoot.Q<Button>("end-turn-button");
-            if (endTurnBtn == null) { Debug.LogError("[TacticalPathManager] Bouton 'end-turn-button' introuvable dans le UXML instancié."); return; }
-            endTurnBtn.clicked += LancerExecutionTour;
+            endTurnButtonEl = bottomBarRoot.Q<Button>("end-turn-button");
+            if (endTurnButtonEl == null) { Debug.LogError("[TacticalPathManager] Bouton 'end-turn-button' introuvable dans le UXML instancié."); return; }
+            endTurnButtonEl.clicked += LancerExecutionTour;
 
-            // Pas de `return` si absent, contrairement aux éléments essentiels ci-dessus : ce bouton
-            // est un confort d'annulation, et un UXML périmé ne doit pas faire échouer le câblage de
-            // la cloche de notification, de "Passer", de la bascule 2D/3D et du menu contextuel qui
-            // le suivent — l'annulation resterait alors disponible au clic droit.
             undoNodeButtonEl = bottomBarRoot.Q<Button>("undo-node-button");
-            if (undoNodeButtonEl == null) Debug.LogWarning("[TacticalPathManager] Bouton 'undo-node-button' absent du UXML — annulation d'un point indisponible au toucher.");
-            else undoNodeButtonEl.clicked += AnnulerDernierPoint;
+            if (undoNodeButtonEl == null) { Debug.LogError("[TacticalPathManager] Bouton 'undo-node-button' introuvable dans le UXML instancié."); return; }
+            undoNodeButtonEl.clicked += AnnulerDernierPoint;
 
-            Button notifBellBtn = bottomBarRoot.Q<Button>("notif-bell-button");
-            notifBellBadgeEl = bottomBarRoot.Q<Label>("notif-bell-badge");
-            if (notifBellBtn == null) { Debug.LogError("[TacticalPathManager] Bouton 'notif-bell-button' introuvable dans le UXML instancié."); return; }
-            notifBellBtn.clicked += SelectionnerProchaineUniteBlessee;
+            woundedButtonEl = bottomBarRoot.Q<Button>("wounded-button");
+            if (woundedButtonEl == null) { Debug.LogError("[TacticalPathManager] Bouton 'wounded-button' introuvable dans le UXML instancié."); return; }
+            woundedButtonEl.clicked += SelectionnerProchaineUniteBlessee;
 
-#if !UNITY_SERVER
-            // Menu pause (2026-09-30) — facultatif comme undo-node-button : un UXML périmé ne doit pas
-            // faire échouer le reste du câblage.
+            turnHintEl = bottomBarRoot.Q<Label>("turn-hint");
+            if (turnHintEl == null) { Debug.LogError("[TacticalPathManager] Élément 'turn-hint' introuvable dans le UXML instancié."); return; }
+
             Button hudMenuBtn = bottomBarRoot.Q<Button>("hud-menu-button");
-            if (hudMenuBtn == null) Debug.LogWarning("[TacticalPathManager] Bouton 'hud-menu-button' absent du UXML — menu pause indisponible.");
-            else Novgov.UI.InGameMenuController.BindHudButton(hudMenuBtn);
-#endif
+            if (hudMenuBtn == null) { Debug.LogError("[TacticalPathManager] Bouton 'hud-menu-button' introuvable dans le UXML instancié."); return; }
+            Novgov.UI.InGameMenuController.BindHudButton(hudMenuBtn);
 
-            Button skipBtn = bottomBarRoot.Q<Button>("skip-button");
-            if (skipBtn == null) { Debug.LogError("[TacticalPathManager] Bouton 'skip-button' introuvable dans le UXML instancié."); return; }
-            skipButtonEl = skipBtn;
-            // "Passer" ne vaut qu'en SOLO. En multijoueur, la fin du tour est décidée par le serveur :
-            // ForcerFinExecution est purement local (il repasse en Planification et efface les ordres),
-            // donc appuyer dessus pendant que le serveur résout ou que le rejeu tourne faisait
-            // replanifier le joueur par-dessus des unités encore en train de bouger, puis effaçait
-            // d'un coup tout ce qu'il venait de tracer à la fin du rejeu — voire envoyait un second
-            // "submit_turn" pour le tour suivant. On le neutralise donc hors solo (il est masqué juste
-            // en dessous, ce garde couvre le cas où il resterait cliquable).
-            skipBtn.clicked += () =>
-            {
-                if (Novgov.Network.MultiplayerMatchController.IsFlowActive)
-                {
-                    Debug.Log("[TacticalPathManager] \"Passer\" ignoré en multijoueur : la fin du tour est décidée par le serveur.");
-                    return;
-                }
-                ForcerFinExecution();
-            };
+            skipButtonEl = bottomBarRoot.Q<Button>("skip-button");
+            if (skipButtonEl == null) { Debug.LogError("[TacticalPathManager] Bouton 'skip-button' introuvable dans le UXML instancié."); return; }
+            // ACCÉLÉRER (Solo) : jusqu'au 2026-10-03 ce bouton s'appelait « Passer » et ARRÊTAIT le
+            // tour — les unités s'immobilisaient sur place et perdaient leurs ordres. Il fait
+            // maintenant ce qu'un joueur attend : la suite du tour, en accéléré.
+            skipButtonEl.clicked += ToggleSoloSpeed;
 
             if (view3dButtonEl == null) { Debug.LogError("[TacticalPathManager] Élément 'view3d-button' introuvable dans le UXML instancié."); return; }
             view3dButtonEl.clicked += () =>
@@ -123,7 +105,6 @@ public partial class TacticalPathManager
                     suppressPointerInputUntilFrame = Time.frameCount;
                     CameraStateManager.Instance.Enter3DView(uniteSelectionnee.transform);
                     FermerMenuContextuel(invokeCancelAction: true);
-                    if (menuPanel != null) menuPanel.SetActive(false);
                 }
             };
 
@@ -201,7 +182,8 @@ public partial class TacticalPathManager
         // chaque frame. Un Stop puis Play propre recrée tout correctement.
         if (UIScreenManager.Instance == null || bottomBarRoot == null || contextMenuRoot == null || planGroupEl == null
             || execGroupEl == null || view3dButtonEl == null || invalidTapToastEl == null
-            || menuTitleEl == null || buttonContainerEl == null || cancelBtnEl == null || confirmBtnEl == null)
+            || menuTitleEl == null || buttonContainerEl == null || cancelBtnEl == null || confirmBtnEl == null
+            || endTurnButtonEl == null || undoNodeButtonEl == null || woundedButtonEl == null || skipButtonEl == null || turnHintEl == null)
         {
             tacticalUiBound = false;
             return;
@@ -230,27 +212,20 @@ public partial class TacticalPathManager
         planGroupEl.style.display = isPlanification ? DisplayStyle.Flex : DisplayStyle.None;
         execGroupEl.style.display = isPlanification ? DisplayStyle.None : DisplayStyle.Flex;
 
-        // "Passer" abrège l'exécution — un geste qui n'a de sens qu'en solo, où c'est le client qui
-        // arbitre la durée du tour. En multijoueur il n'a aucun effet (voir le garde à son câblage) :
-        // autant ne pas le proposer plutôt que d'afficher un bouton qui ne fait rien.
-        if (skipButtonEl != null)
-        {
-            skipButtonEl.style.display = Novgov.Network.MultiplayerMatchController.IsFlowActive
-                ? DisplayStyle.None
-                : DisplayStyle.Flex;
-        }
+        // Pas de FIN DE TOUR tant que les troupes Solo ne sont pas placées (COMMENCER LA BATAILLE).
+        endTurnButtonEl.style.display = (isPlanification && !UnitSpawnerUI.IsSoloDeploymentPhase) ? DisplayStyle.Flex : DisplayStyle.None;
+
+        skipButtonEl.style.display = Novgov.Network.MultiplayerMatchController.IsFlowActive ? DisplayStyle.None : DisplayStyle.Flex;
+        skipButtonEl.text = SoloSpeed > 1f ? "VITESSE NORMALE" : "ACCÉLÉRER";
 
         bool showContext = isPlanification && uniteSelectionnee != null && !hideBottomBar;
         view3dButtonEl.style.display = (is2DMode && showContext) ? DisplayStyle.Flex : DisplayStyle.None;
 
         // Annuler le dernier point : proposé dès que l'unité sélectionnée a au moins un point posé.
         // Sans ce bouton, l'annulation n'était accessible qu'au clic DROIT — inexistant sur mobile.
-        if (undoNodeButtonEl != null)
-        {
-            UnitAI selectedForUndo = uniteSelectionnee != null ? uniteSelectionnee.GetComponent<UnitAI>() : null;
-            bool canUndo = showContext && selectedForUndo != null && selectedForUndo.tacticalPath.Count > 0;
-            undoNodeButtonEl.style.display = canUndo ? DisplayStyle.Flex : DisplayStyle.None;
-        }
+        UnitAI selectedForUndo = uniteSelectionnee != null ? uniteSelectionnee.GetComponent<UnitAI>() : null;
+        bool canUndo = showContext && selectedForUndo != null && selectedForUndo.tacticalPath.Count > 0;
+        undoNodeButtonEl.style.display = canUndo ? DisplayStyle.Flex : DisplayStyle.None;
 
         // Le ContextMenu ne montre plus qu'une seule chose : le sous-menu d'ordre ouvert au tap
         // d'un endroit valide de la carte (bâtiment/porte/fenêtre/checkpoint/barricade, construit
@@ -267,33 +242,54 @@ public partial class TacticalPathManager
         RefreshSquadBar();
         PositionTopRightCluster();
 
-        if (notifBellBadgeEl != null)
-        {
-            int wounded = CountWoundedPlayerUnits();
-            notifBellBadgeEl.style.display = wounded > 0 ? DisplayStyle.Flex : DisplayStyle.None;
-            notifBellBadgeEl.text = wounded > 9 ? "9+" : wounded.ToString();
-        }
+        int wounded = CountWoundedPlayerUnits();
+        woundedButtonEl.style.display = (isPlanification && wounded > 0) ? DisplayStyle.Flex : DisplayStyle.None;
+        woundedButtonEl.text = $"BLESSÉS ({wounded})";
+
+        RefreshTurnHint(hideBottomBar);
     }
 
-    /// <summary>
-    /// Empile dynamiquement le cluster haut-droit (Fin de tour + cloche, barre contextuelle,
-    /// portraits d'escouade) sous le radar tactique (OnGUI, TacticalRadarUI), en POURCENTAGE de
-    /// Screen.height plutôt qu'en pixels fixes : un décalage en dur (essayé précédemment) casse
-    /// dès que la résolution/le ratio d'écran change (constaté dans la fenêtre Game de l'Éditeur,
-    /// où un "top: 460px" poussait tout hors d'une vue de seulement 472px de haut). Le pourcentage
-    /// est recalculé chaque frame à partir de TacticalRadarUI.BottomEdgeScreenY (0 quand le radar
-    /// est masqué, ex: vue 3D Action), donc le cluster remonte automatiquement dans ce cas.
-    /// </summary>
-    /// <summary>Correctif 2026-09-20 (retour joueur : "l'icône vue 3D est sous l'appareil photo du
-    /// téléphone, impossible d'appuyer dessus"). "top-dashboard" (TacticalBottomBarScreen.uxml) est
-    /// en `position: absolute; top: 0` DANS la racine que UIScreenManager.ApplySafeAreaPadding
-    /// protège déjà par un padding — mais cette même racine documente déjà, pour un AUTRE bouton
-    /// ancré en bord d'écran (voir son commentaire sur lastSafeAreaScreenW/H), un décalage réel entre
-    /// la position visuelle d'un élément absolute et sa zone réellement protégée. Plutôt que de
-    /// dépendre de cet héritage de padding à travers une position absolute imbriquée, on applique ICI
-    /// un inset de sécurité DIRECT sur le HUD haut, recalculé depuis Screen.safeArea à chaque frame où
-    /// la résolution change réellement — indépendant de tout comportement du moteur de layout sur les
-    /// ancêtres.</summary>
+    /// <summary>Consigne du moment, en bas de l'écran : ce que le joueur doit faire MAINTENANT.
+    /// Ajoutée le 2026-10-03 (« le joueur doit tout comprendre ») — rien n'indiquait jusque-là
+    /// qu'il fallait toucher une unité, puis la carte, puis FIN DE TOUR.</summary>
+    private void RefreshTurnHint(bool hideBottomBar)
+    {
+        string hint = null;
+        bool deploying = UnitSpawnerUI.IsSoloDeploymentPhase || Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive;
+        if (!hideBottomBar && !deploying && phaseActuelle == GamePhase.Planification && !UnitSpawnerUI.IsPlacingUnit)
+        {
+            UnitAI selected = uniteSelectionnee != null ? uniteSelectionnee.GetComponent<UnitAI>() : null;
+            if (AnyOrderMenuOpen)
+                hint = "Choisissez un ordre, puis TERMINÉ.";
+            else if (selected == null)
+                hint = AnyPlayerUnitWithOrders()
+                    ? "Touchez une autre unité pour lui donner un ordre, ou FIN DE TOUR pour lancer le tour."
+                    : "Touchez une de vos unités pour lui donner un ordre.";
+            else if (selected.isMortar)
+                hint = "Touchez la carte : là où le mortier doit tirer, ou aller.";
+            else if (selected.tacticalPath.Count == 0)
+                hint = "Touchez la carte là où cette unité doit aller.";
+            else
+                hint = "Touchez encore la carte pour ajouter une étape, ou une autre unité. FIN DE TOUR quand vous êtes prêt.";
+        }
+
+        turnHintEl.style.display = hint != null ? DisplayStyle.Flex : DisplayStyle.None;
+        if (hint != null) turnHintEl.text = hint;
+    }
+
+    private static bool AnyPlayerUnitWithOrders()
+    {
+        for (int i = 0; i < UnitAI.AllLivingUnits.Count; i++)
+        {
+            UnitAI u = UnitAI.AllLivingUnits[i];
+            if (u != null && !u.isDead && u.isPlayerControlled && u.tacticalPath != null && u.tacticalPath.Count > 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Décale la barre du haut sous l'encoche / la perforation caméra du téléphone
+    /// (Screen.safeArea), recalculé quand la résolution change — retour joueur 2026-09-20 :
+    /// « l'icône vue 3D est sous l'appareil photo, impossible d'appuyer dessus ».</summary>
     private int lastClusterSafeAreaW = -1, lastClusterSafeAreaH = -1;
     private void PositionTopRightCluster()
     {
@@ -308,13 +304,13 @@ public partial class TacticalPathManager
 
         // Toute la barre haute descend d'abord sous l'encoche...
         topDashboardEl.style.marginTop = topInset > 0f ? topInset + 6f : 0f;
-        // ...puis le cluster cloche/vue3D/fin-de-tour (côté droit de cette barre) s'écarte en plus
+        // ...puis le bandeau d'actions (côté droit de cette barre) s'écarte en plus
         // d'une perforation en coin, sans affecter les portraits d'escouade à gauche.
         topActionsRowEl.style.marginRight = rightInset > 0f ? rightInset + 6f : 0f;
     }
 
-    /// <summary>Barre de portraits d'escouade (coin haut-droit, style Commandos: Behind Enemy
-    /// Lines). Ne reconstruit les boutons que quand le roster change réellement (mort/déploiement)
+    /// <summary>Portraits par type d'unité (coin haut-gauche) avec leur nombre ; toucher un
+    /// portrait sélectionne l'unité suivante de ce type. Les boutons ne sont créés qu'une fois.</summary>
     private VisualElement mortarPortraitEl;
     private Button mortarBtnEl;
     private Label mortarCountEl;

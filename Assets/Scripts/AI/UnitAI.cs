@@ -14,13 +14,6 @@ public partial class UnitAI : MonoBehaviour
     public int teamID;
     public string sourceUnitType = "Fantassin"; // Tracks UnitType.ToString() for roster sync
     public bool isPlayerControlled = true;
-    // Vrai UNIQUEMENT le temps d'un tour où le joueur propriétaire de cette unité
-    // (isPlayerControlled = true) est absent/déconnecté/n'a rien soumis à temps (voir
-    // MatchSessionManager.ApplyForPlayer) : TacticalAIPlanner.PlanTurnForUnit() planifie alors
-    // pour elle comme pour une IA ennemie, plutôt que de la laisser totalement immobile — remis à
-    // false dès que le joueur soumet à nouveau un ordre valide. Toujours false en solo/hotseat
-    // (jamais lu ni écrit hors du flux multijoueur).
-    public bool isGhosted = false;
     // Mis à true par UnitSpawnerUI.SpawnUnitAt juste après avoir fixé teamID/isPlayerControlled,
     // pour que Start() (qui s'exécute après, une fois Unity prêt) ne les écrase pas via la
     // détection par nom ci-dessous — voir Start().
@@ -166,35 +159,10 @@ public partial class UnitAI : MonoBehaviour
     // Registre global optimisé pour éliminer tous les FindObjectsByType coûteux
     public static readonly List<UnitAI> AllLivingUnits = new List<UnitAI>();
 
-    /// <summary>Point d'ancrage visuel réel de l'unité pour tout calcul écran (sélection tolérante
-    /// au tap — voir TacticalPathManager_Input.HandlePointerInput — tracé de chemin, etc.) —
-    /// PAS transform.position. Pour un blindé (Leopard2/VehiculeCanon/Mortier), le pivot d'import
-    /// peut être décalé de plusieurs mètres du centre visuel réel du modèle : c'est exactement
-    /// pourquoi Start() recentre déjà dynamiquement le BoxCollider sur bounds.center (voir plus bas)
-    /// et corrige le baseOffset du NavMeshAgent en conséquence. Utiliser transform.position pour la
-    /// sélection mesurait donc la distance-écran depuis ce pivot déporté, jamais depuis l'endroit où
-    /// le joueur voit et vise réellement le véhicule.
-    ///
-    /// Root cause confirmée par les logs [SelectDiag] du 2026-09-09 (partie multijoueur réelle,
-    /// diagnostic temporaire ajouté en session) : à chaque tap manqué, l'unité la plus proche
-    /// rejetée était systématiquement CharLeopard/VehiculeCanon, à 150-500+ PIXELS d'écran du point
-    /// tapé quel que soit l'endroit visé autour d'eux — jamais un Fantassin (pivot déjà quasi
-    /// confondu avec le centre visuel, donc jamais assez d'écart pour être remarqué). Un raycast
-    /// DIRECT pile sur le modèle continuait de fonctionner (son collider, lui, est déjà bien centré
-    /// sur bounds.center) — d'où "des fois ça marche" : uniquement quand le tap tombe pile sur le
-    /// blindé, jamais quand la tolérance de 60-75px est censée rattraper une petite imprécision.
-    ///
-    /// HAUTEUR ramenée au sol (correctif 2026-09-12, retour joueur : "les fantassins ne se
-    /// sélectionnent pas" — vrai log de test : la même unité CharLeopard "volait" 6 taps de suite
-    /// visant un Fantassin juste à côté). bounds.center seul (X/Z ET Y) suffisait pour le décalage
-    /// HORIZONTAL corrigé le 2026-09-09, mais un char fait ~1,8-2m de haut : son bounds.center Y est
-    /// à mi-hauteur de la carrosserie, pas au sol. En vue Commandement (oblique, 75°), projeter ce
-    /// point surélevé à l'écran (WorldToScreenPoint) le décale visiblement de sa position RÉELLE au
-    /// sol — assez pour chevaucher la zone de tap d'un Fantassin voisin posé juste à côté, à hauteur
-    /// de sol, lui. transform.position.y reste la référence de contact-sol pour TOUT type d'unité
-    /// (voir agent.baseOffset ci-dessous, calculé exactement pour que ce soit vrai même pour un
-    /// blindé) — seul X/Z vient de bounds.center, qui reste nécessaire pour l'unité dont le pivot
-    /// d'import est aussi décalé horizontalement.
+    /// <summary>Point où le joueur VOIT l'unité, pour la sélection au tap et le tracé de chemin :
+    /// X/Z du centre visuel du modèle (le pivot d'import d'un blindé est décalé de plusieurs mètres)
+    /// et Y au sol (le centre d'un char est à mi-hauteur de caisse, ce qui le décalait à l'écran
+    /// jusque sur un fantassin voisin). Jamais transform.position seul.</summary>
     public Vector3 SelectionAnchorWorldPos
     {
         get
@@ -952,13 +920,8 @@ public partial class UnitAI : MonoBehaviour
         // Arrêter le son de l'arme si l'unité meurt en tirant
         if (combatAudioSource != null && combatAudioSource.isPlaying) combatAudioSource.Stop();
 
-        // Signaler immédiatement au manager pour ne JAMAIS bloquer le tour
-        if (isExecuting)
-        {
-            isExecuting = false;
-            TacticalPathManager manager = FindAnyObjectByType<TacticalPathManager>();
-            if (manager != null) manager.SignalerFinMouvement(this);
-        }
+        // Une unité morte ne compte plus comme « en mouvement » : le tour ne l'attend pas.
+        isExecuting = false;
 
         // Désactiver les collisions pour ne pas bloquer les routes avec les cadavres
         Collider col = GetComponent<Collider>();

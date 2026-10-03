@@ -33,10 +33,11 @@ public class FetchDefaultMapData : EditorWindow
 
     private static IEnumerator DownloadRoutine()
     {
-        float latitude = 50.6927f;
-        float longitude = 3.1778f;
-        float radius = 250f;
-        int zoom = 18;
+        // Mêmes valeurs que le placement au sol de cette carte (MapTileLoader.ApplyDefaultOfflineMap).
+        float latitude = CityGenerator.DefaultOfflineLatitude;
+        float longitude = CityGenerator.DefaultOfflineLongitude;
+        float radius = MapTileLoader.DefaultOfflineRadiusMeters;
+        int zoom = MapTileLoader.DefaultOfflineTileZoom;
 
         string resourcesPath = "Assets/Resources";
         if (!Directory.Exists(resourcesPath)) Directory.CreateDirectory(resourcesPath);
@@ -70,22 +71,7 @@ public class FetchDefaultMapData : EditorWindow
         // 2. OSM Tiles -> Single Texture
         Debug.Log("Génération de la texture globale OSM...");
         
-        double latRad = latitude * Mathf.Deg2Rad;
-        double metersPerDegLat = 111320.0;
-        double metersPerDegLon = (40075000.0 * Mathf.Cos((float)latRad)) / 360.0;
-
-        double deltaLat = radius / metersPerDegLat;
-        double deltaLon = radius / metersPerDegLon;
-
-        double minLat = latitude - deltaLat;
-        double maxLat = latitude + deltaLat;
-        double minLon = longitude - deltaLon;
-        double maxLon = longitude + deltaLon;
-
-        int minTileX = (int)(System.Math.Floor((minLon + 180.0) / 360.0 * (1 << zoom)));
-        int maxTileX = (int)(System.Math.Floor((maxLon + 180.0) / 360.0 * (1 << zoom)));
-        int minTileY = (int)(System.Math.Floor((1 - System.Math.Log(System.Math.Tan(maxLat * System.Math.PI / 180.0) + 1.0 / System.Math.Cos(maxLat * System.Math.PI / 180.0)) / System.Math.PI) / 2.0 * (1 << zoom)));
-        int maxTileY = (int)(System.Math.Floor((1 - System.Math.Log(System.Math.Tan(minLat * System.Math.PI / 180.0) + 1.0 / System.Math.Cos(minLat * System.Math.PI / 180.0)) / System.Math.PI) / 2.0 * (1 << zoom)));
+        MapTileLoader.DefaultOfflineTileRange(out int minTileX, out int maxTileX, out int minTileY, out int maxTileY);
 
         int numTilesX = maxTileX - minTileX + 1;
         int numTilesY = maxTileY - minTileY + 1;

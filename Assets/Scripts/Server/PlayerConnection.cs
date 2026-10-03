@@ -48,33 +48,14 @@ namespace Novgov.Server
         public bool IsDisconnected => disconnected;
 
         // ---------------------------------------------------------------------------------------
-        // SIGNAL DE VIE SERVEUR -> CLIENT, CENTRALISÉ (2026-09-07)
+        // SIGNAL DE VIE SERVEUR -> CLIENT
         //
-        // POURQUOI CE MÉCANISME EXISTE, ET POURQUOI IL EST ICI ET PAS DANS UNE PHASE.
-        // Le client applique un ReceiveTimeout FINI de 25s à sa socket (GameServerClient.Connect) :
-        // 25 secondes sans le moindre octet reçu et son thread de lecture lève, ce qui le déconnecte
-        // avec "connexion perdue". Or le serveur passait de longues périodes à n'envoyer STRICTEMENT
-        // RIEN :
-        //   - un joueur seul dans waitingDeathmatch/waitingZoneControl (MatchSessionManager.Update)
-        //     n'était l'objet d'aucun envoi tant qu'aucun adversaire ne se présentait — un joueur qui
-        //     attendait plus de 25s était donc TOUJOURS éjecté avant de pouvoir être apparié. C'est
-        //     la raison pour laquelle Deathmatch/Zone de Contrôle étaient injouables en pratique dès
-        //     qu'un second joueur ne rejoignait pas la file dans les 25 secondes ;
-        //   - entre l'appariement et match_found, RunMatch récupère deux pseudos par HTTP puis peut
-        //     générer une tuile inédite (Overpass + bake NavMesh, jusqu'à ~60s) sans rien émettre ;
-        //   - la Conquête et l'entraînement contre l'IA n'avaient aucun signal de vie du tout.
-        // La phase de déploiement, elle, avait bien reçu son propre signal de vie (correctif du
-        // 2026-09-06) — mais LOCAL à cette phase. C'est exactement l'erreur de conception à ne pas
-        // reproduire : chaque nouvelle phase devait penser à réimplémenter son keepalive, et trois
-        // d'entre elles ne l'avaient pas fait.
-        //
-        // Le signal de vie est donc désormais une propriété de la CONNEXION, pas d'une phase :
-        // toute connexion authentifiée vivante reçoit un "heartbeat" dès qu'elle est restée
-        // silencieuse trop longtemps, quel que soit ce que le serveur est en train de faire — y
-        // compris dans une phase qui n'existe pas encore. Un heartbeat serveur->client n'a besoin
-        // d'aucun traitement côté client (son switch l'ignore, voir
-        // MultiplayerMatchController.HandleServerMessage) : c'est l'ARRIVÉE de la trame qui réarme
-        // le timeout de la socket, pas son contenu.
+        // Le client coupe sa connexion au bout de 25 s sans recevoir un seul octet (ReceiveTimeout,
+        // GameServerClient.Connect). Le serveur, lui, peut rester longtemps sans rien envoyer : salle
+        // d'attente d'un siège, chargement d'une carte, planification. Toute connexion authentifiée
+        // restée silencieuse reçoit donc un "heartbeat", quelle que soit la phase en cours — c'est une
+        // propriété de la CONNEXION, pas d'une phase (trois phases avaient oublié leur propre
+        // keepalive avant le 2026-09-07). Le client ignore son contenu : seule l'arrivée compte.
         private static readonly ConcurrentDictionary<PlayerConnection, byte> LiveConnections =
             new ConcurrentDictionary<PlayerConnection, byte>();
 

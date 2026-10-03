@@ -66,18 +66,5 @@ namespace Novgov.Server
 
         /// <summary>Budget de déplacement d'une UnitAI — raccourci de MovementBudget(InferType(u)).</summary>
         public static float MovementBudgetFor(UnitAI u) => MovementBudget(InferType(u));
-
-        public static string TypeName(UnitSpawnerUI.UnitType type)
-        {
-            switch (type)
-            {
-                case UnitSpawnerUI.UnitType.CharLeopard: return "CharLeopard";
-                case UnitSpawnerUI.UnitType.VehiculeCanon: return "VehiculeCanon";
-                case UnitSpawnerUI.UnitType.Mortier: return "Mortier";
-                case UnitSpawnerUI.UnitType.BarricadeRoutiere: return "Barricade";
-                default: return "Fantassin";
-            }
-        }
-
     }
 }

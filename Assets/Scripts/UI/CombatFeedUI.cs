@@ -3,7 +3,7 @@ using UnityEngine.UIElements;
 
 /// <summary>
 /// Fil de combat du HUD en match (InMatchHudScreen "combat-feed", 2026-09-16) — une ligne par unité
-/// détruite, quel que soit le mode (solo, Conquête, Match à mort, Zone de Contrôle) : voir UnitAI.Die(),
+/// détruite, en Solo comme en ligne : voir UnitAI.Die(),
 /// seul point d'appel, commun au chemin temps réel (TakeDamage) et au rejeu réseau (ApplyNetworkDeath).
 /// Avant ça, une unité pouvait mourir hors du champ de vision du joueur sans le moindre indice
 /// (rapport utilisateur : "les joueurs ne comprennent rien, il y a des morts sans savoir pourquoi").

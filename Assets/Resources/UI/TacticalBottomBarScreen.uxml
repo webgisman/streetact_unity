@@ -1,102 +1,58 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements">
     <ui:VisualElement name="root" style="flex-grow: 1; picking-mode: Ignore; width: 100%; height: 100%;">
 
-        <!-- Tableau de bord tactique — chaque bouton flotte directement sur la scène 3D avec son
-             propre fond "glass"/plein (même langage que ContextMenuScreen/DeploymentDockScreen,
-             voir Theme.tss), plus de bandeau opaque derrière : ça rendait ce coin de l'écran
-             illisible/moche et masquait la carte en dessous sans raison, l'espace vide entre les
-             boutons ne devant de toute façon jamais bloquer la vue. picking-mode: Ignore laisse les
-             taps traverser cet espace vide vers la scène 3D — chaque Button gère son propre picking. -->
+        <!-- Barre de commandes de la bataille : chaque bouton flotte sur la carte avec son propre fond
+             (Theme.tss) ; l'espace vide entre eux laisse passer les taps vers la carte. -->
         <ui:VisualElement name="top-dashboard" style="position: absolute; top: 0; left: 0; right: 0; height: 16%; min-height: 120px; max-height: 175px; picking-mode: Ignore; flex-direction: row; justify-content: space-between; padding: 8px 14px;">
 
-            <!-- Left/Center Main Column -->
             <ui:VisualElement style="flex-grow: 1; flex-direction: column; justify-content: space-between; picking-mode: Ignore; margin-right: 15px;">
-
-                <!-- Row 1: Squad Group Portraits (Left) + Notification Bell + End Turn (Right) -->
                 <ui:VisualElement style="flex-direction: row; justify-content: space-between; align-items: center; min-height: 56px; picking-mode: Ignore;">
 
-                    <!-- Squad Portraits -->
+                    <!-- Portraits par type d'unité (toucher = sélectionner la suivante de ce type). -->
                     <ui:VisualElement style="flex-direction: row; align-items: center; picking-mode: Ignore;">
                         <ui:VisualElement name="squad-bar" style="flex-direction: row; align-items: center; picking-mode: Ignore;" />
                     </ui:VisualElement>
 
-                    <!-- Toutes les actions du tour (cloche, vue 3D, annuler, FIN DE TOUR) dans UN
-                         SEUL bandeau "glass" (.hud-action-cluster, Theme.tss) — remplace des boutons
-                         flottants indépendants qui se lisaient comme "éparpillés" (retour direct
-                         d'un test réel à 2 clients, 2026-09-13). picking-mode: Position (pas
-                         Ignore) sur ce conteneur : c'est maintenant LUI la zone cliquable de fond,
-                         chaque bouton garde son propre picking par-dessus. -->
+                    <!-- Toutes les actions du tour dans un seul bandeau (.hud-action-cluster). Des mots
+                         plutôt que des icônes seules : une cloche, un viseur ou une flèche « ↶ » (absente
+                         de la police) ne disaient pas ce que faisait le bouton. -->
                     <ui:VisualElement name="top-actions-row" class="hud-action-cluster" style="picking-mode: Position;">
+                        <ui:Button name="hud-menu-button" text="MENU" class="btn-glass hud-text-btn" />
 
-                        <!-- MENU PAUSE (2026-09-30) : seul moyen de quitter/recommencer une partie en
-                             cours — il n'en existait aucun. Hors des groupes planification/exécution,
-                             pour rester accessible pendant toute la partie. Voir
-                             Novgov.UI.InGameMenuController. -->
-                        <ui:Button name="hud-menu-button" class="btn-glass" style="height: 48px; min-height: 48px; padding: 0 12px; margin-right: 10px;">
-                            <ui:Label text="MENU" style="font-size: 16px; -unity-font-style: bold; -unity-text-align: middle-center;" />
-                        </ui:Button>
-
-                        <ui:VisualElement name="planification-group" style="picking-mode: Ignore; margin-right: 10px;">
-                            <ui:VisualElement name="notif-bell-wrap" style="align-items: center;">
-                                <ui:Button name="notif-bell-button" class="btn-glass btn-icon-only" style="width: 44px; height: 44px; border-radius: 22px;">
-                                    <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/bell.png');" />
-                                </ui:Button>
-                                <ui:Label name="notif-bell-badge" text="" class="notif-badge" style="display: none;" />
-                            </ui:VisualElement>
+                        <ui:VisualElement name="planification-group" style="flex-direction: row; align-items: center; picking-mode: Ignore;">
+                            <!-- Sélectionne tour à tour vos unités blessées ; affiché seulement s'il y en a. -->
+                            <ui:Button name="wounded-button" text="BLESSÉS" class="btn-glass hud-text-btn" style="display: none;" />
+                            <ui:Button name="view3d-button" text="VUE 3D" class="btn-glass hud-text-btn" style="display: none;" />
+                            <ui:Button name="undo-node-button" text="RETIRER LE POINT" class="btn-glass hud-text-btn" style="display: none;" />
                         </ui:VisualElement>
 
-                        <!-- Bascule caméra 2D/3D : réglage de vue, pas un ordre tactique, donc
-                             séparée du flux de sélection/déplacement (voir ContextMenuScreen).
-                             btn-glass (comme la cloche juste à côté) plutôt que btn-secondary :
-                             son fond plein sombre se fondait dans une carte sombre une fois le
-                             bandeau noir retiré derrière lui, le rendant quasi invisible. -->
-                        <ui:Button name="view3d-button" class="btn-glass btn-icon-only" style="display: none; height: 48px; width: 48px; margin-right: 10px;">
-                            <!-- Anciennement magnifier.png (loupe) : lu par les joueurs comme "recherche/zoom",
-                                 pas "bascule vers la vue d'action rapprochée" — crosshair.png (viseur) est plus
-                                 proche du sens réel du bouton parmi les icônes déjà présentes dans le projet
-                                 (retour utilisateur 2026-09-20, "il faut changer l'icône"). -->
-                            <ui:VisualElement class="icon" style="background-image: url('/Assets/UI/Icons/crosshair.png');" />
-                        </ui:Button>
-                        <!-- Annuler le dernier point posé. Ajouté le 2026-09-07 : cette action
-                             n'existait QUE via le clic droit de la souris (voir
-                             TacticalPathManager_Input.HandlePointerInput) — donc pas du tout sur
-                             la plateforme cible, un téléphone. Un joueur mobile qui posait un
-                             checkpoint au mauvais endroit n'avait aucun moyen de le retirer. -->
-                        <ui:Button name="undo-node-button" class="btn-glass btn-icon-only" style="display: none; height: 48px; width: 48px; margin-right: 10px;">
-                            <ui:Label text="↶" style="font-size: 26px; -unity-text-align: middle-center;" />
-                        </ui:Button>
                         <ui:Button name="end-turn-button" class="btn-primary btn-with-icon" style="height: 52px; min-width: 168px; padding: 0 18px; justify-content: center;">
                             <ui:VisualElement class="icon icon-sm" style="background-image: url('/Assets/UI/Icons/play.png'); -unity-background-image-tint-color: var(--color-accent-text); margin-right: 8px;" />
                             <ui:Label text="FIN DE TOUR" style="font-size: 20px;" />
                         </ui:Button>
 
-                        <!-- Execution Group -->
-                        <ui:VisualElement name="execution-group" style="display: none; flex-direction: row; align-items: center; picking-mode: Position; margin-left: 10px;">
+                        <ui:VisualElement name="execution-group" style="display: none; flex-direction: row; align-items: center; picking-mode: Position;">
                             <ui:Label name="execution-label" text="ACTION EN COURS..." class="panel" style="color: var(--color-accent); font-size: 18px; -unity-font-style: bold; padding: 8px 14px; margin-right: 8px;" />
-                            <ui:Button name="skip-button" text="Passer" class="btn-secondary" style="height: 48px; padding: 0 14px; font-size: 17px;" />
+                            <!-- Solo uniquement : accélère le tour en cours (en ligne, le rythme du rejeu
+                                 est celui du serveur). -->
+                            <ui:Button name="skip-button" text="ACCÉLÉRER" class="btn-secondary hud-text-btn" />
                         </ui:VisualElement>
-
                     </ui:VisualElement>
 
                 </ui:VisualElement>
-
             </ui:VisualElement>
 
-            <!-- Dedicated Right Column for Radar — DOIT rester en phase avec TacticalRadarUI.OnGUI
-                 (2026-09-02, radar agrandi : 26% de la plus petite dimension d'écran, borné
-                 [140,230]px) : en portrait cette largeur % (base = largeur d'écran = dimension la
-                 plus petite) correspond exactement au calcul C#, donc aucun chevauchement ni gâchis
-                 d'espace ; en paysage elle réserve volontairement un peu PLUS que le radar réel
-                 (base = largeur d'écran, plus grande que la hauteur utilisée côté C#) — jamais
-                 moins, jamais de chevauchement possible avec la barre d'escouade/FIN DE TOUR. -->
+            <!-- Colonne réservée au radar (TacticalRadarUI.OnGUI : 26% de la plus petite dimension
+                 d'écran, borné [140,230] px) : la barre ne passe jamais dessous. -->
             <ui:VisualElement style="width: 26%; min-width: 140px; max-width: 230px; height: 100%; picking-mode: Ignore;" />
 
         </ui:VisualElement>
 
-        <!-- Toast temporaire : tap sur un endroit non atteignable pour l'unité sélectionnée
-             (voir ShowInvalidTapFeedback dans TacticalPathManager.cs). Indépendant de l'écran
-             ContextMenu pour rester visible même quand aucun sous-menu d'ordre n'est ouvert. -->
-        <ui:Label name="invalid-tap-toast" text="IMPOSSIBLE D'ALLER ICI" style="display: none; position: absolute; top: 42%; left: 8%; right: 8%; background-color: rgba(150, 42, 32, 0.94); color: rgb(248, 224, 216); font-size: 22px; -unity-font-style: bold; -unity-text-align: middle-center; padding: 16px 20px; border-radius: 2px; border-width: 1px; border-color: var(--color-danger-hover); picking-mode: Ignore;" />
+        <!-- Ce qu'il faut faire maintenant (TacticalPathManager.RefreshTurnHint). -->
+        <ui:Label name="turn-hint" text="" class="turn-hint" style="display: none; position: absolute; bottom: 3%; left: 30%; right: 18%; picking-mode: Ignore;" />
+
+        <!-- Toast : tap sur un endroit non atteignable, ou avertissement avant FIN DE TOUR. -->
+        <ui:Label name="invalid-tap-toast" text="IMPOSSIBLE D'ALLER ICI" style="display: none; position: absolute; top: 42%; left: 8%; right: 8%; background-color: rgba(150, 42, 32, 0.94); color: rgb(248, 224, 216); font-size: 22px; -unity-font-style: bold; -unity-text-align: middle-center; white-space: normal; padding: 16px 20px; border-radius: 2px; border-width: 1px; border-color: var(--color-danger-hover); picking-mode: Ignore;" />
 
     </ui:VisualElement>
 </ui:UXML>

@@ -210,7 +210,7 @@ public class CameraStateManager : MonoBehaviour
 
             if (focusedUnit != null)
             {
-                banner.text = $"ACTION 3D : {focusedUnit.name.ToUpper()}";
+                banner.text = "VUE 3D : " + UnitSpawnerUI.FriendlyUnitName(Novgov.Server.UnitTypeStats.InferType(focusedUnit.GetComponent<UnitAI>())).ToUpperInvariant();
                 banner.style.display = UnityEngine.UIElements.DisplayStyle.Flex;
             }
             else

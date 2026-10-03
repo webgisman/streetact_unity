@@ -298,9 +298,7 @@ namespace Novgov.Network
         // =====================================================================
         // État Hub = écran "Conquest" (ConquestScreen.uxml) : onglets CARTE (Novgov.UI.
         // ZoneMapController) et GESTION (câblé ici, BindUI). Depuis le 2026-09-30 (demande joueur :
-        // "après multijoueur, je veux juste Conquête"), Match à mort / Contrôle de zone /
-        // Entraînement ne sont plus proposés dans l'interface — StartDeathmatch/StartZoneControl/
-        // StartPracticeVsAI restent, sans appelant UI, le protocole et le serveur les gérant toujours.
+        // "après multijoueur, je veux juste Conquête"), c'est le seul écran du jeu en ligne.
 
         // Vrai dès qu'un "match_found" a modifié la scène (autre carte chargée, unités posées,
         // dock ouvert...) : revenir à la Conquête passe alors par un rechargement de scène propre
@@ -617,9 +615,9 @@ namespace Novgov.Network
         private static string DescribeDisconnectReason(string reason) => reason switch
         {
             // Après le délai de grâce de GameServerClient.BackgroundGraceSeconds : l'appli est
-            // restée en arrière-plan trop longtemps, le serveur a basculé vos unités en garde
-            // automatique (Ghost) pour ne pas bloquer votre adversaire.
-            "app_paused" => "Vous êtes resté trop longtemps hors de l'application : vos unités ont été laissées en garde automatique et la partie a continué sans vous.",
+            // restée en arrière-plan trop longtemps ; la bataille continue, vos unités tiennent leur
+            // position sans ordres.
+            "app_paused" => "Vous êtes resté trop longtemps hors de l'application : la bataille a continué sans vous (vos unités tiennent leur position).",
             "app_quit" => "Partie interrompue : l'application a été fermée.",
             "connection_lost" => "Connexion au serveur perdue. Vérifiez votre réseau et réessayez.",
             "send_failed" => "Impossible de communiquer avec le serveur. Vérifiez votre réseau et réessayez.",
@@ -698,13 +696,10 @@ namespace Novgov.Network
             }
         }
 
-        /// <summary>Vrai quand le serveur vient d'envoyer un résultat de Conquête INSTANTANÉE
-        /// (zone_captured / zone_attack_result) : il referme systématiquement la socket juste après
-        /// (voir MatchSessionManager_Conquest, `attacker.Close()` sur chacun de ces chemins). Cette
-        /// fermeture est donc NORMALE et attendue — sans ce drapeau, HandleServerDisconnected la
-        /// traitait comme une panne réseau, affichait "Connexion au serveur perdue" et renvoyait au
-        /// menu une frame après l'ouverture du panneau de résultat, que le joueur n'avait donc jamais
-                private bool expectingCloseAfterZoneResult = false;
+        /// <summary>Vrai quand le serveur vient d'envoyer un résultat de capture (zone_captured /
+        /// zone_attack_result) : il ferme la connexion juste après, et cette fermeture normale ne
+        /// doit pas s'afficher comme « Connexion perdue » par-dessus le résultat.</summary>
+        private bool expectingCloseAfterZoneResult = false;
 
         private void OnZoneCaptured(NetMessage msg)
         {
@@ -787,23 +782,12 @@ namespace Novgov.Network
             // client avant d'ouvrir le déploiement — sinon le joueur placerait ses unités sur
             // l'ancienne carte encore affichée à l'écran.
             statusMessage = $"Bataille contre {msg.opponent_username} : chargement du quartier assiégé";
-            StartCoroutine(LoadMatchMapThenOpenDeployment(true, msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
+            StartCoroutine(LoadMatchMapThenOpenDeployment(msg.zone_tile_x, msg.zone_tile_y, msg.city_data_json));
         }
 
-        /// <summary>Charge la carte réellement choisie par le serveur pour cette partie (voir
-        /// OnMatchFound) puis ouvre le déploiement — généralisation du chargement de Zone déjà
-        /// utilisé par la Conquête (2026-08-30, "des milliers de cartes") : <paramref name="hasRealTile"/>
-        /// distingue une vraie tuile GPS (Conquête toujours, Deathmatch/Zone de Contrôle si le serveur
-        /// en a assigné une) de la carte par défaut fixe. Délai d'attente ADAPTATIF : court pour la
-        /// carte par défaut (déjà en mémoire locale), long pour une vraie tuile (peut nécessiter un
-        /// fetch OSM + bake NavMesh côté serveur avant que le résultat n'arrive, jusqu'à ~60s — voir
-        /// MatchSessionManager.GenerateAndCacheTile). Échec EXPLICITE si la carte n'est jamais prête,
-        /// plutôt que d'enchaîner quand même sur le déploiement avec l'ancienne ville encore affichée
-        /// (lacune de l'ancien code, plus probable désormais avec une vraie dépendance réseau).</summary>
-        /// <summary>Lit le bâtiment HQ RÉEL de cette Zone depuis public.zones.hq_building_index
-        /// (désigné une fois par le serveur, voir MatchSessionManager_Conquest.EnsureHqBuildingIndex)
-        /// — remplace l'ancien SupabaseDatabaseClient.GetBuilding (PlayerPrefs LOCAL à cet appareil,
-                /// l'autre" : les deux clients d'un même match lisent maintenant la MÊME ligne en base.</summary>
+        /// <summary>Lit le bâtiment QG de ce quartier dans public.zones.hq_building_index (désigné une
+        /// fois par le serveur, voir MatchSessionManager_Conquest.EnsureHqBuildingIndex) puis charge la
+        /// carte : les deux joueurs d'une bataille voient ainsi le même QG.</summary>
         private async System.Threading.Tasks.Task LoadZoneWithHqAsync(int tileX, int tileY, string json)
         {
             var (ok, zone) = await Novgov.Auth.SupabaseDatabaseClient.GetZoneInfo(tileX, tileY, CityGenerator.ZONE_ZOOM);
@@ -812,20 +796,18 @@ namespace Novgov.Network
             Novgov.Generation.ZoneManager.EnsureInstance().LoadZoneFromServerData(tileX, tileY, json);
         }
 
-        private IEnumerator LoadMatchMapThenOpenDeployment(bool hasRealTile, int tileX, int tileY, string serverCityDataJson)
+        /// <summary>Charge le quartier de la bataille choisi par le serveur (voir OnMatchFound) puis
+        /// ouvre le déploiement — ou échoue explicitement si la carte n'est jamais prête, plutôt que
+        /// d'enchaîner avec l'ancienne ville encore affichée.</summary>
+        private IEnumerator LoadMatchMapThenOpenDeployment(int tileX, int tileY, string serverCityDataJson)
         {
             CityGenerator cityGen = FindAnyObjectByType<CityGenerator>();
 
-            if (hasRealTile && !string.IsNullOrEmpty(serverCityDataJson))
-            {
-                _ = LoadZoneWithHqAsync(tileX, tileY, serverCityDataJson);
-            }
-            else
-            {
-                MapTileLoader mapLoader = FindAnyObjectByType<MapTileLoader>();
-                if (mapLoader != null) mapLoader.ApplyDefaultOfflineMap();
-                if (cityGen != null) cityGen.LoadDefaultOfflineCity();
-            }
+            // Sans les données du serveur, on génère soi-même CE quartier (cache local ou
+            // OpenStreetMap) — jamais la carte Solo par défaut, comme avant le 2026-10-03.
+            // VerifyCityGeometryWithServer réaligne ensuite les bâtiments sur ceux du serveur.
+            if (!string.IsNullOrEmpty(serverCityDataJson)) _ = LoadZoneWithHqAsync(tileX, tileY, serverCityDataJson);
+            else Novgov.Generation.ZoneManager.EnsureInstance().LoadZone(tileX, tileY);
 
             const float MapLoadMaxWaitSeconds = 300f;
             float maxWait = MapLoadMaxWaitSeconds;
@@ -837,7 +819,7 @@ namespace Novgov.Network
 
             if (cityGen != null && !cityGen.IsCityReady)
             {
-                Debug.LogError($"[MultiplayerMatchController] Carte non prête après {MapLoadMaxWaitSeconds:F0}s (tuile réelle={hasRealTile}) — abandon, jamais d'ouverture du déploiement sur une carte non confirmée.");
+                Debug.LogError($"[MultiplayerMatchController] Carte non prête après {MapLoadMaxWaitSeconds:F0}s — abandon, jamais d'ouverture du déploiement sur une carte non confirmée.");
                 statusMessage = "Échec du chargement de la carte — nouvelle tentative nécessaire.";
                 GameServerClient.Instance?.Disconnect("map_load_failed");
                 yield break;
@@ -1093,7 +1075,7 @@ namespace Novgov.Network
 
             if (msg.reason == "roster_trimmed")
             {
-                statusMessage = "Une partie de votre déploiement dépassait le budget autorisé (unités trop lourdes) — le reste a été posé tel quel.";
+                statusMessage = $"Certaines unités n'ont pas été placées : {Novgov.Server.MatchSessionManager.MaxDeployedCombatUnits} unités et {Novgov.Server.MatchSessionManager.MaxMortarsPerTeam} mortiers au maximum.";
             }
 
             SetUiState(UiState.InMatch);
@@ -1131,17 +1113,6 @@ namespace Novgov.Network
 
         private void OnMatchOver(NetMessage msg)
         {
-            // Restauration de la vue d'exploration si on l'avait sauvegardée (Deathmatch)
-            if (preMatchExplorationTileX.HasValue && preMatchExplorationTileY.HasValue && currentMode != "conquest")
-            {
-                if (Novgov.Generation.ZoneManager.Instance != null)
-                {
-                    Novgov.Generation.ZoneManager.Instance.LoadZone(preMatchExplorationTileX.Value, preMatchExplorationTileY.Value);
-                }
-                preMatchExplorationTileX = null;
-                preMatchExplorationTileY = null;
-            }
-
             bool isVictory = msg.winner_team == localTeamId;
 
 
@@ -2182,7 +2153,8 @@ namespace Novgov.Network
 
         private void RefreshHudStaticFields()
         {
-            teamBanner.text = localTeamId == 2 ? "ÉQUIPE ROUGE" : "ÉQUIPE BLEUE";
+            // Bataille de siège : équipe 1 = l'attaquant (bleu), équipe 2 = le défenseur (rouge).
+            teamBanner.text = localTeamId == 2 ? "VOUS DÉFENDEZ VOTRE QUARTIER" : "VOUS ATTAQUEZ";
             teamBanner.RemoveFromClassList("team1-badge");
             teamBanner.RemoveFromClassList("team2-badge");
             teamBanner.AddToClassList(localTeamId == 2 ? "team2-badge" : "team1-badge");
@@ -2198,10 +2170,16 @@ namespace Novgov.Network
 
             bool isExecuting = TacticalPathManager.Instance != null && TacticalPathManager.Instance.phaseActuelle == TacticalPathManager.GamePhase.Execution;
 
-
-            phaseLabel.text = !string.IsNullOrEmpty(statusMessage)
-                ? statusMessage
-                : (isExecuting ? "EXÉCUTION — résolution du tour, patientez..." : "PLANIFICATION");
+            // Temps restant envoyé par le serveur ("turn_timer") — jusqu'au 2026-10-03 il n'était
+            // affiché nulle part : le joueur ignorait qu'un tour dure 5 minutes au maximum.
+            string timer = lastServerSecondsRemaining > 0
+                ? $"  ·  {lastServerSecondsRemaining / 60}:{lastServerSecondsRemaining % 60:00}"
+                : "";
+            string phase = !string.IsNullOrEmpty(statusMessage) ? statusMessage
+                : IsDeploymentPhaseActive ? "PLACEZ VOS TROUPES"
+                : isExecuting ? "Le tour se joue..."
+                : $"TOUR {currentTurnNumber} : À VOUS DE JOUER";
+            phaseLabel.text = isExecuting ? phase : phase + timer;
         }
 #endif
 

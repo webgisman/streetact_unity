@@ -55,6 +55,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
     void Awake()
     {
         Instance = this;
+        IsSoloDeploymentPhase = false; // nouvelle scène : aucune partie Solo en cours de placement
 #if !UNITY_SERVER
         BindDeploymentUI();
 #endif
@@ -72,11 +73,6 @@ public partial class UnitSpawnerUI : MonoBehaviour
         previewRing.GetComponent<MeshRenderer>().sharedMaterial = previewMat;
         previewRing.SetActive(false);
 
-        // Pas de déploiement automatique au lancement : le joueur choisit lui-même où placer
-        // chaque unité via le dock "QG Renforts" (voir HandlePlacementPreview, qui vérifie déjà
-        // qu'on ne pose jamais un char/canon sur un toit). L'ancien auto-spawn plaçait les deux
-        // camps sur des points calculés par plus-proche-NavMesh, sans cette vérification —
-        // d'où des unités qui apparaissaient parfois à l'intérieur des bâtiments générés.
     }
 
     void Update()
@@ -241,13 +237,13 @@ public partial class UnitSpawnerUI : MonoBehaviour
                             // On ne redéploie jamais une unité par-dessus une autre déjà posée :
                             // on annule le placement pour que le prochain tap serve à la sélectionner.
                             CancelPlacement();
-                            ShowMessage("Emplacement occupé — placement annulé. Retape sur l'unité pour la sélectionner.", 2.5f);
+                            ShowMessage("Une unité est déjà là : placement annulé. Touchez-la pour la sélectionner.", 2.5f);
                         }
                         else if (isValid && activePlacingType.HasValue && activePlacingType.Value == UnitType.BarricadeRoutiere)
                         {
                             if (RemainingBarricadeStock(selectedTeam) <= 0)
                             {
-                                ShowMessage($"Nombre insuffisant : stock de barricades épuisé ({maxBarricadesPerTeam} max par camp) !", 2.5f);
+                                ShowMessage($"Plus de barricades disponibles ({maxBarricadesPerTeam} au maximum).", 2.5f);
                             }
                             else if (!lastPlacedBarricadeAnchor.HasValue)
                             {
@@ -268,7 +264,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
                                 List<Vector3> extension = ComputeBarricadeExtensionPositions(lastPlacedBarricadeAnchor.Value, navHit.position, BARRICADE_SPACING, RemainingBarricadeStock(selectedTeam));
                                 if (extension.Count == 0)
                                 {
-                                    ShowMessage("Nombre insuffisant ou aucun emplacement faisable pour cette extension (bâtiments sur le trajet) — retape ailleurs.", 2.5f);
+                                    ShowMessage("Impossible d'aligner des barricades jusque-là (immeubles sur le chemin). Touchez un autre endroit.", 2.5f);
                                 }
                                 else
                                 {
@@ -292,9 +288,9 @@ public partial class UnitSpawnerUI : MonoBehaviour
                         {
                             string errMsg;
                             if (isHeavyUnit && isBuildingOrRoof)
-                                errMsg = "Les véhicules et canons doivent être placés sur la rue, pas sur les toits !";
+                                errMsg = "Les véhicules se placent dans la rue, pas sur un toit.";
                             else
-                                errMsg = "Emplacement hors-carte ! Touchez une rue pour déployer l'unité.";
+                                errMsg = "Endroit inaccessible : touchez une rue.";
                             ShowMessage(errMsg, 2.5f);
                         }
                     }
@@ -336,7 +332,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
         }
         lastPlacedBarricadeAnchor = pendingBarricadeExtension[count - 1];
         pendingBarricadeExtension = null;
-        ShowMessage($"{count} barricade(s) ajoutée(s) le long du tracé !", 2.5f);
+        ShowMessage(count == 1 ? "1 barricade ajoutée." : $"{count} barricades ajoutées.", 2.5f);
     }
 
     /// <summary>ANNULER : abandonne CETTE extension proposée sans rien poser, garde l'ancre
@@ -403,18 +399,17 @@ public partial class UnitSpawnerUI : MonoBehaviour
         int teamCount = GetTeamLivingUnitsCount(selectedTeam);
         if (teamCount >= maxUnitsPerTeam)
         {
-            string teamName = (selectedTeam == 1) ? "Joueur (Bleu)" : "Ennemi (Rouge)";
-            ShowMessage($"Limite atteinte pour l'équipe {teamName} ({maxUnitsPerTeam} unités max par camp) !", 3.0f);
+            ShowMessage($"Vous avez déjà le maximum : {maxUnitsPerTeam} unités.", 3.0f);
             return;
         }
         if (type == UnitType.BarricadeRoutiere && RemainingBarricadeStock(selectedTeam) <= 0)
         {
-            ShowMessage($"Stock de barricades épuisé ({maxBarricadesPerTeam} max par camp) !", 3.0f);
+            ShowMessage($"Plus de barricades disponibles ({maxBarricadesPerTeam} au maximum).", 3.0f);
             return;
         }
         if (type == UnitType.Mortier && CountMortarsForTeam(selectedTeam) >= MaxMortarsPerTeam)
         {
-            ShowMessage($"Limite de {MaxMortarsPerTeam} mortiers atteinte pour ce camp !", 3.0f);
+            ShowMessage($"Vous avez déjà {MaxMortarsPerTeam} mortiers, le maximum.", 3.0f);
             return;
         }
 
@@ -434,26 +429,18 @@ public partial class UnitSpawnerUI : MonoBehaviour
         isPanelOpen = false; // Ferme le dock pour libérer tout l'écran tactile
         ignorePlacementTime = Time.time + 0.35f; // Délai anti-misfire
         isPlacementPointerDown = false;
-
-        if (type == UnitType.BarricadeRoutiere)
-        {
-            ShowMessage($"Touchez une rue pour poser une barricade ({RemainingBarricadeStock(selectedTeam)} restantes) — retapez pour en aligner d'autres à la suite.", 4.0f);
-        }
-        else
-        {
-            ShowMessage($"Touchez une rue pour déployer : {FriendlyUnitName(type)}", 4.0f);
-        }
+        // La consigne (« Touchez une rue pour placer… ») est affichée par placing-banner.
         AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateHoverSound(), Camera.main.transform.position);
     }
 
     /// <summary>Nom lisible d'un type d'unité pour les messages joueur — jamais le nom brut de
-    /// l'enum (ex: "VehiculeCanon"), qui a fuité une fois dans un message d'avertissement
-        private static string FriendlyUnitName(UnitType type) => type switch
+    /// l'enum (ex: "VehiculeCanon").</summary>
+    public static string FriendlyUnitName(UnitType type) => type switch
     {
         UnitType.CharLeopard => "Char Leopard 2",
-        UnitType.VehiculeCanon => "Véhicule Canon",
+        UnitType.VehiculeCanon => "Véhicule canon",
         UnitType.Mortier => "Mortier",
-        UnitType.BarricadeRoutiere => "Barricade Routière",
+        UnitType.BarricadeRoutiere => "Barricade",
         _ => "Fantassin",
     };
 
@@ -475,17 +462,13 @@ public partial class UnitSpawnerUI : MonoBehaviour
     /// Utilisé UNIQUEMENT côté client en multijoueur, en rejouant "deployment_result" : le nom doit
     /// être EXACTEMENT celui que le serveur a assigné (voir MatchSessionManager.ResolveDeployment)
     /// pour que PlaySnapshotsCoroutine retrouve la bonne unité par nom plus tard. Laissé à null
-    /// partout ailleurs (solo, hotseat, et les appels serveur eux-mêmes) : le nom auto-généré
+    /// partout ailleurs (Solo, et les appels serveur eux-mêmes) : le nom auto-généré
     /// habituel (ex: "Fantassin_1_2") reste inchangé.
     /// </param>
     /// <param name="skipSafeSpawnAdjustment">
-    /// Vrai UNIQUEMENT quand "position" vient déjà d'une source faisant autorité — le rejeu de
-    /// "deployment_result" (voir MultiplayerMatchController.OnDeploymentResult), où le SERVEUR a
-    /// déjà validé/recadré cette position (voir MatchSessionManager.PlaceCombatUnitPure). Sans ce
-        /// pourtant déjà sûre par sa propre recherche de point dégagé — déplaçant l'unité loin de "là
-    /// où le joueur l'avait posée" (rapporté : "les unités ne sont pas dans les places déjà
-    /// prévues"). Faux partout ailleurs (placement manuel frais, repli automatique, IA Solo/
-    /// Conquête) : ces positions-là n'ont jamais été validées et ont toujours besoin du recalage.
+    /// Vrai UNIQUEMENT pour une position déjà validée par le serveur (rejeu de "deployment_result",
+    /// voir MultiplayerMatchController.OnDeploymentResult) : l'unité apparaît exactement là où le
+    /// joueur l'avait posée. Faux partout ailleurs : la position est recalée sur un point dégagé.
     /// </param>
     public UnitAI SpawnUnitAt(UnitType type, Vector3 position, int team, string forcedName = null, bool skipSafeSpawnAdjustment = false)
     {
@@ -518,9 +501,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
         int teamCount = GetTeamLivingUnitsCount(team);
         if (teamCount >= maxUnitsPerTeam)
         {
-            // Dans un contexte multijoueur, le "joueur" n'est pas toujours l'équipe 1.
-            string teamName = IsLocalPlayerTeam(team) ? "VOTRE ÉQUIPE (Bleu)" : "ENNEMI (Rouge)";
-            ShowMessage($"Limite de {maxUnitsPerTeam} unités atteinte pour l'équipe {teamName} !", 3.0f);
+            ShowMessage($"Maximum atteint : {maxUnitsPerTeam} unités.", 3.0f);
             return null;
         }
 
@@ -696,7 +677,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
         {
             if (RemainingBarricadeStock(team) <= 0)
             {
-                ShowMessage($"Stock de barricades épuisé ({maxBarricadesPerTeam} max par camp) !", 2.5f);
+                ShowMessage($"Plus de barricades disponibles ({maxBarricadesPerTeam} au maximum).", 2.5f);
                 return null;
             }
 
@@ -726,7 +707,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
             AudioClip clickClip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
             if (clickClip != null) AudioSource.PlayClipAtPoint(clickClip, Camera.main.transform.position, 0.8f);
 #endif
-            ShowMessage($"Barricade routière déployée avec succès !", 2.0f);
+            ShowMessage("Barricade posée.", 2.0f);
             return null; // une barricade n'est pas une UnitAI
         }
 
@@ -852,7 +833,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
             AudioClip confirmClip = ProceduralAudioBuilder.CreateTargetConfirmedSound();
             if (confirmClip != null) AudioSource.PlayClipAtPoint(confirmClip, Camera.main.transform.position, 0.8f);
 #endif
-            ShowMessage($"{FriendlyUnitName(type)} déployé avec succès !", 2.0f);
+            ShowMessage($"{FriendlyUnitName(type)} en position.", 2.0f);
             return ai;
         }
         return null;
@@ -894,7 +875,6 @@ public partial class UnitSpawnerUI : MonoBehaviour
         // traversent alors les murs dès le premier tour sur une carte où rien n'a été détruit.
         DestructibleEnvironment.ResetRubble();
 
-        ShowMessage("Toutes les unités et barricades ont été retirées.", 2.0f);
     }
 
     public int GetTeamLivingUnitsCount(int team)
@@ -1075,60 +1055,77 @@ public partial class UnitSpawnerUI : MonoBehaviour
         return haveFallback ? bestNavMeshFallback : desired;
     }
 
-    /// <summary>
-    /// Déploie instantanément une escouade ennemie IA (Fantassins, Char, Mortier) sur les routes.
-    /// </summary>
-    public void SpawnEnemyWave()
+    // =====================================================================
+    // PARTIE SOLO (2026-10-03) — une vraie escarmouche contre l'ordinateur au lieu d'un bac à sable :
+    // l'armée de l'IA se place toute seule, le joueur ne place QUE ses troupes puis touche
+    // COMMENCER LA BATAILLE. Avant, le dock proposait de choisir le camp « Joueur / IA », de
+    // déployer une « ESCOUADE IA » et de « NETTOYER LE TERRAIN » : une partie lancée sans placer
+    // d'ennemis n'avait aucun adversaire et ne se terminait jamais.
+    // =====================================================================
+
+    /// <summary>Vrai entre le chargement d'une partie Solo et COMMENCER LA BATAILLE : le dock est
+    /// ouvert, les ordres tactiques et FIN DE TOUR attendent (voir TacticalPathManager).</summary>
+    public static bool IsSoloDeploymentPhase { get; private set; }
+
+    private static readonly Vector3 SoloPlayerBase = new Vector3(-25f, 0f, -25f);
+    private static readonly Vector3 SoloEnemyBase = new Vector3(25f, 0f, 25f);
+
+    /// <summary>Appelé par GameManagerUI une fois la carte Solo chargée.</summary>
+    public void BeginSoloDeployment()
     {
-        Vector3 enemyBase = FindGroundLevelNavPoint(new Vector3(25f, 0f, 25f), 40f);
+        ClearAllUnits();
+        selectedTeam = 1;
+        AutoDeployTeamFallback(2);
+        IsSoloDeploymentPhase = true;
+        isPanelOpen = true;
+        CancelPlacement();
+        TacticalCamera.Instance?.FrameOn(FindGroundLevelNavPoint(SoloPlayerBase, 40f), 55f);
+        ShowMessage("L'ennemi est en position au nord-est. Placez vos troupes, puis COMMENCER LA BATAILLE.", 6f);
+    }
 
-        SpawnUnitAt(UnitType.Fantassin, enemyBase + new Vector3(-3f, 0, 3f), 2);
-        SpawnUnitAt(UnitType.Fantassin, enemyBase + new Vector3(3f, 0, -3f), 2);
-        SpawnUnitAt(UnitType.CharLeopard, enemyBase + new Vector3(6f, 0, 4f), 2);
-        SpawnUnitAt(UnitType.Mortier, enemyBase + new Vector3(-6f, 0, 5f), 2);
-        SpawnUnitAt(UnitType.BarricadeRoutiere, enemyBase + new Vector3(0f, 0, -8f), 2);
-
-        ShowMessage("[IA] Escouade ennemie complète déployée sur le champ de bataille !", 3.5f);
+    /// <summary>Bouton PLACER MES TROUPES AUTOMATIQUEMENT (Solo) : l'escouade standard autour de
+    /// la base du joueur, si aucune unité n'est encore placée.</summary>
+    private void AutoDeploySoloSquad()
+    {
+        if (GetTeamLivingUnitsCount(1) > 0)
+        {
+            ShowMessage("Vos troupes sont déjà placées. Touchez COMMENCER LA BATAILLE.", 3f);
+            return;
+        }
+        CancelPlacement();
+        AutoDeployTeamFallback(1);
+        TacticalCamera.Instance?.FrameOn(FindGroundLevelNavPoint(SoloPlayerBase, 40f), 55f);
         AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
     }
 
-    /// <summary>
-    /// Déploie automatiquement les deux camps (Joueur + IA) pour lancer la bataille.
-    /// </summary>
-    public void AutoDeployBattlefield()
+    private void StartSoloBattle()
     {
-        // Camp Joueur (Sud-Ouest)
-        Vector3 playerPos = FindGroundLevelNavPoint(new Vector3(-25f, 0f, -25f), 40f);
-
         if (GetTeamLivingUnitsCount(1) == 0)
         {
-            SpawnUnitAt(UnitType.Fantassin, playerPos + new Vector3(-2f, 0, -2f), 1);
-            SpawnUnitAt(UnitType.Fantassin, playerPos + new Vector3(2f, 0, 2f), 1);
-            SpawnUnitAt(UnitType.CharLeopard, playerPos + new Vector3(5f, 0, -3f), 1);
-            SpawnUnitAt(UnitType.Mortier, playerPos + new Vector3(-5f, 0, -4f), 1);
+            ShowMessage("Placez au moins une unité avant de commencer.", 3f);
+            return;
         }
-
-        // Camp Ennemi IA (Nord-Est)
-        SpawnEnemyWave();
-        ShowMessage("Champ de bataille prêt : Escouades Joueur & IA déployées !", 3.5f);
+        CancelPlacement();
+        IsSoloDeploymentPhase = false;
+        isPanelOpen = false;
+        AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position);
     }
 
-        /// de message existant vers le joueur, et TacticalPathManager en a besoin pour signaler qu'un
-    /// trajet a été tronqué par le plafond de durée du tour (voir ForcerFinExecution) — ce que
-    /// l'ancien code faisait en silence.</summary>
+    /// <summary>Message temporaire en bas de l'écran — aussi utilisé par TacticalPathManager pour
+    /// signaler qu'un trajet a été interrompu par la durée maximale du tour.</summary>
     public void ShowMessage(string msg, float duration)
     {
         statusMessage = msg;
         statusMessageTimer = duration;
     }
 
-    // Mêmes points d'ancrage que AutoDeployBattlefield/SpawnEnemyWave, mais scopés à un seul camp —
-    // utilisé par MatchSessionManager.ResolveDeployment comme repli serveur si un joueur n'a pas
-    // soumis de placement manuel valide avant l'expiration du timer de déploiement (voir
-    // 03-network-protocol.md, "submit_deployment"/"deployment_result").
-    public void AutoDeployTeamFallback(int team, int extraInfantry = 0)
+    /// <summary>Escouade standard d'un camp autour de sa base (sud-ouest pour l'équipe 1, nord-est
+    /// pour l'équipe 2) : armée de l'IA en Solo, bouton PLACER MES TROUPES AUTOMATIQUEMENT, et repli
+    /// du serveur pour un joueur qui n'a pas confirmé son placement à temps (voir
+    /// MatchSessionManager.ResolveDeployment).</summary>
+    public void AutoDeployTeamFallback(int team)
     {
-        Vector3 anchor = FindGroundLevelNavPoint(team == 1 ? new Vector3(-25f, 0f, -25f) : new Vector3(25f, 0f, 25f), 40f);
+        Vector3 anchor = FindGroundLevelNavPoint(team == 1 ? SoloPlayerBase : SoloEnemyBase, 40f);
         if (team == 1)
         {
             SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(-2f, 0, -2f), 1);
@@ -1142,16 +1139,6 @@ public partial class UnitSpawnerUI : MonoBehaviour
             SpawnUnitAt(UnitType.Fantassin, anchor + new Vector3(3f, 0, -3f), 2);
             SpawnUnitAt(UnitType.CharLeopard, anchor + new Vector3(6f, 0, 4f), 2);
             SpawnUnitAt(UnitType.Mortier, anchor + new Vector3(-6f, 0, 5f), 2);
-        }
-
-        // Renfort de garnison (conquête, voir MatchSessionManager.GarrisonExtraInfantryForZoneCount) :
-        // fantassins supplémentaires disposés en éventail autour de l'ancrage, à un rayon plus large
-        // que l'escouade de base ci-dessus pour ne jamais se superposer avec elle.
-        for (int i = 0; i < extraInfantry; i++)
-        {
-            float angle = i * 47f; // pas non-régulier : évite un alignement visuel trop mécanique
-            Vector3 offset = Quaternion.Euler(0f, angle, 0f) * new Vector3(8f, 0f, 0f);
-            SpawnUnitAt(UnitType.Fantassin, anchor + offset, team);
         }
 
         if (team == 2)
@@ -1176,9 +1163,8 @@ public partial class UnitSpawnerUI : MonoBehaviour
 
 #if !UNITY_SERVER
     private VisualElement dockPanel;
-    private Button tabButton, team1Button, team2Button;
-    private Button aiSquadButton, autoDeployButton, mpConfirmButton;
-    private Label effectifsLabel, placingBanner, statusMessageLabel, tabButtonLabel;
+    private Button tabButton, autoDeployButton, confirmDeploymentButton;
+    private Label effectifsLabel, placingBanner, statusMessageLabel, tabButtonLabel, confirmDeploymentLabel;
     private bool deploymentUiBound = false;
 
     private void BindDeploymentUI()
@@ -1209,8 +1195,6 @@ public partial class UnitSpawnerUI : MonoBehaviour
             }
             dockPanel = root.Q<VisualElement>("dock-panel");
             effectifsLabel = root.Q<Label>("effectifs-label");
-            team1Button = root.Q<Button>("team1-button");
-            team2Button = root.Q<Button>("team2-button");
             placingBanner = root.Q<Label>("placing-banner");
             statusMessageLabel = root.Q<Label>("status-message");
 
@@ -1226,7 +1210,7 @@ public partial class UnitSpawnerUI : MonoBehaviour
                 {
                     isPanelOpen = !isPanelOpen;
                 }
-                // Protégé (voir team1Button/team2Button/etc. plus bas, non protégés) : un
+                // Protégé : un
                 // Camera.main introuvable (ex: transition de caméra en cours) ou un souci
                 // d'initialisation audio ne doit jamais empêcher le dock de s'ouvrir/fermer.
                 try
@@ -1236,38 +1220,28 @@ public partial class UnitSpawnerUI : MonoBehaviour
                 catch (System.Exception) { }
             };
 
-            team1Button.clicked += () => { lastUIClickTime = Time.time; selectedTeam = 1; AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position); };
-            team2Button.clicked += () => { lastUIClickTime = Time.time; selectedTeam = 2; AudioSource.PlayClipAtPoint(ProceduralAudioBuilder.CreateClickSound(), Camera.main.transform.position); };
-
             root.Q<Button>("btn-fantassin").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.Fantassin); };
             root.Q<Button>("btn-leopard").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.CharLeopard); };
             root.Q<Button>("btn-canon").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.VehiculeCanon); };
             root.Q<Button>("btn-mortier").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.Mortier); };
             root.Q<Button>("btn-barricade").clicked += () => { lastUIClickTime = Time.time; StartPlacingUnit(UnitType.BarricadeRoutiere); };
-            aiSquadButton = root.Q<Button>("btn-ai-squad");
-            aiSquadButton.clicked += () => { lastUIClickTime = Time.time; SpawnEnemyWave(); };
+            // Solo uniquement : en ligne, le placement automatique est fait par le serveur si le
+            // joueur ne confirme pas à temps (voir RefreshDeploymentDockUI).
             autoDeployButton = root.Q<Button>("btn-auto-deploy");
-            autoDeployButton.clicked += () => { lastUIClickTime = Time.time; AutoDeployBattlefield(); };
-            root.Q<Button>("btn-clear").clicked += () => { lastUIClickTime = Time.time; ClearAllUnits(); };
+            autoDeployButton.clicked += () => { lastUIClickTime = Time.time; AutoDeploySoloSquad(); };
 
-            // Multijoueur uniquement (voir OpenDockForMultiplayerDeployment) : bouton ajouté dans
-            // DeploymentDockScreen.uxml, caché par défaut (display:none), affiché UNIQUEMENT pendant
-            // la phase de déploiement PvP (voir RefreshDeploymentDockUI) — btn-ai-squad/btn-auto-
-            // deploy n'ont pas de sens en PvP (ils manipuleraient le camp adverse depuis mon propre
-            // appareil) et sont donc masqués à la place pendant cette même phase.
-            mpConfirmButton = root.Q<Button>("btn-mp-confirm");
-            if (mpConfirmButton != null)
+            // Un seul bouton pour finir le placement : COMMENCER LA BATAILLE en Solo, CONFIRMER MES
+            // POSITIONS en ligne (le serveur attend la confirmation des deux joueurs).
+            confirmDeploymentButton = root.Q<Button>("btn-confirm-deployment");
+            confirmDeploymentLabel = root.Q<Label>("confirm-deployment-label");
+            confirmDeploymentButton.clicked += () =>
             {
-                mpConfirmButton.clicked += () =>
-                {
-                    lastUIClickTime = Time.time;
+                lastUIClickTime = Time.time;
+                if (Novgov.Network.MultiplayerMatchController.IsDeploymentPhaseActive)
                     Novgov.Network.MultiplayerMatchController.Instance?.SubmitLocalDeployment();
-                };
-            }
-            else
-            {
-                Debug.LogError("[UnitSpawnerUI] Bouton 'btn-mp-confirm' introuvable dans DeploymentDockScreen.uxml — la confirmation de déploiement multijoueur restera inopérante.");
-            }
+                else
+                    StartSoloBattle();
+            };
 
             // Pas de SetVisible(true) ici : RefreshDeploymentDockUI() (appelé chaque frame depuis
             // Update) décide seul de la visibilité dès la première frame, startup menu inclus.
@@ -1334,44 +1308,32 @@ public partial class UnitSpawnerUI : MonoBehaviour
             UIScreenManager.Instance.RootVisualElement.MarkDirtyRepaint();
         }
 
-        // Verrouillage du choix de camp + boutons solo-only pendant le déploiement PvP : impossible
-        // de basculer sur le camp adverse, et ESCOUADE IA/DÉPLOIEMENT AUTO n'ont pas de sens ici
-        // (ils manipuleraient l'équipe adverse depuis mon propre appareil) — remplacés par
-        // CONFIRMER LE DÉPLOIEMENT (voir mpConfirmButton, câblé dans BindDeploymentUI).
-        team1Button.style.display = mpDeployment ? DisplayStyle.None : DisplayStyle.Flex;
-        team2Button.style.display = mpDeployment ? DisplayStyle.None : DisplayStyle.Flex;
-        if (aiSquadButton != null) aiSquadButton.style.display = mpDeployment ? DisplayStyle.None : DisplayStyle.Flex;
-        if (autoDeployButton != null) autoDeployButton.style.display = mpDeployment ? DisplayStyle.None : DisplayStyle.Flex;
-        if (mpConfirmButton != null) mpConfirmButton.style.display = mpDeployment ? DisplayStyle.Flex : DisplayStyle.None;
+        // Le dock ne sert qu'au placement initial : en Solo une fois la bataille commencée, il ne
+        // reste que ses messages (status-message), plus d'onglet pour ajouter des troupes.
+        bool placementOpen = mpDeployment || IsSoloDeploymentPhase;
+        tabButton.style.display = placementOpen ? DisplayStyle.Flex : DisplayStyle.None;
+        if (!placementOpen) isPanelOpen = false;
 
-        int playerUnits = GetTeamLivingUnitsCount(1);
-        int enemyUnits = GetTeamLivingUnitsCount(2);
+        // En ligne, le serveur place lui-même les troupes d'un joueur qui ne confirme pas à temps.
+        if (autoDeployButton != null) autoDeployButton.style.display = mpDeployment ? DisplayStyle.None : DisplayStyle.Flex;
+        if (confirmDeploymentLabel != null) confirmDeploymentLabel.text = mpDeployment ? "CONFIRMER MES POSITIONS" : "COMMENCER LA BATAILLE";
+
+        int myTeam = mpDeployment ? selectedTeam : 1;
+        int myUnits = GetTeamLivingUnitsCount(myTeam);
 
         if (tabButtonLabel != null)
         {
-            // "X vs Y" a du sens en Solo (comparer son escouade à celle, fixe, de l'IA) mais pas en
-            // multijoueur PvP : "enemyUnits" y vaut certes 0 pendant le déploiement depuis le
-            // brouillard de guerre réseau (l'adversaire n'existe pas encore côté client, voir
-            // MatchSessionManager.ComputeVisibleUnitIds), mais afficher "0" prête à confusion ("j'ai
-            // déjà gagné ?") plutôt que de simplement ne rien dire sur un camp qu'on ne peut pas voir.
-            bool isMultiplayer = Novgov.Network.MultiplayerMatchController.IsFlowActive;
-            string label = isMultiplayer ? $"DÉPLOIEMENT ({playerUnits}/{maxUnitsPerTeam})" : $"DÉPLOIEMENT ({playerUnits} vs {enemyUnits})";
-
             tabButtonLabel.style.color = StyleKeyword.Null;
-            tabButtonLabel.text = IsPlacingUnit ? "Annuler Placement" : (isPanelOpen ? "Fermer Menu" : label);
+            tabButtonLabel.text = IsPlacingUnit ? "ANNULER LE PLACEMENT"
+                : isPanelOpen ? "MASQUER LA LISTE"
+                : $"VOS TROUPES ({myUnits}/{maxUnitsPerTeam})";
         }
         dockPanel.style.display = isPanelOpen ? DisplayStyle.Flex : DisplayStyle.None;
 
         if (isPanelOpen)
         {
-            int currentTeamCount = (selectedTeam == 1) ? playerUnits : enemyUnits;
-            effectifsLabel.text = $"Effectifs : {currentTeamCount} / {maxUnitsPerTeam}";
-            effectifsLabel.style.color = new StyleColor(currentTeamCount >= maxUnitsPerTeam ? NovgovTheme.Danger : NovgovTheme.Info);
-
-            team1Button.text = $"Joueur ({playerUnits})";
-            team2Button.text = $"IA ({enemyUnits})";
-            team1Button.EnableInClassList("dock-team-btn--active-p1", selectedTeam == 1);
-            team2Button.EnableInClassList("dock-team-btn--active-p2", selectedTeam == 2);
+            effectifsLabel.text = $"{myUnits} / {maxUnitsPerTeam}";
+            effectifsLabel.style.color = new StyleColor(myUnits >= maxUnitsPerTeam ? NovgovTheme.Danger : NovgovTheme.Info);
         }
 
         if (pendingBarricadeExtension != null)
@@ -1383,8 +1345,8 @@ public partial class UnitSpawnerUI : MonoBehaviour
         else if (IsPlacingUnit && activePlacingType.HasValue)
         {
             placingBanner.text = (activePlacingType.Value == UnitType.BarricadeRoutiere)
-                ? $"MODE PLACEMENT : Barricade ({RemainingBarricadeStock(selectedTeam)} restantes)\n[Touchez la rue] Poser | [Annuler]"
-                : $"MODE PLACEMENT : {activePlacingType.Value}\n[Touchez la rue] Poser | [Annuler]";
+                ? $"Touchez une rue pour poser une barricade ({RemainingBarricadeStock(selectedTeam)} restantes)"
+                : $"Touchez une rue pour placer : {FriendlyUnitName(activePlacingType.Value)}";
             placingBanner.style.color = new StyleColor(selectedTeam == 1 ? NovgovTheme.TeamPlayer : NovgovTheme.TeamEnemy);
             placingBanner.style.display = DisplayStyle.Flex;
         }
